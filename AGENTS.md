@@ -61,8 +61,8 @@ prefer simple, readable code over production hardening.
   take the old schema.
 - The seed page reads like a plain light message board. Do not mention
   rewriting, AI, or the gimmick in its header, form or footer; the first post is
-  the reveal. Keep `000003_plain_seed.sql` and the form example in the system
-  prompt in sync.
+  the reveal. Keep the seed in `000001_init.sql` and the form example in the
+  system prompt in sync.
 - Identity is one HttpOnly cookie, `beaverdream_name`, set by `/identity`. A
   first visit gets the code-owned name page, and `GET /identity` opens the same
   form prefilled so a visitor can set their display name again. Posts use the

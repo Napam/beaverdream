@@ -44,6 +44,11 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	for i, p := range posts {
 		converted[i] = postFromRow(p)
 	}
+	// The board reads newest first. The model still gets the conversation
+	// oldest first, which is easier to follow.
+	for i, j := 0, len(converted)-1; i < j; i, j = i+1, j-1 {
+		converted[i], converted[j] = converted[j], converted[i]
+	}
 
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)

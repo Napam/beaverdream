@@ -54,6 +54,53 @@ func newEditor(site Site) *editor {
 // can correct on the next round.
 func (e *editor) run(name, arguments string) string {
 	switch name {
+	case "set_site":
+		var in struct {
+			CSS    *string `json:"css"`
+			Note   *string `json:"note"`
+			Header *string `json:"header"`
+			Board  *string `json:"board"`
+			Footer *string `json:"footer"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
+			return "rejected: arguments are not valid JSON"
+		}
+		if in.CSS == nil && in.Note == nil && in.Header == nil && in.Board == nil &&
+			in.Footer == nil {
+			return "rejected: set_site needs at least one field"
+		}
+		if in.CSS != nil {
+			css, err := cleanCSS(*in.CSS)
+			if err != nil {
+				return "rejected: " + err.Error()
+			}
+			e.site.CSS = css
+		}
+		if in.Note != nil {
+			e.site.Note = truncateRunes(strings.TrimSpace(*in.Note), maxNoteLen)
+		}
+		regions := []struct {
+			name   string
+			value  *string
+			target *string
+		}{
+			{RegionHeader, in.Header, &e.site.Header},
+			{RegionBoard, in.Board, &e.site.Board},
+			{RegionFooter, in.Footer, &e.site.Footer},
+		}
+		for _, region := range regions {
+			if region.value == nil {
+				continue
+			}
+			cleaned, err := cleanRegion(region.name, *region.value)
+			if err != nil {
+				return "rejected: " + err.Error()
+			}
+			*region.target = cleaned
+		}
+		e.dirty = true
+		return "ok"
+
 	case "set_css":
 		var in struct {
 			CSS string `json:"css"`

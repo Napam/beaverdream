@@ -300,6 +300,9 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 			t.Errorf("page is missing %q", want)
 		}
 	}
+	if strings.Index(body, "No.4") > strings.Index(body, "No.1") {
+		t.Error("posts are not newest first")
+	}
 	if strings.Contains(body, "rewrite") {
 		t.Error("seed page gives away the gimmick")
 	}

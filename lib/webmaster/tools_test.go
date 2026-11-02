@@ -57,6 +57,40 @@ func TestSetRegionEnforcesLength(t *testing.T) {
 
 // The stylesheet is served as-is too. A breakout is a legitimate (if rude)
 // way for a visitor to change the page.
+func TestSetSiteUpdatesOnlyProvidedFields(t *testing.T) {
+	ed := newEditor(Site{
+		CSS:    "old css",
+		Note:   "old note",
+		Header: "<h1>old header</h1>",
+		Board:  "<main>old board</main>",
+		Footer: "<footer>old footer</footer>",
+	})
+	got := ed.run("set_site", args(t, map[string]any{
+		"css":   "body{color:red}",
+		"note":  "new note",
+		"board": "<main>{{posts}}</main>",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if ed.site.CSS != "body{color:red}" || ed.site.Note != "new note" {
+		t.Errorf("provided fields were not applied: %+v", ed.site)
+	}
+	if ed.site.Header != "<h1>old header</h1>" ||
+		ed.site.Board != "<main>{{posts}}</main>" ||
+		ed.site.Footer != "<footer>old footer</footer>" {
+		t.Errorf("untouched fields changed: %+v", ed.site)
+	}
+}
+
+func TestSetSiteNeedsAField(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_site", args(t, map[string]any{}))
+	if !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("got %q, want a rejection", got)
+	}
+}
+
 func TestSetCSSKeepsBreakoutsAndURLs(t *testing.T) {
 	css := `body{background:url(https://example.com/x.png)}` +
 		`</style><script>alert(1)</script>`

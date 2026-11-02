@@ -195,9 +195,32 @@ func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam
 func toolParams() []openai.ChatCompletionToolUnionParam {
 	return []openai.ChatCompletionToolUnionParam{
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "set_site",
+			Description: openai.String(
+				"Replace several parts of the site in one call. Use this for a full restyle. " +
+					"Only the fields you send change.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"css": map[string]any{
+						"type":        "string",
+						"description": "CSS rules without a style tag.",
+					},
+					"note":   map[string]any{"type": "string", "maxLength": maxNoteLen},
+					"header": map[string]any{"type": "string"},
+					"board": map[string]any{
+						"type":        "string",
+						"description": "Must contain {{posts}}.",
+					},
+					"footer": map[string]any{"type": "string"},
+				},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_css",
 			Description: openai.String(
-				"Replace the site stylesheet. Served as-is.",
+				"Replace only the stylesheet. Call it in the same response as your other edits.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -213,7 +236,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_region",
 			Description: openai.String(
-				"Replace one region of the page. Served as-is, scripts included.",
+				"Replace one region of the page. Served as-is, scripts included. " +
+					"Call it in the same response as your other edits.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -231,8 +255,11 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        "set_note",
-			Description: openai.String("Set the one-line note shown above the page."),
+			Name: "set_note",
+			Description: openai.String(
+				"Set the one-line note shown above the page. " +
+					"Call it in the same response as your other edits.",
+			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
 				"properties": map[string]any{
@@ -306,7 +333,11 @@ granted, maybe too well. The poster is looking at their own post; the change
 must be visible around it, not only in the header.
 
 Tools:
-- set_css(css): replace the stylesheet. Prefer overriding the variables in
+- set_site(css, note, header, board, footer): replace several parts at once.
+  Use this for a full restyle. Only the fields you send change. The board must
+  contain the literal placeholder {{posts}}. The page must keep one working
+  post form.
+- set_css(css): replace only the stylesheet. Prefer overriding the variables in
   :root over rewriting every rule.
 - set_region(region, html): replace one region. Regions are header, board and
   footer. The board region must contain the literal placeholder {{posts}},
@@ -318,8 +349,10 @@ Tools:
   the options). Up to 8 keys. Declare only what the page actually uses.
 - done(reason): stop and record one short sentence explaining the change.
 
-Make every tool call you need in one response, ending with done. A round trip
-that only changes the header is usually a wasted one.
+You have one edit round. In your first response, call set_site, or call every
+individual set_* tool you need, and then call done in the same response. Do not
+use one response per tool. The server applies the calls in order. If you split
+the edits across responses, the board updates slower and feels dead.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
@@ -353,8 +386,8 @@ Shared state:
   restores; reset clears it. Do not store HTML in it.
 
 Rules:
-- The board region must render every post you were given, newest last. Never
-  invent a post and never drop one.
+- The board region must render every post you were given. The server inserts
+  the current posts newest first. Never invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
 - The note is the board's announcement line. Say what changed and who caused
   it, in the board's voice, one sentence. Never mention AI, models or rewriting.

@@ -87,6 +87,9 @@ main{margin-top:1.25em}
 .empty{color:var(--muted);font-style:italic}
 .colophon{margin-top:2em;padding-top:.8em;border-top:1px solid var(--border);color:var(--muted);font-size:.8em}
 .beaver-note{position:sticky;top:0;z-index:10;background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);padding:.6em .8em;color:var(--muted);margin:0 0 1.25em;font-size:.9em}
+.beaver-id{margin-top:1.25em;font-size:.75em;color:var(--muted);text-align:right}
+.beaver-id a{color:var(--muted)}
+.beaver-id a:hover{color:var(--accent)}
 .postbox{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.9em;display:flex;flex-direction:column;gap:.55em;margin:0 0 1.5em}
 .postbox-title{margin:0;font-weight:700;font-size:.95em}
 .postbox input,.postbox textarea{width:100%;background:color-mix(in srgb,var(--bg) 90%,#fff 10%);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:.5em .6em;font:inherit;font-size:.95em}
@@ -299,10 +302,20 @@ const liveScript = `<script>
 })()
 </script>`
 
-// IdentityDoc is the code-owned page shown before a visitor's first post. It
-// asks for a name and stores it in a cookie. It is deliberately plain: the
+// IdentityDoc is the code-owned page shown before a visitor's first post, and
+// again when they want to change their name. It is deliberately plain: the
 // model has not taken over yet.
-func IdentityDoc() string {
+func IdentityDoc(name string) string {
+	value := ""
+	title := "name"
+	button := "enter"
+	back := ""
+	if name != "" {
+		value = ` value="` + html.EscapeString(name) + `"`
+		title = "change name"
+		button = "save"
+		back = `<p class="beaver-id"><a href="/">back to the board</a></p>`
+	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
 		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
 		`<link rel="icon" href="data:,"><title>beaverdream</title><style>` +
@@ -310,11 +323,11 @@ func IdentityDoc() string {
 		`</style></head><body>` +
 		`<h1>beaverdream</h1><p class="tagline">a small message board</p>` +
 		`<form class="postbox" method="post" action="/identity">` +
-		`<p class="postbox-title">name</p>` +
-		`<input name="name" maxlength="32" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="name">` +
+		`<p class="postbox-title">` + title + `</p>` +
+		`<input name="name" maxlength="32" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="name"` + value + `>` +
 		`<div class="postbox-actions"><span>shown next to your posts</span>` +
-		`<button type="submit">enter</button></div>` +
-		`</form></body></html>`
+		`<button type="submit">` + button + `</button></div>` +
+		`</form>` + back + `</body></html>`
 }
 
 // SiteDoc builds the page served to visitors. There is no sandbox: the
@@ -378,6 +391,7 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(header)
 	b.WriteString(board)
 	b.WriteString(footer)
+	b.WriteString(`<p class="beaver-id"><a href="/identity">change name</a></p>`)
 	b.WriteString(`</body></html>`)
 	return b.String()
 }

@@ -39,11 +39,12 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the note, the document shell, the live script, and
-  the `bd-state` JSON tag. The server also replaces `{{name}}` in the model's
-  regions with the escaped cookie name. The post form is model markup: the
-  system prompt gives it the exact method, action and field names. Do not
-  reintroduce a code-owned composer; a broken form is a valid outcome.
+- The only fixed markup is the note, the document shell, the live script, the
+  `bd-state` JSON tag, and the small `change name` link. The server also
+  replaces `{{name}}` in the model's regions with the escaped cookie name. The
+  post form is model markup: the system prompt gives it the exact method,
+  action and field names. Do not reintroduce a code-owned composer; a broken
+  form is a valid outcome.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
@@ -55,7 +56,8 @@ prefer simple, readable code over production hardening.
   post is the reveal. Keep `000003_plain_seed.sql` and the form example in the
   system prompt in sync.
 - Identity is one HttpOnly cookie, `beaverdream_name`, set by `/identity`. A
-  first visit gets the code-owned name page; posts use the cookie value as the
+  first visit gets the code-owned name page, and `GET /identity` opens the same
+  form prefilled so a visitor can change it. Posts use the cookie value as the
   author. Names are not unique and there are no accounts. The server ignores
   any author field in model markup.
 - Admin is always token-protected. The token travels in the query string or a

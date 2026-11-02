@@ -30,6 +30,7 @@ It is a toy. It runs on localhost and calls a local model.
 - The first visit asks for a name. It goes into an HttpOnly cookie and becomes
   the author of that visitor's posts. There are no accounts and names are not
   unique. The name page is code-owned and plain; the model never sees it.
+  Visit `/identity` to change the name; the board links there at the bottom.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - The model can also declare a tiny shared state: counters, lists and choices,

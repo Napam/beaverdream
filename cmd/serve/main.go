@@ -182,6 +182,7 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	beaverdream.SetupStatic(router)
 
 	router.Get("/", h.Index)
+	router.Get("/identity", h.Identity)
 	router.Post("/identity", h.SetIdentity)
 	router.Post("/posts", h.CreatePost)
 	router.Get("/version", h.Version)

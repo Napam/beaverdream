@@ -21,7 +21,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	if identityFromRequest(r) == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		if _, err := io.WriteString(w, webmaster.IdentityDoc()); err != nil {
+		if _, err := io.WriteString(w, webmaster.IdentityDoc("")); err != nil {
 			h.logger.Error("Failed to write identity page", slog.Any("error", err))
 		}
 		return

@@ -1,11 +1,15 @@
 package handlers
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/Napam/beaverdream/lib/webmaster"
 )
 
 // IdentityCookieName stores the name a visitor picked on their first visit.
@@ -45,6 +49,15 @@ func cleanIdentity(value string) string {
 	}, value)
 	value = strings.Join(strings.Fields(value), " ")
 	return truncate(value, maxAuthorLen)
+}
+
+// Identity shows the name form, prefilled when the visitor already has one.
+func (h *Handlers) Identity(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if _, err := io.WriteString(w, webmaster.IdentityDoc(identityFromRequest(r))); err != nil {
+		h.logger.Error("Failed to write identity page", slog.Any("error", err))
+	}
 }
 
 // SetIdentity stores the chosen name in a cookie and sends the visitor to the

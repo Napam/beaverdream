@@ -294,6 +294,8 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		`class="postbox"`,
 		`action="/posts"`,
 		`posting as dave`,
+		`href="/identity"`,
+		`change name`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -405,6 +407,29 @@ func TestSetIdentityStoresCookie(t *testing.T) {
 	h.Index(page, board)
 	if !strings.Contains(page.Body.String(), `action="/posts"`) {
 		t.Error("identity cookie did not unlock the board")
+	}
+}
+
+func TestIdentityPagePrefillsTheCurrentName(t *testing.T) {
+	h, _ := setup(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/identity", nil)
+	req.AddCookie(identityCookie("dave"))
+	rec := httptest.NewRecorder()
+	h.Identity(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`value="dave"`,
+		"change name",
+		`href="/"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("identity page is missing %q", want)
+		}
 	}
 }
 

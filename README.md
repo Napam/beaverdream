@@ -23,9 +23,9 @@ It is a toy. It runs on localhost and calls a local model.
   placeholder, the posts are appended instead, so a post can never disappear.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only fixed markup is the note, a small post form, and links to
-  `/plain` and `/admin`, appended after the model's footer. The model can style
-  or delete even those. That is the point.
+  document. The only fixed markup is the note, a small post form pinned to the
+  bottom of the viewport, and a link to `/admin`. The model can style or delete
+  even those. That is the point.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - A new post returns immediately. The mutation runs in the background, and open
@@ -112,9 +112,6 @@ cookie on purpose: the model's page runs same-origin scripts, and a cookie
 would hand those scripts the panel. Every admin request carries the token in
 the query string, and the forms carry it as a hidden field.
 
-`/plain` is the escape hatch: a code-owned list of posts with no model output at
-all.
-
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -153,7 +150,7 @@ lib/mockllm          deterministic model used by tests and task dev.mock-llm
 db/migrations        goose schema
 db/queries           sqlc queries
 lib/webmaster/site   assembles the model-owned page and the fixed controls
-web/pages            templ pages for the plain view and admin
+web/pages            templ page for admin
 web/assets           committed static assets
 ```
 

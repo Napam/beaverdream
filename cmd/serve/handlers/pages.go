@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
-	"github.com/Napam/beaverdream/web/pages"
 )
 
 // Index serves the current version as the page. The posts are folded in, and
@@ -37,20 +37,6 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, webmaster.SiteDoc(siteFromRow(site), converted)); err != nil {
 		h.logger.Error("Failed to write index page", slog.Any("error", err))
-	}
-}
-
-// Plain is the escape hatch: a code-owned list with no model output at all.
-// When the site makes itself unreadable, this still works.
-func (h *Handlers) Plain(w http.ResponseWriter, r *http.Request) {
-	posts, err := h.recentPosts(r.Context(), 500)
-	if err != nil {
-		h.logger.Error("Failed to load posts", slog.Any("error", err))
-		http.Error(w, "The board is not here.", http.StatusInternalServerError)
-		return
-	}
-	if err := pages.PlainPage(posts).Render(r.Context(), w); err != nil {
-		h.logger.Error("Failed to render plain page", slog.Any("error", err))
 	}
 }
 
@@ -84,14 +70,18 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Land on the new post instead of the top of the page. The post is stored
+	// already, so the anchor exists even before the rewrite lands.
+	location := fmt.Sprintf("/#p%d", post.ID)
+
 	if h.overDailyCap(r.Context()) {
 		h.logger.Warn("Daily mutation cap reached, post stored without a rewrite")
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, location, http.StatusSeeOther)
 		return
 	}
 
 	h.mutateInBackground(post)
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 
 // Version is a tiny endpoint for pages that want to notice a change while

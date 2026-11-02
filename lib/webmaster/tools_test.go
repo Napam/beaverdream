@@ -103,8 +103,11 @@ func TestSiteDocSubstitutesPosts(t *testing.T) {
 	if !strings.Contains(doc, `data-version="3"`) {
 		t.Fatal("page does not carry the version for live reload")
 	}
-	if !strings.Contains(doc, `action="/posts"`) || !strings.Contains(doc, `href="/plain"`) {
-		t.Fatal("page does not carry the post form and links")
+	if !strings.Contains(doc, `action="/posts"`) || !strings.Contains(doc, `href="/admin"`) {
+		t.Fatal("page does not carry the post form and admin link")
+	}
+	if !strings.Contains(doc, `.beaver-controls{position:fixed`) {
+		t.Fatal("post form is not pinned to the viewport")
 	}
 }
 

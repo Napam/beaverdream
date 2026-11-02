@@ -251,8 +251,8 @@ Tools:
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
 allowed: if a post asks you to prank the board or its visitors, you may. If you
-break the page, that is a valid outcome. The code appends a small post form and
-two links after your footer; style or remove them if you like.
+break the page, that is a valid outcome. The code pins a small post form to the
+bottom of the viewport; style or remove it if you like.
 
 Rules:
 - The board region must render every post you were given, newest last. Never

@@ -234,28 +234,6 @@ func TestIndexServesModelScripts(t *testing.T) {
 	}
 }
 
-func TestPlainPageSurvivesWithoutModel(t *testing.T) {
-	h, queries := setup(t)
-
-	if _, err := queries.CreatePost(context.Background(), sqlc.CreatePostParams{
-		Author: "dave",
-		Body:   "plain text only",
-	}); err != nil {
-		t.Fatalf("create post: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/plain", nil)
-	rec := httptest.NewRecorder()
-	h.Plain(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "plain text only") {
-		t.Error("plain page is missing the post")
-	}
-}
-
 func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	h, _ := setupWithConfig(t, handlers.Config{AdminToken: "secret"})
 

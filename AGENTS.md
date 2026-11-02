@@ -23,7 +23,7 @@ prefer simple, readable code over production hardening.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `tools.go` (tool execution and validation), `mutate.go` (the loop, prompts,
   tool schemas).
-- `cmd/serve/handlers` owns HTTP: `pages.go` (board, plain, post, version),
+- `cmd/serve/handlers` owns HTTP: `pages.go` (board, post, version),
   `admin.go` (auth, inject, restore), `handlers.go` (mutation wrapper, cap,
   config).
 - GET requests never call the model. Only a post or an admin instruction
@@ -37,10 +37,9 @@ prefer simple, readable code over production hardening.
   HTML.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
-  scripts; sabotage is the point. Post bodies stay escaped, and `/plain` stays
-  as the code-owned fallback.
-- The only fixed markup is the note, the post form and the `/plain`/`/admin`
-  links. Append them after the model's footer and keep them minimal.
+  scripts; sabotage is the point. Post bodies stay escaped.
+- The only fixed markup is the note, the post form pinned to the bottom of the
+  viewport, and the `/admin` link. Keep them minimal.
 - Admin is always token-protected. The token travels in the query string or a
   hidden form field, never a cookie: model scripts are same-origin and must not
   inherit admin access. When `ADMIN_TOKEN` is empty the server generates one
@@ -55,7 +54,7 @@ prefer simple, readable code over production hardening.
 ## Frontend
 
 The board page is assembled in Go (`lib/webmaster/site.go`), not templ. The
-admin and plain pages are templ with tailwind classes. `web/lib` and
+admin page is templ with tailwind classes. `web/lib` and
 `static/bundle.js` are leftover scaffold; no page loads them, so do not add
 board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 

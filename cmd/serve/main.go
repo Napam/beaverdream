@@ -182,7 +182,6 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 
 	router.Get("/", h.Index)
 	router.Post("/posts", h.CreatePost)
-	router.Get("/plain", h.Plain)
 	router.Get("/version", h.Version)
 
 	router.Get("/admin", h.Admin)

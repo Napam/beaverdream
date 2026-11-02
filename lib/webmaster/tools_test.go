@@ -103,7 +103,7 @@ func TestSiteDocSubstitutesPosts(t *testing.T) {
 	if !strings.Contains(doc, `data-version="3"`) {
 		t.Fatal("page does not carry the version for live reload")
 	}
-	if strings.Contains(doc, `action="/posts"`) {
+	if strings.Contains(doc, "<form") {
 		t.Fatal("server injected a post form")
 	}
 	if strings.Contains(doc, "beaver-controls") {
@@ -132,6 +132,21 @@ func TestRenderPostsAddsBoardConventions(t *testing.T) {
 	}
 	if strings.Contains(got, "<script>x</script>") {
 		t.Errorf("post body was not escaped: %s", got)
+	}
+}
+
+func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
+	doc := SiteDoc(
+		Site{Version: 4, CSS: "body{background:#000}", Note: "changed", Board: PostsPlaceholder},
+		nil,
+	)
+	for _, want := range []string{`id="bd-css"`, `id="bd-note"`, `data-version="4"`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+	if strings.Index(doc, "beaverdream:update") > strings.Index(doc, "</head>") {
+		t.Error("live script is not in the head, where regions cannot swallow it")
 	}
 }
 

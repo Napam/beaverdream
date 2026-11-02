@@ -96,6 +96,7 @@ func run(logger *slog.Logger) error {
 		AdminToken:         adminToken,
 		MaxMutationsPerDay: env.Vars.MaxMutationsPerDay,
 	})
+	defer h.Close()
 
 	router := SetupRouter(logger, h)
 
@@ -184,6 +185,7 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Post("/identity", h.SetIdentity)
 	router.Post("/posts", h.CreatePost)
 	router.Get("/version", h.Version)
+	router.Get("/version/{id}/css", h.VersionCSS)
 
 	router.Get("/admin", h.Admin)
 	router.Get("/admin/", h.Admin)

@@ -1,3 +1,9 @@
+-- name: CurrentVersionID :one
+SELECT
+  MAX(id)
+FROM
+  site_versions;
+
 -- name: CurrentSite :one
 SELECT
   *

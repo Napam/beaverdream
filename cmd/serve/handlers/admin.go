@@ -127,9 +127,7 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := mutationContext(r.Context())
-	defer cancel()
-	res, err := h.mutate(ctx, "admin", instruction, trigger)
+	res, err := h.mutate(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
 		h.redirectAdmin(w, r, "mutation failed: "+err.Error())
@@ -152,23 +150,30 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A restore that races a running mutation would be silently undone when
+	// that mutation writes its version. Take the same lock.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	version, err := h.queries.GetSiteVersion(r.Context(), id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	if _, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
+	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
 		Css:    version.Css,
 		Note:   version.Note,
 		Header: version.Header,
 		Board:  version.Board,
 		Footer: version.Footer,
 		Reason: fmt.Sprintf("restored version %d", id),
-	}); err != nil {
+	})
+	if err != nil {
 		h.logger.Error("Failed to restore version", slog.Any("error", err))
 		http.Error(w, "Could not restore", http.StatusInternalServerError)
 		return
 	}
+	h.setVersion(restored.ID)
 
 	h.redirectAdmin(w, r, fmt.Sprintf("restored version %d", id))
 }

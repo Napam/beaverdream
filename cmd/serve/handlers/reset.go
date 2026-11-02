@@ -77,6 +77,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.resetLive(seedID.Int64)
 	h.logger.Info("Board reset", slog.Int64("seed_version", seedID.Int64))
 	h.redirectAdmin(w, r, "board reset to the original version")
 }

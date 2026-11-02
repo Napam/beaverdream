@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/go-chi/chi/v5"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	_ "modernc.org/sqlite"
@@ -65,7 +67,14 @@ func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sq
 		webmaster.New(client, "mock-model", 3, ""),
 		cfg,
 	)
+	t.Cleanup(h.Close)
 	return h, queries
+}
+
+func withURLParam(req *http.Request, key, value string) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(key, value)
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
 func identityCookie(name string) *http.Cookie {
@@ -377,6 +386,104 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	}
 	if len(posts) != 4 {
 		t.Fatalf("post without identity was stored: %+v", posts)
+	}
+}
+
+func TestVersionReportsCSSHotSwap(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:    "body{background:#000}",
+		Note:   seed.Note,
+		Header: seed.Header,
+		Board:  seed.Board,
+		Footer: seed.Footer,
+		Reason: "css only",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"version":`+strconv.FormatInt(next.ID, 10)) {
+		t.Errorf("version response is stale: %s", body)
+	}
+	if !strings.Contains(body, `"swap":"css"`) {
+		t.Errorf("swap = %s, want css", body)
+	}
+
+	css := httptest.NewRecorder()
+	h.VersionCSS(css, withURLParam(
+		httptest.NewRequest(http.MethodGet, "/version/2/css", nil),
+		"id", "2",
+	))
+	if css.Code != http.StatusOK {
+		t.Fatalf("css status = %d", css.Code)
+	}
+	if !strings.Contains(css.Body.String(), `"css":"body{background:#000}"`) {
+		t.Errorf("css response = %s", css.Body.String())
+	}
+}
+
+func TestVersionReportsReloadForMarkupChange(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:    seed.Css,
+		Note:   seed.Note,
+		Header: seed.Header,
+		Board:  seed.Board + "<p>extra</p>",
+		Footer: seed.Footer,
+		Reason: "markup change",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
+	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
+		t.Errorf("swap = %s, want reload", rec.Body.String())
+	}
+}
+
+func TestVersionReportsReloadForStyleBreakout(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:    `body{color:red}</style><script>alert(1)</script>`,
+		Note:   seed.Note,
+		Header: seed.Header,
+		Board:  seed.Board,
+		Footer: seed.Footer,
+		Reason: "css breakout",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
+	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
+		t.Errorf("swap = %s, want reload", rec.Body.String())
 	}
 }
 

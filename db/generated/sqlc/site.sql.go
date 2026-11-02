@@ -82,6 +82,20 @@ func (q *Queries) CurrentSite(ctx context.Context) (SiteVersion, error) {
 	return i, err
 }
 
+const currentVersionID = `-- name: CurrentVersionID :one
+SELECT
+  MAX(id)
+FROM
+  site_versions
+`
+
+func (q *Queries) CurrentVersionID(ctx context.Context) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, currentVersionID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
 const getSiteVersion = `-- name: GetSiteVersion :one
 SELECT
   id, css, note, header, board, footer, trigger_post_id, reason, created_at

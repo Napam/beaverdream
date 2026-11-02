@@ -6,10 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/go-chi/chi/v5"
 )
 
 // Index serves the current version as the page. The posts are folded in, and
@@ -68,6 +70,10 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	if !h.allowPost(author) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	body = truncate(body, maxBodyLen)
 
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
@@ -95,13 +101,95 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is a tiny endpoint for pages that want to notice a change while
-// they are open.
+// they are open. With ?have=N it also says whether the page can take the new
+// stylesheet in place or needs to reload.
 func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
-	site, err := h.queries.CurrentSite(r.Context())
+	version, pending, running, lastError := h.liveSnapshot()
+	if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
+		if id, ok := raw.(int64); ok && id > 0 && id != version {
+			version = id
+			h.setVersion(id)
+		}
+	}
+	if version == 0 {
+		var err error
+		version, err = h.currentVersion(r.Context())
+		if err != nil {
+			http.Error(w, "unknown", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	resp := struct {
+		Version int64     `json:"version"`
+		Swap    string    `json:"swap,omitempty"`
+		Pending int       `json:"pending"`
+		Running *runState `json:"running,omitempty"`
+		Error   string    `json:"error,omitempty"`
+	}{
+		Version: version,
+		Pending: pending,
+		Running: running,
+		Error:   lastError,
+	}
+
+	have := r.URL.Query().Get("have")
+	if have != "" && have != strconv.FormatInt(version, 10) {
+		resp.Swap = "reload"
+		current, err := h.queries.CurrentSite(r.Context())
+		if err == nil {
+			resp.Version = current.ID
+			h.setVersion(current.ID)
+			if id, err := strconv.ParseInt(have, 10, 64); err == nil {
+				if previous, err := h.queries.GetSiteVersion(r.Context(), id); err == nil {
+					resp.Swap = swapKind(previous, current)
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// swapKind reports whether the only change is one that can be applied without
+// a navigation. A stylesheet that breaks out of its style tag also forces a
+// reload, because in-place text cannot remove the elements it created.
+func swapKind(previous, current sqlc.SiteVersion) string {
+	if previous.Header != current.Header ||
+		previous.Board != current.Board ||
+		previous.Footer != current.Footer ||
+		breaksOutOfStyle(previous.Css) ||
+		breaksOutOfStyle(current.Css) {
+		return "reload"
+	}
+	return "css"
+}
+
+func breaksOutOfStyle(css string) bool {
+	lower := strings.ToLower(css)
+	return strings.Contains(lower, "</style") || strings.Contains(lower, "<script")
+}
+
+// VersionCSS returns the stylesheet and note for one version. The client uses
+// it only after Version reports a css-only change.
+func (h *Handlers) VersionCSS(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
-		http.Error(w, "unknown", http.StatusInternalServerError)
+		http.Error(w, "Bad version id", http.StatusBadRequest)
 		return
 	}
+	site, err := h.queries.GetSiteVersion(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int64{"version": site.ID})
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"css":  site.Css,
+		"note": site.Note,
+	})
 }

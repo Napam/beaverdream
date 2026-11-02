@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,15 @@ type Config struct {
 	MaxMutationsPerDay int
 }
 
+// runState is what the live endpoint and the admin panel show while a
+// mutation is in flight.
+type runState struct {
+	Kind    string    `json:"kind"`
+	Authors []string  `json:"authors,omitempty"`
+	Round   int       `json:"round"`
+	Since   time.Time `json:"since"`
+}
+
 // Handlers serves the board and the admin panel.
 type Handlers struct {
 	logger  *slog.Logger
@@ -44,6 +54,18 @@ type Handlers struct {
 	// mu serializes mutations. One process, one site: a second mutation
 	// waiting beats two of them writing versions over each other.
 	mu sync.Mutex
+
+	// The worker coalesces posts that arrive while a mutation is running, so
+	// a burst becomes one rewrite instead of a queue of them.
+	liveMu     sync.Mutex
+	version    int64
+	pending    []sqlc.Post
+	running    *runState
+	lastError  string
+	lastPostAt map[string]time.Time
+	wake       chan struct{}
+	stop       chan struct{}
+	closeOnce  sync.Once
 }
 
 // New wires the handlers.
@@ -54,13 +76,26 @@ func New(
 	mutator *webmaster.Mutator,
 	cfg Config,
 ) *Handlers {
-	return &Handlers{
-		logger:  logger,
-		db:      dbConn,
-		queries: queries,
-		mutator: mutator,
-		cfg:     cfg,
+	h := &Handlers{
+		logger:     logger,
+		db:         dbConn,
+		queries:    queries,
+		mutator:    mutator,
+		cfg:        cfg,
+		lastPostAt: make(map[string]time.Time),
+		wake:       make(chan struct{}, 1),
+		stop:       make(chan struct{}),
 	}
+	if site, err := queries.CurrentSite(context.Background()); err == nil {
+		h.version = site.ID
+	}
+	go h.worker()
+	return h
+}
+
+// Close stops the background worker. Tests call it; the server can too.
+func (h *Handlers) Close() {
+	h.closeOnce.Do(func() { close(h.stop) })
 }
 
 func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
@@ -102,9 +137,9 @@ func (h *Handlers) recentPosts(ctx context.Context, limit int64) ([]sqlc.Post, e
 	return rows, nil
 }
 
-// mutate runs one mutation and records it. triggerPost is nil for admin
-// instructions, which never become posts. On a model error the site is left
-// alone; a partial rewrite is worse than no rewrite.
+// mutate runs one admin mutation and waits for it. It takes h.mu, then starts
+// the timeout, so time spent queued behind another mutation does not eat the
+// model's budget.
 func (h *Handlers) mutate(
 	ctx context.Context,
 	kind string,
@@ -114,6 +149,23 @@ func (h *Handlers) mutate(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.beginRun(kind, nil)
+	ctx, cancel := mutationContext(ctx)
+	defer cancel()
+	res, err := h.mutateHeld(ctx, kind, instruction, triggerPost)
+	h.endRun(err)
+	return res, err
+}
+
+// mutateHeld is mutate with h.mu already held. triggerPost is nil for admin
+// instructions, which never become posts. On a model error the site is left
+// alone; a partial rewrite is worse than no rewrite.
+func (h *Handlers) mutateHeld(
+	ctx context.Context,
+	kind string,
+	instruction string,
+	triggerPost *sqlc.Post,
+) (webmaster.Result, error) {
 	current, err := h.queries.CurrentSite(ctx)
 	if err != nil {
 		return webmaster.Result{}, fmt.Errorf("current site: %w", err)
@@ -159,6 +211,7 @@ func (h *Handlers) mutate(
 			mutErr = fmt.Errorf("store site version: %w", err)
 		} else {
 			versionID = sql.NullInt64{Int64: version.ID, Valid: true}
+			h.setVersion(version.ID)
 			status = "changed"
 		}
 	}
@@ -201,21 +254,180 @@ func (h *Handlers) mutate(
 	return res, mutErr
 }
 
-// mutateInBackground runs a post mutation after the response has been sent.
-// The handler mutex still serializes mutations, so a queue of posts is fine;
-// the poster just does not wait for the model.
+// mutateInBackground queues a post for the worker. Posts that arrive while a
+// mutation is running are collected into the next one, so a burst becomes one
+// rewrite rather than a long queue.
 func (h *Handlers) mutateInBackground(post sqlc.Post) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
-		defer cancel()
-		if _, err := h.mutate(ctx, "post", post.Body, &post); err != nil {
-			h.logger.Error(
-				"Mutation failed",
-				slog.Int64("post_id", post.ID),
-				slog.Any("error", err),
-			)
+	h.liveMu.Lock()
+	h.pending = append(h.pending, post)
+	h.liveMu.Unlock()
+
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
+}
+
+// worker is the single background mutator. It drains the queue, runs one
+// mutation for the batch, and goes back to waiting.
+func (h *Handlers) worker() {
+	for {
+		select {
+		case <-h.stop:
+			return
+		case <-h.wake:
 		}
-	}()
+		h.runPending()
+	}
+}
+
+func (h *Handlers) runPending() {
+	h.liveMu.Lock()
+	batch := h.pending
+	h.pending = nil
+	h.liveMu.Unlock()
+
+	if len(batch) == 0 {
+		return
+	}
+	if h.overDailyCap(context.Background()) {
+		h.setLastError("daily mutation cap reached")
+		return
+	}
+	if len(batch) > maxBatchPosts {
+		batch = batch[len(batch)-maxBatchPosts:]
+	}
+
+	last := batch[len(batch)-1]
+	body := batchBody(batch)
+	trigger := last
+	trigger.Body = body
+
+	h.beginRun("post", postAuthors(batch))
+	h.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
+	_, err := h.mutateHeld(ctx, "post", body, &trigger)
+	cancel()
+	h.mu.Unlock()
+	h.endRun(err)
+
+	if err != nil {
+		h.logger.Error(
+			"Mutation failed",
+			slog.Int64("post_id", last.ID),
+			slog.Int("batch", len(batch)),
+			slog.Any("error", err),
+		)
+	}
+}
+
+const maxBatchPosts = 10
+
+// batchBody turns a burst into one prompt block. The newest post stays last.
+func batchBody(posts []sqlc.Post) string {
+	var b strings.Builder
+	for _, post := range posts {
+		author := post.Author
+		if author == "" {
+			author = "anon"
+		}
+		fmt.Fprintf(&b, "#%d %s: %s\n", post.ID, author, post.Body)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func postAuthors(posts []sqlc.Post) []string {
+	seen := make(map[string]bool, len(posts))
+	authors := make([]string, 0, len(posts))
+	for _, post := range posts {
+		author := post.Author
+		if author == "" {
+			author = "anon"
+		}
+		if seen[author] {
+			continue
+		}
+		seen[author] = true
+		authors = append(authors, author)
+	}
+	return authors
+}
+
+// beginRun, endRun and the snapshot helpers keep the live state in one place.
+func (h *Handlers) beginRun(kind string, authors []string) {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	h.running = &runState{Kind: kind, Authors: authors, Round: 1, Since: time.Now()}
+	h.lastError = ""
+}
+
+func (h *Handlers) endRun(err error) {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	h.running = nil
+	if err != nil {
+		h.lastError = err.Error()
+	}
+}
+
+func (h *Handlers) setVersion(version int64) {
+	h.liveMu.Lock()
+	h.version = version
+	h.liveMu.Unlock()
+}
+
+func (h *Handlers) setLastError(message string) {
+	h.liveMu.Lock()
+	h.lastError = message
+	h.liveMu.Unlock()
+}
+
+func (h *Handlers) resetLive(version int64) {
+	h.liveMu.Lock()
+	h.version = version
+	h.pending = nil
+	h.running = nil
+	h.lastError = ""
+	h.liveMu.Unlock()
+}
+
+func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	var running *runState
+	if h.running != nil {
+		copied := *h.running
+		running = &copied
+	}
+	return h.version, len(h.pending), running, h.lastError
+}
+
+func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
+	version, _, _, _ := h.liveSnapshot()
+	if version > 0 {
+		return version, nil
+	}
+	site, err := h.queries.CurrentSite(ctx)
+	if err != nil {
+		return 0, err
+	}
+	h.setVersion(site.ID)
+	return site.ID, nil
+}
+
+const postCooldown = 3 * time.Second
+
+// allowPost stops a script on the model's page from posting from every open
+// tab in a loop. One post per visitor per few seconds is enough.
+func (h *Handlers) allowPost(name string) bool {
+	now := time.Now()
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	if last, ok := h.lastPostAt[name]; ok && now.Sub(last) < postCooldown {
+		return false
+	}
+	h.lastPostAt[name] = now
+	return true
 }
 
 // overDailyCap reports whether the cost kill switch has tripped.

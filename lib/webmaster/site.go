@@ -58,7 +58,9 @@ const BaseCSS = `
 }
 *{box-sizing:border-box}
 html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto;transition:background-color .5s,color .5s;animation:bdFadeIn .25s ease-out}
+html.bd-leaving body{opacity:0;transition:opacity .2s}
+@keyframes bdFadeIn{from{opacity:0}to{opacity:1}}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 h1,h2,h3{line-height:1.25;margin:0 0 .4em}
@@ -150,19 +152,133 @@ func FormatWhen(s string) string {
 	return t.Format("Jan 2 15:04")
 }
 
-// liveReload reloads the page when someone else's post lands. The model can
-// break it, which is part of the game; it is convenience, not a guarantee.
-const liveReload = `<script>
+// liveScript keeps open pages current. A stylesheet-only change is applied in
+// place, so colors can shift under the cursor. A markup change reloads, but it
+// saves unsent text and the reading position first, and it waits while someone
+// is typing. The model can break this at runtime; that is part of the game.
+const liveScript = `<script>
 (function () {
-  var current = document.documentElement.getAttribute('data-version')
-  setInterval(function () {
-    fetch('/version', { cache: 'no-store' })
+  var fetchPage = window.fetch.bind(window)
+  var replacePage = location.replace.bind(location)
+  var version = document.documentElement.getAttribute('data-version') || '0'
+  var typingAt = 0
+  var waitingSince = 0
+  var reloading = false
+
+  document.addEventListener('input', function () { typingAt = Date.now() }, true)
+
+  function saveState(next) {
+    try {
+      var area = document.querySelector('form[action="/posts"] textarea[name=body]')
+      if (area) {
+        sessionStorage.setItem('bd:draft', area.value)
+        sessionStorage.setItem('bd:focused', document.activeElement === area ? '1' : '0')
+      }
+      var posts = document.querySelectorAll('.post')
+      for (var i = 0; i < posts.length; i++) {
+        var box = posts[i].getBoundingClientRect()
+        if (box.bottom > 0) {
+          sessionStorage.setItem('bd:scroll', JSON.stringify({
+            id: posts[i].id,
+            top: Math.round(box.top)
+          }))
+          break
+        }
+      }
+    } catch (e) {}
+  }
+
+  function restoreState() {
+    try {
+      var draft = sessionStorage.getItem('bd:draft')
+      var area = document.querySelector('form[action="/posts"] textarea[name=body]')
+      if (draft !== null && area) {
+        area.value = draft
+        if (sessionStorage.getItem('bd:focused') === '1') {
+          area.focus()
+          area.setSelectionRange(area.value.length, area.value.length)
+        }
+        sessionStorage.removeItem('bd:draft')
+        sessionStorage.removeItem('bd:focused')
+      }
+      var raw = sessionStorage.getItem('bd:scroll')
+      if (raw && !location.hash) {
+        var anchor = JSON.parse(raw)
+        var el = document.getElementById(anchor.id)
+        if (el) {
+          var top = el.getBoundingClientRect().top + window.scrollY
+          window.scrollTo(0, Math.max(0, top - anchor.top))
+        }
+      }
+      sessionStorage.removeItem('bd:scroll')
+    } catch (e) {}
+  }
+
+  function reload(next) {
+    replacePage('/?v=' + next + location.hash)
+  }
+
+  function applyCSS(next) {
+    return fetchPage('/version/' + next + '/css', { cache: 'no-store' })
       .then(function (r) { return r.json() })
       .then(function (d) {
-        if (String(d.version) !== current) location.reload()
+        var style = document.getElementById('bd-css')
+        if (!style) return false
+        style.textContent = d.css || ''
+        var note = document.getElementById('bd-note')
+        if (note) {
+          if (d.note) note.textContent = d.note
+          else note.remove()
+        } else if (d.note) {
+          return false
+        }
+        version = String(next)
+        document.documentElement.setAttribute('data-version', version)
+        document.dispatchEvent(new CustomEvent('beaverdream:update', { detail: d }))
+        return true
+      })
+  }
+
+  function maybeReload(next) {
+    if (reloading) return
+    var now = Date.now()
+    if (!waitingSince) waitingSince = now
+    if (now - typingAt < 3000 && now - waitingSince < 20000) {
+      setTimeout(function () { maybeReload(next) }, 1000)
+      return
+    }
+    reloading = true
+    saveState(next)
+    document.documentElement.classList.add('bd-leaving')
+    setTimeout(function () { reload(next) }, 200)
+  }
+
+  function tick() {
+    if (document.hidden || reloading) return
+    fetchPage('/version?have=' + version, { cache: 'no-store' })
+      .then(function (r) { return r.json() })
+      .then(function (d) {
+        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : 'idle')
+        document.documentElement.setAttribute('data-bd-state', state)
+        document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
+        if (String(d.version) === version) return
+        if (d.swap === 'css') {
+          applyCSS(d.version).then(function (ok) {
+            if (!ok) maybeReload(d.version)
+          }).catch(function () { maybeReload(d.version) })
+          return
+        }
+        maybeReload(d.version)
       })
       .catch(function () {})
-  }, 5000)
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', restoreState)
+  } else {
+    restoreState()
+  }
+  setInterval(tick, 2000)
 })()
 </script>`
 
@@ -207,19 +323,23 @@ func SiteDoc(site Site, posts []Post) string {
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" href="data:,">`)
-	b.WriteString(`<title>beaverdream</title><style>`)
+	b.WriteString(`<title>beaverdream</title>`)
+	// The live script goes before the model's markup, so an unclosed tag in a
+	// region cannot swallow it.
+	b.WriteString(liveScript)
+	b.WriteString(`<style>`)
 	b.WriteString(BaseCSS)
+	b.WriteString(`</style><style id="bd-css">`)
 	b.WriteString(site.CSS)
 	b.WriteString(`</style></head><body>`)
 	if site.Note != "" {
-		b.WriteString(`<p class="beaver-note">`)
+		b.WriteString(`<p class="beaver-note" id="bd-note">`)
 		b.WriteString(html.EscapeString(site.Note))
 		b.WriteString(`</p>`)
 	}
 	b.WriteString(site.Header)
 	b.WriteString(board)
 	b.WriteString(site.Footer)
-	b.WriteString(liveReload)
 	b.WriteString(`</body></html>`)
 	return b.String()
 }

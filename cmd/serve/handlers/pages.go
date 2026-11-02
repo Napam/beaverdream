@@ -163,6 +163,7 @@ func swapKind(previous, current sqlc.SiteVersion) string {
 	if previous.Header != current.Header ||
 		previous.Board != current.Board ||
 		previous.Footer != current.Footer ||
+		previous.StateSchema != current.StateSchema ||
 		breaksOutOfStyle(previous.Css) ||
 		breaksOutOfStyle(current.Css) {
 		return "reload"

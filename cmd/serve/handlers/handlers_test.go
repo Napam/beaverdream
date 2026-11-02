@@ -456,12 +456,13 @@ func TestVersionReportsCSSHotSwap(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:    "body{background:#000}",
-		Note:   seed.Note,
-		Header: seed.Header,
-		Board:  seed.Board,
-		Footer: seed.Footer,
-		Reason: "css only",
+		Css:         "body{background:#000}",
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "css only",
 	})
 	if err != nil {
 		t.Fatalf("create version: %v", err)

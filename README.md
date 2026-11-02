@@ -27,6 +27,9 @@ It is a toy. It runs on localhost and calls a local model.
   model writes the post form itself, so it can move it, restyle it, or break
   it. The system prompt gives it the exact method, action and field names. If
   it breaks the form, posting stops working until an admin injects a fix.
+- The first visit asks for a name. It goes into an HttpOnly cookie and becomes
+  the author of that visitor's posts. There are no accounts and names are not
+  unique. The name page is code-owned and plain; the model never sees it.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - A new post returns immediately. The mutation runs in the background, and open

@@ -16,6 +16,15 @@ import (
 // the response is written directly: there is no shell and no iframe, so the
 // model's markup is the document.
 func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
+	if identityFromRequest(r) == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if _, err := io.WriteString(w, webmaster.IdentityDoc()); err != nil {
+			h.logger.Error("Failed to write identity page", slog.Any("error", err))
+		}
+		return
+	}
+
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
 		h.logger.Error("Failed to load current site", slog.Any("error", err))
@@ -50,15 +59,16 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.TrimSpace(r.FormValue("body"))
-	author := truncate(strings.TrimSpace(r.FormValue("author")), maxAuthorLen)
+	author := identityFromRequest(r)
+	if author == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	if body == "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	body = truncate(body, maxBodyLen)
-	if author == "" {
-		author = "anon"
-	}
 
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
 		Author: author,

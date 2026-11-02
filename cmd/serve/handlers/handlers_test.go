@@ -68,6 +68,10 @@ func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sq
 	return h, queries
 }
 
+func identityCookie(name string) *http.Cookie {
+	return &http.Cookie{Name: handlers.IdentityCookieName, Value: url.QueryEscape(name)}
+}
+
 func postForm(
 	t *testing.T,
 	h http.HandlerFunc,
@@ -75,8 +79,22 @@ func postForm(
 	form url.Values,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+	return postFormAs(t, h, path, form, "dave")
+}
+
+func postFormAs(
+	t *testing.T,
+	h http.HandlerFunc,
+	path string,
+	form url.Values,
+	name string,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if name != "" {
+		req.AddCookie(identityCookie(name))
+	}
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	return rec
@@ -106,7 +124,7 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	}
 
 	rec := postForm(t, h.CreatePost, "/posts", url.Values{
-		"author": {"dave"},
+		"author": {"eve"},
 		"body":   {"make it matrix"},
 	})
 	if rec.Code != http.StatusSeeOther {
@@ -119,6 +137,9 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	}
 	if len(posts) != 1 || posts[0].Body != "make it matrix" {
 		t.Fatalf("posts = %+v", posts)
+	}
+	if posts[0].Author != "dave" {
+		t.Errorf("author = %q, want the cookie identity", posts[0].Author)
 	}
 
 	waitFor(t, "a new version", func() bool {
@@ -186,6 +207,7 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 	h, _ := setup(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(identityCookie("dave"))
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 
@@ -199,12 +221,16 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 	for _, want := range []string{
 		"<!doctype html>",
 		"<h1>beaverdream</h1>",
+		`class="postbox"`,
 		`action="/posts"`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page is missing %q", want)
 		}
+	}
+	if strings.Contains(body, "rewrite") {
+		t.Error("seed page gives away the gimmick")
 	}
 	if strings.Contains(body, "<iframe") || strings.Contains(body, "srcdoc") {
 		t.Error("page is still sandboxed in an iframe")
@@ -223,13 +249,124 @@ func TestIndexServesModelScripts(t *testing.T) {
 		t.Fatalf("create version: %v", err)
 	}
 
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(identityCookie("dave"))
 	rec := httptest.NewRecorder()
-	h.Index(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.Index(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), `<script>document.title='owned'</script>`) {
 		t.Error("model script was stripped from the page")
+	}
+}
+
+func TestIndexAsksForNameOnFirstVisit(t *testing.T) {
+	h, _ := setup(t)
+
+	rec := httptest.NewRecorder()
+	h.Index(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`action="/identity"`,
+		`name="name"`,
+		"pick a name",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("identity page is missing %q", want)
+		}
+	}
+	if strings.Contains(body, `action="/posts"`) {
+		t.Error("first visit already shows the board form")
+	}
+}
+
+func TestSetIdentityStoresCookie(t *testing.T) {
+	h, _ := setup(t)
+
+	rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
+		"name": {"  Dave  "},
+	}, "")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/" {
+		t.Errorf("Location = %q, want /", got)
+	}
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %d, want 1", len(cookies))
+	}
+	cookie := cookies[0]
+	if cookie.Name != handlers.IdentityCookieName {
+		t.Errorf("cookie name = %q", cookie.Name)
+	}
+	if cookie.Value != "Dave" {
+		t.Errorf("cookie value = %q, want Dave", cookie.Value)
+	}
+	if !cookie.HttpOnly {
+		t.Error("identity cookie is not HttpOnly")
+	}
+	if cookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("SameSite = %v, want Lax", cookie.SameSite)
+	}
+	if cookie.Path != "/" {
+		t.Errorf("Path = %q, want /", cookie.Path)
+	}
+	if cookie.MaxAge <= 0 {
+		t.Errorf("MaxAge = %d, want a persistent cookie", cookie.MaxAge)
+	}
+
+	board := httptest.NewRequest(http.MethodGet, "/", nil)
+	board.AddCookie(cookie)
+	page := httptest.NewRecorder()
+	h.Index(page, board)
+	if !strings.Contains(page.Body.String(), `action="/posts"`) {
+		t.Error("identity cookie did not unlock the board")
+	}
+}
+
+func TestSetIdentityRejectsAnEmptyName(t *testing.T) {
+	h, _ := setup(t)
+
+	rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
+		"name": {"<><><>"},
+	}, "")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("empty name set %d cookies", len(cookies))
+	}
+}
+
+func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
+	h, queries := setup(t)
+
+	rec := postFormAs(t, h.CreatePost, "/posts", url.Values{
+		"body": {"hello"},
+	}, "")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/" {
+		t.Errorf("Location = %q, want /", got)
+	}
+
+	posts, err := queries.ListPosts(context.Background())
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 0 {
+		t.Fatalf("post without identity was stored: %+v", posts)
 	}
 }
 
@@ -300,7 +437,7 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	if site.ID != 1 {
 		t.Errorf("current version = %d, want the seed at 1", site.ID)
 	}
-	if !strings.Contains(site.Note, "nothing has happened yet") {
+	if site.Note != "welcome. be nice to each other." {
 		t.Errorf("current version is not the seed: %q", site.Note)
 	}
 

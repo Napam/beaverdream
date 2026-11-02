@@ -128,6 +128,7 @@ func pickTheme(prompt string) theme {
 	case strings.Contains(prompt, "matrix"):
 		return theme{
 			css: `:root{--bg:#000;--fg:#00ff6a;--accent:#00ff9c;--muted:#0b7a34;` +
+				`--panel:#001507;--border:#0b5a28;` +
 				`--font:ui-monospace,SFMono-Regular,Menlo,monospace}` +
 				`h1{text-shadow:0 0 14px var(--accent);letter-spacing:.08em}` +
 				`.post{border-color:#053d1a}.post-author{text-shadow:0 0 8px var(--accent)}`,
@@ -138,7 +139,8 @@ func pickTheme(prompt string) theme {
 		strings.Contains(prompt, "sabotage") ||
 		strings.Contains(prompt, "prank"):
 		return theme{
-			css: `:root{--bg:#16000f;--fg:#ffe7fa;--accent:#ff2d95;--muted:#a05a85}` +
+			css: `:root{--bg:#16000f;--fg:#ffe7fa;--accent:#ff2d95;--muted:#a05a85;` +
+				`--panel:#250017;--border:#7a1a52}` +
 				`body{animation:hue 9s linear infinite}` +
 				`@keyframes hue{to{filter:hue-rotate(360deg)}}` +
 				`h1{letter-spacing:.2em;text-transform:uppercase}`,
@@ -149,6 +151,7 @@ func pickTheme(prompt string) theme {
 	case strings.Contains(prompt, "pink") || strings.Contains(prompt, "cute"):
 		return theme{
 			css: `:root{--bg:#1b0d17;--fg:#ffd9ec;--accent:#ff6fae;--muted:#a56d8a;` +
+				`--panel:#241019;--border:#5a2a44;` +
 				`--font:Georgia,"Times New Roman",serif}` +
 				`h1{letter-spacing:.02em}.post{border-color:#3a1b2c;border-radius:12px;padding-left:.9em}`,
 			title: "soft board",
@@ -157,6 +160,7 @@ func pickTheme(prompt string) theme {
 	case strings.Contains(prompt, "brutalist") || strings.Contains(prompt, "concrete"):
 		return theme{
 			css: `:root{--bg:#e8e4da;--fg:#111;--accent:#e0245e;--muted:#6b6459;` +
+				`--panel:#fff;--border:#c9c2b4;` +
 				`--font:Arial,Helvetica,sans-serif}` +
 				`h1{text-transform:uppercase;letter-spacing:-.03em;font-size:2.2em}` +
 				`.post{border-top:3px solid #111}`,
@@ -165,7 +169,7 @@ func pickTheme(prompt string) theme {
 		}
 	default:
 		return theme{
-			css:   `:root{--bg:#0b0b0f;--fg:#e6e6e6;--accent:#9db4ff;--muted:#6d7280}`,
+			css:   `:root{--bg:#0b0b0f;--fg:#e6e6e6;--accent:#9db4ff;--muted:#6d7280;--panel:#15151b;--border:#2a2a33}`,
 			title: "the board",
 			note:  "a quiet board tonight.",
 		}

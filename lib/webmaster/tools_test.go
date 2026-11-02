@@ -109,6 +109,9 @@ func TestSiteDocSubstitutesPosts(t *testing.T) {
 	if strings.Contains(doc, "beaver-controls") {
 		t.Fatal("server injected the old composer")
 	}
+	if !strings.Contains(doc, ".postbox{") {
+		t.Fatal("base stylesheet is missing the post form styles")
+	}
 }
 
 func TestSiteDocKeepsPostsWhenPlaceholderMissing(t *testing.T) {

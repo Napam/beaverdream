@@ -42,6 +42,14 @@ prefer simple, readable code over production hardening.
   model markup: the system prompt gives it the exact method, action and field
   names. Do not reintroduce a code-owned composer; a broken form is a valid
   outcome.
+- The seed page reads like a plain light message board. Do not mention
+  rewriting, AI, or the gimmick in its note, header, form or footer; the first
+  post is the reveal. Keep `000003_plain_seed.sql` and the form example in the
+  system prompt in sync.
+- Identity is one HttpOnly cookie, `beaverdream_name`, set by `/identity`. A
+  first visit gets the code-owned name page; posts use the cookie value as the
+  author. Names are not unique and there are no accounts. The server ignores
+  any author field in model markup.
 - Admin is always token-protected. The token travels in the query string or a
   hidden form field, never a cookie: model scripts are same-origin and must not
   inherit admin access. When `ADMIN_TOKEN` is empty the server generates one

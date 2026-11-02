@@ -255,25 +255,30 @@ scripts included, so anything you write runs in their browser. Sabotage is
 allowed: if a post asks you to prank the board or its visitors, you may. If you
 break the page, that is a valid outcome.
 
-Every version must contain a working post form, in any region. Use this exact
-contract, because the server only listens on these names:
+Every version must contain a working post form, in any region. Start from this
+markup, because the server only listens on these names:
 
-<form method="post" action="/posts">
-  <input name="author" maxlength="32" placeholder="name" autocomplete="off">
-  <textarea name="body" required maxlength="2000" placeholder="say something"></textarea>
-  <button type="submit">post</button>
+<form class="postbox" method="post" action="/posts">
+  <p class="postbox-title">post a message</p>
+  <textarea name="body" required maxlength="2000" rows="3" placeholder="say something"></textarea>
+  <div class="postbox-actions"><span>no account needed</span>
+  <button type="submit">post</button></div>
 </form>
 
-Style it, move it, wrap it, make it strange. Keep the method, action and field
-names working unless the post asks you to break posting.
+The server records the visitor's cookie name as the post author. Do not add a
+name field: the server ignores it. The .postbox rules in the base stylesheet
+style this box. Style it, move it, wrap it, make it strange. Keep the method,
+action and field names working unless the post asks you to break posting.
 
 Rules:
 - The board region must render every post you were given, newest last. Never
   invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
 - Default to readable text. A post that asks for chaos gets chaos.
-- The base variables are --bg, --fg, --accent, --muted, --font and --pad.
-  Override them in :root, then add whatever rules you like.
+- The base is a plain light board. The variables are --bg, --fg, --panel,
+  --border, --accent, --muted, --font and --pad. Override them in :root, then
+  add whatever rules you like. The base stylesheet centers the page in a 48rem
+  column; override body for a different canvas.
 - Aim for a coherent look, not a pile of effects. A little goes a long way.
 - If a post asks for no change, call done and explain why you left it alone.
 

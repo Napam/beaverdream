@@ -1,6 +1,6 @@
 export type Theme = 'light' | 'dark'
 
-const STORAGE_KEY = 'backwegotemplate-theme'
+const STORAGE_KEY = 'beaverdream-theme'
 const darkMedia = window.matchMedia('(prefers-color-scheme: dark)')
 
 // localStorage throws when storage is blocked (disabled cookies, private mode).

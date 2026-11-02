@@ -32,10 +32,10 @@ formatters:
 
     gofumpt:
       extra-rules: false
-      # required so gofumpt recognizes backwegotemplate/... imports as local
+      # required so gofumpt recognizes beaverdream/... imports as local
       # module imports instead of stdlib (dot-less module name); update this
       # if you rename the module
-      module-path: backwegotemplate
+      module-path: github.com/Napam/beaverdream
 
 issues:
   # default max-same-issues (3) silently undercounts repeated issues;

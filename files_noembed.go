@@ -1,6 +1,6 @@
 //go:build noembed
 
-package backwegotemplate
+package beaverdream
 
 import (
 	"io/fs"

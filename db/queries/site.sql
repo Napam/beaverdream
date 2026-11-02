@@ -1,0 +1,35 @@
+-- name: CurrentSite :one
+SELECT
+  *
+FROM
+  site_versions
+ORDER BY
+  id DESC
+LIMIT
+  1;
+
+-- name: GetSiteVersion :one
+SELECT
+  *
+FROM
+  site_versions
+WHERE
+  id = ?;
+
+-- name: CreateSiteVersion :one
+INSERT INTO
+  site_versions (css, note, header, board, footer, trigger_post_id, reason)
+VALUES
+  (?, ?, ?, ?, ?, ?, ?)
+RETURNING
+  *;
+
+-- name: ListSiteVersions :many
+SELECT
+  *
+FROM
+  site_versions
+ORDER BY
+  id DESC
+LIMIT
+  ?;

@@ -1,12 +1,12 @@
 //go:build !noembed
 
-package backwegotemplate
+package beaverdream
 
 import (
 	"embed"
 	"io/fs"
 
-	"backwegotemplate/lib/hashfs"
+	"github.com/Napam/beaverdream/lib/hashfs"
 	"github.com/go-chi/chi/v5"
 )
 

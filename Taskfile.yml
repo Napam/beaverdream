@@ -2,10 +2,14 @@ version: "3"
 
 env:
   HOST: "localhost"
-  PORT: "6900"
+  PORT: "6930"
   LIVE_RELOAD_PROXY_HOST: "localhost"
-  LIVE_RELOAD_PROXY_PORT: "6901"
+  LIVE_RELOAD_PROXY_PORT: "6931"
   DB_MIGRATE_ON_START: "true"
+  # A real OpenAI-compatible server (llama.cpp, LM Studio, OpenAI) goes here.
+  # The defaults point at `task dev.mock-llm`, which needs no model at all.
+  OPENAI_BASE_URL: "http://localhost:6701"
+  OPENAI_MODEL: "mock-model"
 
 tasks:
   init:
@@ -34,6 +38,22 @@ tasks:
     desc: Run goose migrations against the local sqlite database
     cmds:
       - go tool goose sqlite3 -dir ./db/migrations ./data/sqlite.db up
+
+  dev.mock-llm:
+    desc: Run the deterministic mock model on :6701 (leave it running in another terminal)
+    cmds:
+      - go run ./cmd/mockllm -addr localhost:6701
+
+  dev.muse:
+    desc: Run the dev server against OpenCode Go with Muse Spark
+    env:
+      OPENAI_BASE_URL: "https://opencode.ai/inference/go/openai/v1"
+      OPENAI_MODEL: "muse-spark-1.3-contributor"
+      OPENAI_API_KEY_FILE: "./data/openai.key"
+      OPENAI_REASONING_EFFORT: "minimal"
+      MUTATION_ROUNDS: "5"
+    cmds:
+      - task: dev
 
   gen.templ:
     desc: Generate go code from templ templates
@@ -134,12 +154,12 @@ tasks:
         -e DB_MIGRATE_ON_START=$DB_MIGRATE_ON_START \
         -v $(pwd)/data:/app/data \
         -p $PORT:$PORT \
-        backwegotemplate:latest
+        beaverdream:latest
 
   build.docker:
     desc: Build the production docker image
     cmds:
-      - docker build -t backwegotemplate:latest .
+      - docker build -t beaverdream:latest .
 
   build.go:
     desc: Build the production binary with embedded assets into ./bin/app

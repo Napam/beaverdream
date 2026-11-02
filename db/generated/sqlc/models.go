@@ -8,7 +8,35 @@ import (
 	"database/sql"
 )
 
-type User struct {
-	ID   int64
-	Name sql.NullString
+type MutationRun struct {
+	ID            int64
+	Kind          string
+	TriggerPostID sql.NullInt64
+	Instruction   string
+	Reason        string
+	Status        string
+	ErrorText     string
+	Messages      string
+	VersionID     sql.NullInt64
+	DurationMs    int64
+	CreatedAt     string
+}
+
+type Post struct {
+	ID        int64
+	Author    string
+	Body      string
+	CreatedAt string
+}
+
+type SiteVersion struct {
+	ID            int64
+	Css           string
+	Note          string
+	Header        string
+	Board         string
+	Footer        string
+	TriggerPostID sql.NullInt64
+	Reason        string
+	CreatedAt     string
 }

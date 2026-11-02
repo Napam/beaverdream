@@ -12,11 +12,11 @@ import (
 
 const createSiteVersion = `-- name: CreateSiteVersion :one
 INSERT INTO
-  site_versions (css, note, header, board, footer, trigger_post_id, reason)
+  site_versions (css, note, header, board, footer, state_schema, trigger_post_id, reason)
 VALUES
-  (?, ?, ?, ?, ?, ?, ?)
+  (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at
+  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
 `
 
 type CreateSiteVersionParams struct {
@@ -25,6 +25,7 @@ type CreateSiteVersionParams struct {
 	Header        string
 	Board         string
 	Footer        string
+	StateSchema   string
 	TriggerPostID sql.NullInt64
 	Reason        string
 }
@@ -36,6 +37,7 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 		arg.Header,
 		arg.Board,
 		arg.Footer,
+		arg.StateSchema,
 		arg.TriggerPostID,
 		arg.Reason,
 	)
@@ -50,13 +52,14 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 		&i.TriggerPostID,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.StateSchema,
 	)
 	return i, err
 }
 
 const currentSite = `-- name: CurrentSite :one
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at
+  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
 FROM
   site_versions
 ORDER BY
@@ -78,6 +81,7 @@ func (q *Queries) CurrentSite(ctx context.Context) (SiteVersion, error) {
 		&i.TriggerPostID,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.StateSchema,
 	)
 	return i, err
 }
@@ -98,7 +102,7 @@ func (q *Queries) CurrentVersionID(ctx context.Context) (interface{}, error) {
 
 const getSiteVersion = `-- name: GetSiteVersion :one
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at
+  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
 FROM
   site_versions
 WHERE
@@ -118,13 +122,14 @@ func (q *Queries) GetSiteVersion(ctx context.Context, id int64) (SiteVersion, er
 		&i.TriggerPostID,
 		&i.Reason,
 		&i.CreatedAt,
+		&i.StateSchema,
 	)
 	return i, err
 }
 
 const listSiteVersions = `-- name: ListSiteVersions :many
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at
+  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
 FROM
   site_versions
 ORDER BY
@@ -152,6 +157,7 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 			&i.TriggerPostID,
 			&i.Reason,
 			&i.CreatedAt,
+			&i.StateSchema,
 		); err != nil {
 			return nil, err
 		}

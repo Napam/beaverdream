@@ -186,6 +186,8 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Post("/posts", h.CreatePost)
 	router.Get("/version", h.Version)
 	router.Get("/version/{id}/css", h.VersionCSS)
+	router.Get("/x/state", h.State)
+	router.Post("/x/state/{key}", h.SetState)
 
 	router.Get("/admin", h.Admin)
 	router.Get("/admin/", h.Admin)

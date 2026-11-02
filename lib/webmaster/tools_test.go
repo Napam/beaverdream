@@ -78,6 +78,42 @@ func TestSetNoteTruncates(t *testing.T) {
 	}
 }
 
+func TestSetStateSchemaAcceptsAValidSchema(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_state_schema", args(t, map[string]any{"keys": []map[string]any{
+		{"name": "votes_pink", "op": "counter"},
+		{"name": "vibes", "op": "list", "max": 5},
+		{"name": "weather", "op": "choice", "options": []string{"rain", "sun"}},
+	}}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	for _, want := range []string{
+		`"votes_pink":{"op":"counter"}`,
+		`"vibes":{"op":"list","max":5}`,
+		`"weather":{"op":"choice","options":["rain","sun"]}`,
+	} {
+		if !strings.Contains(ed.site.StateSchema, want) {
+			t.Errorf("schema is missing %q: %s", want, ed.site.StateSchema)
+		}
+	}
+}
+
+func TestSetStateSchemaRejectsBadKeys(t *testing.T) {
+	cases := []map[string]any{
+		{"name": "Bad Name", "op": "counter"},
+		{"name": "votes", "op": "delete"},
+		{"name": "weather", "op": "choice", "options": []string{"rain"}},
+	}
+	for _, key := range cases {
+		ed := newEditor(Site{})
+		got := ed.run("set_state_schema", args(t, map[string]any{"keys": []map[string]any{key}}))
+		if !strings.HasPrefix(got, "rejected:") {
+			t.Errorf("key %v: got %q, want a rejection", key, got)
+		}
+	}
+}
+
 func TestDoneStopsAndKeepsReason(t *testing.T) {
 	ed := newEditor(Site{})
 	ed.run("done", args(t, map[string]string{"reason": "  left it alone  "}))

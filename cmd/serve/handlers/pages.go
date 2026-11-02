@@ -46,7 +46,10 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if _, err := io.WriteString(w, webmaster.SiteDoc(siteFromRow(site), converted)); err != nil {
+	if _, err := io.WriteString(
+		w,
+		webmaster.SiteDoc(h.siteWithState(r.Context(), site), converted),
+	); err != nil {
 		h.logger.Error("Failed to write index page", slog.Any("error", err))
 	}
 }

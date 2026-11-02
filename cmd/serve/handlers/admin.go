@@ -166,12 +166,13 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
-		Css:    previous.Css,
-		Note:   previous.Note,
-		Header: previous.Header,
-		Board:  previous.Board,
-		Footer: previous.Footer,
-		Reason: fmt.Sprintf("undid version %d", current.ID),
+		Css:         previous.Css,
+		Note:        previous.Note,
+		Header:      previous.Header,
+		Board:       previous.Board,
+		Footer:      previous.Footer,
+		StateSchema: normalizeStateSchema(previous.StateSchema),
+		Reason:      fmt.Sprintf("undid version %d", current.ID),
 	})
 	if err != nil {
 		h.logger.Error("Failed to undo the last version", slog.Any("error", err))
@@ -253,12 +254,13 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
-		Css:    version.Css,
-		Note:   version.Note,
-		Header: version.Header,
-		Board:  version.Board,
-		Footer: version.Footer,
-		Reason: fmt.Sprintf("restored version %d", id),
+		Css:         version.Css,
+		Note:        version.Note,
+		Header:      version.Header,
+		Board:       version.Board,
+		Footer:      version.Footer,
+		StateSchema: normalizeStateSchema(version.StateSchema),
+		Reason:      fmt.Sprintf("restored version %d", id),
 	})
 	if err != nil {
 		h.logger.Error("Failed to restore version", slog.Any("error", err))

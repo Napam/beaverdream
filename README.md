@@ -23,17 +23,23 @@ It is a toy. It runs on localhost and calls a local model.
   placeholder, the posts are appended instead, so a post can never disappear.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only code-owned markup is the note and the document shell. The
-  model writes the post form itself, so it can move it, restyle it, or break
-  it. The system prompt gives it the exact method, action and field names. If
+  document. The only code-owned markup is the note, the document shell, the
+  live-update script and the shared-state tag. The model writes the post form
+  itself, so it can move it, restyle it, or break it. The system prompt gives it the exact method, action and field names. If
   it breaks the form, posting stops working until an admin injects a fix.
 - The first visit asks for a name. It goes into an HttpOnly cookie and becomes
   the author of that visitor's posts. There are no accounts and names are not
   unique. The name page is code-owned and plain; the model never sees it.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
-- A new post returns immediately. The mutation runs in the background, and open
-  pages poll `/version` and reload when it changes.
+- The model can also declare a tiny shared state: counters, lists and choices,
+  through `set_state_schema`. The page reads it from the `bd-state` JSON tag or
+  `GET /x/state`, and visitors change it with `POST /x/state/{key}`. It is the
+  model's backend without giving it arbitrary Go.
+- A new post returns immediately. A single worker coalesces posts that arrive
+  during a rewrite, so a burst becomes one mutation. Open pages poll
+  `/version`: a stylesheet-only change is swapped in place, and a markup change
+  reloads after saving the draft and reading position.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds with four tools
   (`set_css`, `set_region`, `set_note`, `done`). The result is stored as a new
   version plus a `mutation_runs` row holding the whole conversation.

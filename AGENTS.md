@@ -19,7 +19,8 @@ prefer simple, readable code over production hardening.
 
 - `posts` is the truth. `site_versions` is the render, append-only; the current
   site is `MAX(id)`. `mutation_runs` stores the full conversation per mutation
-  so `/admin` can replay it.
+  so `/admin` can replay it. `site_state` holds the model-declared shared
+  values, and its schema travels on the version row.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `tools.go` (tool execution and validation), `mutate.go` (the loop, prompts,
   tool schemas).
@@ -38,10 +39,15 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the note and the document shell. The post form is
-  model markup: the system prompt gives it the exact method, action and field
-  names. Do not reintroduce a code-owned composer; a broken form is a valid
-  outcome.
+- The only fixed markup is the note, the document shell, the live script, and
+  the `bd-state` JSON tag. The post form is model markup: the system prompt
+  gives it the exact method, action and field names. Do not reintroduce a
+  code-owned composer; a broken form is a valid outcome.
+- Shared state is model-declared and server-applied. Only keys in the current
+  version's `state_schema` are writable, values pass through
+  `CleanStateValue`, and the ops are fixed (counter, list, choice). Do not let
+  visitors create keys or store raw HTML. Reset clears the state; restores keep
+  the values and take the old schema.
 - The seed page reads like a plain light message board. Do not mention
   rewriting, AI, or the gimmick in its note, header, form or footer; the first
   post is the reveal. Keep `000003_plain_seed.sql` and the form example in the
@@ -54,9 +60,10 @@ prefer simple, readable code over production hardening.
   hidden form field, never a cookie: model scripts are same-origin and must not
   inherit admin access. When `ADMIN_TOKEN` is empty the server generates one
   and logs the URL.
-- Mutations from posts run in the background; admin mutations stay
-  synchronous so the flash message works. `h.mu` serializes both, and tests
-  wait for the version or run to land.
+- Mutations from posts run in the background through one worker that coalesces
+  a burst into one rewrite; admin mutations stay synchronous so the flash
+  message works. `h.mu` serializes both, and the timeout starts after the lock.
+  Tests wait for the version or run to land.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the failed run is still recorded.
 - Restore copies an old version forward as a new row. History stays immutable.

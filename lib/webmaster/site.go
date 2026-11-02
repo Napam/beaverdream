@@ -3,6 +3,7 @@
 package webmaster
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
 	"regexp"
@@ -23,14 +24,17 @@ const (
 const PostsPlaceholder = "{{posts}}"
 
 // Site is one version of the page: three regions, a stylesheet, and the note
-// shown above the sandbox.
+// shown above the sandbox. StateSchema and State belong to the model-declared
+// shared state, not to the version row itself.
 type Site struct {
-	Version int64
-	CSS     string
-	Note    string
-	Header  string
-	Board   string
-	Footer  string
+	Version     int64
+	CSS         string
+	Note        string
+	Header      string
+	Board       string
+	Footer      string
+	StateSchema string
+	State       map[string]string
 }
 
 // Post is one message on the board.
@@ -332,6 +336,19 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(`</style><style id="bd-css">`)
 	b.WriteString(site.CSS)
 	b.WriteString(`</style></head><body>`)
+	if site.StateSchema != "" || len(site.State) > 0 {
+		state := site.State
+		if state == nil {
+			state = map[string]string{}
+		}
+		data, err := json.Marshal(state)
+		if err != nil {
+			data = []byte("{}")
+		}
+		b.WriteString(`<script type="application/json" id="bd-state">`)
+		b.Write(data)
+		b.WriteString(`</script>`)
+	}
 	if site.Note != "" {
 		b.WriteString(`<p class="beaver-note" id="bd-note">`)
 		b.WriteString(html.EscapeString(site.Note))

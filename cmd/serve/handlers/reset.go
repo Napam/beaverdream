@@ -50,6 +50,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		{`DELETE FROM site_versions WHERE id > ?`, []any{seedID.Int64}},
 		{`UPDATE site_versions SET trigger_post_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 		{`DELETE FROM posts`, nil},
+		{`DELETE FROM site_state`, nil},
 		{`DELETE FROM sqlite_sequence WHERE name IN ('mutation_runs', 'posts')`, nil},
 		// Reset restores the board the migrations seeded, including the posts
 		// that make an empty board feel alive.

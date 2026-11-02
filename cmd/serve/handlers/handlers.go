@@ -100,13 +100,41 @@ func (h *Handlers) Close() {
 
 func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
 	return webmaster.Site{
-		Version: row.ID,
-		CSS:     row.Css,
-		Note:    row.Note,
-		Header:  row.Header,
-		Board:   row.Board,
-		Footer:  row.Footer,
+		Version:     row.ID,
+		CSS:         row.Css,
+		Note:        row.Note,
+		Header:      row.Header,
+		Board:       row.Board,
+		Footer:      row.Footer,
+		StateSchema: row.StateSchema,
 	}
+}
+
+// siteWithState attaches the model-declared shared state to a version before
+// it is rendered or sent to the model.
+func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webmaster.Site {
+	site := siteFromRow(row)
+	rows, err := h.queries.ListSiteState(ctx)
+	if err != nil {
+		h.logger.Error("Failed to load shared state", slog.Any("error", err))
+		return site
+	}
+	if len(rows) == 0 {
+		return site
+	}
+	site.State = make(map[string]string, len(rows))
+	for _, state := range rows {
+		site.State[state.Key] = state.Value
+	}
+	return site
+}
+
+// normalizeStateSchema keeps an empty schema as a valid JSON object.
+func normalizeStateSchema(schema string) string {
+	if strings.TrimSpace(schema) == "" {
+		return "{}"
+	}
+	return schema
 }
 
 func postFromRow(row sqlc.Post) webmaster.Post {
@@ -188,7 +216,7 @@ func (h *Handlers) mutateHeld(
 	}
 
 	start := time.Now()
-	res, mutErr := h.mutator.Mutate(ctx, siteFromRow(current), posts, trigger)
+	res, mutErr := h.mutator.Mutate(ctx, h.siteWithState(ctx, current), posts, trigger)
 	elapsed := time.Since(start).Milliseconds()
 
 	if mutErr != nil {
@@ -204,6 +232,7 @@ func (h *Handlers) mutateHeld(
 			Header:        res.Site.Header,
 			Board:         res.Site.Board,
 			Footer:        res.Site.Footer,
+			StateSchema:   normalizeStateSchema(res.Site.StateSchema),
 			TriggerPostID: triggerID,
 			Reason:        res.Reason,
 		})

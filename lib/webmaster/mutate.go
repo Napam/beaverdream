@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -220,6 +221,45 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "set_state_schema",
+			Description: openai.String(
+				"Declare the shared state the page can read and write. " +
+					"counter increments, list appends a short string, choice tallies an option.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"keys": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name": map[string]any{
+									"type":        "string",
+									"description": "Lowercase letters, digits, _ or -.",
+								},
+								"op": map[string]any{
+									"type": "string",
+									"enum": []string{"counter", "list", "choice"},
+								},
+								"max": map[string]any{
+									"type":        "integer",
+									"description": "For list: how many entries to keep.",
+								},
+								"options": map[string]any{
+									"type":        "array",
+									"items":       map[string]any{"type": "string"},
+									"description": "For choice: the allowed values.",
+								},
+							},
+							"required": []string{"name", "op"},
+						},
+					},
+				},
+				"required": []string{"keys"},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name:        "done",
 			Description: openai.String("Stop editing and say why, in one short sentence."),
 			Parameters: shared.FunctionParameters{
@@ -252,6 +292,9 @@ Tools:
   which is where the real posts are inserted. Write whatever surrounds them.
   The page must keep one working post form.
 - set_note(text): set the one-line note shown above the page.
+- set_state_schema(keys): declare shared values the page can read and write.
+  Ops are counter, list (keep the newest max entries) and choice (tally one of
+  the options). Up to 8 keys. Declare only what the page actually uses.
 - done(reason): stop and record one short sentence explaining the change.
 
 Make every tool call you need in one response, ending with done. A round trip
@@ -276,6 +319,14 @@ The server records the visitor's cookie name as the post author. Do not add a
 name field: the server ignores it. The .postbox rules in the base stylesheet
 style this box. Style it, move it, wrap it, make it strange. Keep the method,
 action and field names working unless the post asks you to break posting.
+
+Shared state:
+- The current values arrive in the prompt, and the page gets them in a JSON
+  script tag with id="bd-state".
+- GET /x/state returns {"schema": ..., "state": ...}. POST /x/state/KEY with a
+  value=... form field applies that key's op for the current visitor.
+- Use state for polls, counters, guestbooks and reaction buttons. State
+  survives restores; reset clears it. Do not store HTML in it.
 
 Rules:
 - The board region must render every post you were given, newest last. Never
@@ -337,6 +388,27 @@ func userPrompt(site Site, posts []Post, trigger Post) string {
 	b.WriteString("\nCURRENT REGIONS:\n")
 	fmt.Fprintf(&b, "header:\n%s\n\nboard:\n%s\n\nfooter:\n%s\n",
 		site.Header, site.Board, site.Footer)
+
+	b.WriteString("\nCURRENT SHARED STATE:\n")
+	if strings.TrimSpace(site.StateSchema) == "" || strings.TrimSpace(site.StateSchema) == "{}" {
+		b.WriteString("(no schema)\n")
+	} else {
+		b.WriteString("schema: ")
+		b.WriteString(site.StateSchema)
+		b.WriteString("\n")
+		if len(site.State) == 0 {
+			b.WriteString("(no values yet)\n")
+		} else {
+			keys := make([]string, 0, len(site.State))
+			for key := range site.State {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				fmt.Fprintf(&b, "%s: %s\n", key, site.State[key])
+			}
+		}
+	}
 
 	changes := site.Version - 1
 	if changes < 0 {

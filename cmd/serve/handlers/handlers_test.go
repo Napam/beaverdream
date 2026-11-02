@@ -109,6 +109,26 @@ func postFormAs(
 	return rec
 }
 
+func stateForm(
+	t *testing.T,
+	h http.HandlerFunc,
+	key string,
+	form url.Values,
+	name string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/x/state/"+key, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if name != "" {
+		req.AddCookie(identityCookie(name))
+	}
+	req = withURLParam(req, "key", key)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
 // waitFor polls until fn is true. Mutations run in the background now, so
 // tests have to wait for the version or run to land.
 func waitFor(t *testing.T, what string, fn func() bool) {
@@ -515,6 +535,110 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	}
 	if cookies := authed.Result().Cookies(); len(cookies) != 0 {
 		t.Errorf("admin set %d cookies, want none", len(cookies))
+	}
+}
+
+func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: `{"votes":{"op":"counter"},"vibes":{"op":"list","max":2},"weather":{"op":"choice","options":["rain","sun"]}}`,
+		Reason:      "state test",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+
+	read := httptest.NewRecorder()
+	h.State(read, httptest.NewRequest(http.MethodGet, "/x/state", nil))
+	if read.Code != http.StatusOK {
+		t.Fatalf("state status = %d", read.Code)
+	}
+	for _, want := range []string{`"votes":{"op":"counter"}`, `"votes":0`, `"vibes":[]`, `"weather":{}`} {
+		if !strings.Contains(read.Body.String(), want) {
+			t.Errorf("state response is missing %q: %s", want, read.Body.String())
+		}
+	}
+
+	for want := 1; want <= 2; want++ {
+		rec := stateForm(t, h.SetState, "votes", url.Values{}, "dave")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("vote status = %d", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"value":`+strconv.Itoa(want)) {
+			t.Errorf("vote response = %s", rec.Body.String())
+		}
+	}
+
+	vibe := stateForm(t, h.SetState, "vibes", url.Values{"value": {"quiet"}}, "kit")
+	if vibe.Code != http.StatusOK {
+		t.Fatalf("list status = %d", vibe.Code)
+	}
+	if !strings.Contains(vibe.Body.String(), `"author":"kit"`) {
+		t.Errorf("list response = %s", vibe.Body.String())
+	}
+
+	choice := stateForm(t, h.SetState, "weather", url.Values{"value": {"rain"}}, "dave")
+	if choice.Code != http.StatusOK {
+		t.Fatalf("choice status = %d", choice.Code)
+	}
+	if !strings.Contains(choice.Body.String(), `"rain":1`) {
+		t.Errorf("choice response = %s", choice.Body.String())
+	}
+
+	bad := stateForm(t, h.SetState, "nope", url.Values{}, "dave")
+	if bad.Code != http.StatusNotFound {
+		t.Errorf("unknown key status = %d, want 404", bad.Code)
+	}
+
+	anonymous := stateForm(t, h.SetState, "votes", url.Values{}, "")
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous status = %d, want 401", anonymous.Code)
+	}
+}
+
+func TestResetClearsSharedState(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: `{"votes":{"op":"counter"}}`,
+		Reason:      "state test",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if rec := stateForm(t, h.SetState, "votes", url.Values{}, "dave"); rec.Code != http.StatusOK {
+		t.Fatalf("vote status = %d", rec.Code)
+	}
+
+	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
+	if reset.Code != http.StatusSeeOther {
+		t.Fatalf("reset status = %d", reset.Code)
+	}
+	rows, err := queries.ListSiteState(ctx)
+	if err != nil {
+		t.Fatalf("list state: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("state survived the reset: %+v", rows)
 	}
 }
 

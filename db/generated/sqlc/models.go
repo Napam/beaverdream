@@ -36,6 +36,12 @@ type SeedPost struct {
 	Age    string
 }
 
+type SiteState struct {
+	Key       string
+	Value     string
+	UpdatedAt string
+}
+
 type SiteVersion struct {
 	ID            int64
 	Css           string
@@ -46,4 +52,5 @@ type SiteVersion struct {
 	TriggerPostID sql.NullInt64
 	Reason        string
 	CreatedAt     string
+	StateSchema   string
 }

@@ -27,14 +27,17 @@ const PostsPlaceholder = "{{posts}}"
 // shown above the sandbox. StateSchema and State belong to the model-declared
 // shared state, not to the version row itself.
 type Site struct {
-	Version     int64
-	CSS         string
-	Note        string
-	Header      string
-	Board       string
-	Footer      string
-	StateSchema string
-	State       map[string]string
+	Version           int64
+	CSS               string
+	Note              string
+	Header            string
+	Board             string
+	Footer            string
+	StateSchema       string
+	State             map[string]json.RawMessage
+	Name              string
+	Plain             bool
+	ChangesSincePlain int
 }
 
 // Post is one message on the board.
@@ -62,8 +65,9 @@ const BaseCSS = `
 }
 *{box-sizing:border-box}
 html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto;transition:background-color .5s,color .5s;animation:bdFadeIn .25s ease-out}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto;transition:background-color .5s,color .5s}
 html.bd-leaving body{opacity:0;transition:opacity .2s}
+html.bd-entering body{animation:bdFadeIn .25s ease-out}
 @keyframes bdFadeIn{from{opacity:0}to{opacity:1}}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
@@ -82,7 +86,7 @@ main{margin-top:1.25em}
 .post-body .post-ref{color:var(--accent);text-decoration:underline}
 .empty{color:var(--muted);font-style:italic}
 .colophon{margin-top:2em;padding-top:.8em;border-top:1px solid var(--border);color:var(--muted);font-size:.8em}
-.beaver-note{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);padding:.6em .8em;color:var(--muted);margin:0 0 1.25em;font-size:.9em}
+.beaver-note{position:sticky;top:0;z-index:10;background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);padding:.6em .8em;color:var(--muted);margin:0 0 1.25em;font-size:.9em}
 .postbox{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.9em;display:flex;flex-direction:column;gap:.55em;margin:0 0 1.5em}
 .postbox-title{margin:0;font-weight:700;font-size:.95em}
 .postbox input,.postbox textarea{width:100%;background:color-mix(in srgb,var(--bg) 90%,#fff 10%);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:.5em .6em;font:inherit;font-size:.95em}
@@ -194,6 +198,15 @@ const liveScript = `<script>
 
   function restoreState() {
     try {
+      if (location.search.indexOf('v=') !== -1) {
+        document.documentElement.classList.add('bd-entering')
+        setTimeout(function () {
+          document.documentElement.classList.remove('bd-entering')
+        }, 300)
+        if (window.history && history.replaceState) {
+          history.replaceState(null, '', location.pathname + location.hash)
+        }
+      }
       var draft = sessionStorage.getItem('bd:draft')
       var area = document.querySelector('form[action="/posts"] textarea[name=body]')
       if (draft !== null && area) {
@@ -219,7 +232,7 @@ const liveScript = `<script>
   }
 
   function reload(next) {
-    replacePage('/?v=' + next + location.hash)
+    replacePage('/?v=' + next)
   }
 
   function applyCSS(next) {
@@ -258,11 +271,11 @@ const liveScript = `<script>
   }
 
   function tick() {
-    if (document.hidden || reloading) return
+    if (document.hidden || reloading || waitingSince) return
     fetchPage('/version?have=' + version, { cache: 'no-store' })
       .then(function (r) { return r.json() })
       .then(function (d) {
-        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : (d.error ? 'error' : 'idle'))
+        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : 'idle')
         document.documentElement.setAttribute('data-bd-state', state)
         document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
         if (String(d.version) === version) return
@@ -309,7 +322,15 @@ func IdentityDoc() string {
 // the note, the document shell, and the live reload script. The post form is
 // model markup, so it can move it, restyle it, or break it.
 func SiteDoc(site Site, posts []Post) string {
-	board := site.Board
+	name := site.Name
+	if name == "" {
+		name = "Anonymous"
+	}
+	escapedName := html.EscapeString(name)
+	board := strings.ReplaceAll(site.Board, "{{name}}", escapedName)
+	header := strings.ReplaceAll(site.Header, "{{name}}", escapedName)
+	footer := strings.ReplaceAll(site.Footer, "{{name}}", escapedName)
+
 	rendered := RenderPosts(posts)
 	if strings.Contains(board, PostsPlaceholder) {
 		board = strings.ReplaceAll(board, PostsPlaceholder, rendered)
@@ -339,7 +360,7 @@ func SiteDoc(site Site, posts []Post) string {
 	if site.StateSchema != "" || len(site.State) > 0 {
 		state := site.State
 		if state == nil {
-			state = map[string]string{}
+			state = map[string]json.RawMessage{}
 		}
 		data, err := json.Marshal(state)
 		if err != nil {
@@ -354,9 +375,9 @@ func SiteDoc(site Site, posts []Post) string {
 		b.WriteString(html.EscapeString(site.Note))
 		b.WriteString(`</p>`)
 	}
-	b.WriteString(site.Header)
+	b.WriteString(header)
 	b.WriteString(board)
-	b.WriteString(site.Footer)
+	b.WriteString(footer)
 	b.WriteString(`</body></html>`)
 	return b.String()
 }

@@ -32,6 +32,18 @@ FROM
 WHERE
   id = ?;
 
+-- name: LastVersionMatching :one
+SELECT
+  MAX(id)
+FROM
+  site_versions
+WHERE
+  css = ?
+  AND note = ?
+  AND header = ?
+  AND board = ?
+  AND footer = ?;
+
 -- name: CreateSiteVersion :one
 INSERT INTO
   site_versions (css, note, header, board, footer, state_schema, trigger_post_id, reason)

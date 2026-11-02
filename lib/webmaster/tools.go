@@ -221,7 +221,8 @@ func validStateName(name string) bool {
 // from turning state into stored HTML.
 func CleanStateValue(value string) string {
 	value = strings.Map(func(r rune) rune {
-		if r == '<' || r == '>' || r == 0 {
+		switch r {
+		case '<', '>', '"', '\'', '`', 0:
 			return -1
 		}
 		return r

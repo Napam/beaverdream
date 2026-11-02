@@ -22,6 +22,10 @@ type Mutator struct {
 	model     string
 	maxRounds int
 	effort    shared.ReasoningEffort
+
+	// OnRound, when set, reports the round that is about to run. The admin
+	// panel uses it to show progress.
+	OnRound func(round int)
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
@@ -74,9 +78,23 @@ func (m *Mutator) Mutate(
 	posts []Post,
 	trigger Post,
 ) (Result, error) {
+	return m.MutatePosts(ctx, current, posts, []Post{trigger})
+}
+
+// MutatePosts is Mutate for a burst that was coalesced into one rewrite. The
+// prompt credits every poster instead of pretending one person wrote it all.
+func (m *Mutator) MutatePosts(
+	ctx context.Context,
+	current Site,
+	posts []Post,
+	triggers []Post,
+) (Result, error) {
+	if len(triggers) == 0 {
+		triggers = []Post{{Author: "admin"}}
+	}
 	ed := newEditor(current)
 	sys := systemPromptText
-	usr := userPrompt(current, posts, trigger)
+	usr := userPrompt(current, posts, triggers)
 
 	res := Result{Site: current, Messages: []Message{
 		{Role: "system", Content: sys},
@@ -89,6 +107,9 @@ func (m *Mutator) Mutate(
 	}
 
 	for round := 0; round < m.maxRounds; round++ {
+		if m.OnRound != nil {
+			m.OnRound(round + 1)
+		}
 		resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Model:           openai.ChatModel(m.model),
 			Messages:        messages,
@@ -311,27 +332,25 @@ markup, because the server only listens on these names:
 <form class="postbox" method="post" action="/posts">
   <p class="postbox-title">post a message</p>
   <textarea name="body" required maxlength="2000" rows="3" placeholder="say something"></textarea>
-  <div class="postbox-actions"><span>no account needed</span>
+  <div class="postbox-actions"><span>posting as {{name}}</span>
   <button type="submit">post</button></div>
 </form>
 
 The server records the visitor's cookie name as the post author. Do not add a
-name field: the server ignores it. The .postbox rules in the base stylesheet
-style this box. Style it, move it, wrap it, make it strange. Keep the method,
-action and field names working unless the post asks you to break posting.
+name field: the server ignores it. The page can use {{name}} to show the
+visitor's name; the server replaces it with the escaped cookie name. The
+.postbox rules in the base stylesheet style this box. Style it, move it, wrap
+it, make it strange. Keep the method, action and field names working unless the
+post asks you to break posting.
 
 Shared state:
 - The current values arrive in the prompt, and the page gets them in a JSON
   script tag with id="bd-state".
 - GET /x/state returns {"schema": ..., "state": ...}. POST /x/state/KEY with a
   value=... form field applies that key's op for the current visitor.
-- Use state for polls, counters, guestbooks and reaction buttons. State
-  survives restores; reset clears it. Do not store HTML in it.
-
-Live state:
-- html[data-bd-state] is idle, queued, running or error. The page fires
-  beaverdream:status and beaverdream:update events. Use them for small live
-  touches; never block the page with them.
+- Use state only when a post asks for something people can click, vote on or
+  leave behind. Do not add widgets just because you can. State survives
+  restores; reset clears it. Do not store HTML in it.
 
 Rules:
 - The board region must render every post you were given, newest last. Never
@@ -341,9 +360,13 @@ Rules:
   it, in the board's voice, one sentence. Never mention AI, models or rewriting.
 - Early changes are clear but the site still reads as a message board. Get
   bolder as the board gets busier.
-- The first change away from the seed must change something. Only leave the
-  site alone when a post explicitly asks for that and the board has already
-  changed at least once.
+- BOARD IS PLAIN means the page still matches the seed. The first change away
+  from a plain board must change something visible. After a quiet board heals,
+  start gentle again.
+- When one person asks, name them in the note. When several people ask for
+  different things, name them and pick a side. Only leave the site alone when a
+  post explicitly asks for that and the board has already changed at least once.
+- Never show that the site is working, loading or thinking.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
   --border, --accent, --name, --muted, --font and --pad. Override them in
@@ -371,7 +394,7 @@ func clip(s string, limit int) string {
 
 // userPrompt assembles the current state, the recent conversation, and the one
 // new message the model has to react to.
-func userPrompt(site Site, posts []Post, trigger Post) string {
+func userPrompt(site Site, posts []Post, triggers []Post) string {
 	var b strings.Builder
 
 	b.WriteString("CURRENT STYLESHEET:\n")
@@ -415,11 +438,18 @@ func userPrompt(site Site, posts []Post, trigger Post) string {
 		}
 	}
 
-	changes := site.Version - 1
-	if changes < 0 {
-		changes = 0
+	b.WriteString("\nBOARD IS PLAIN: ")
+	if site.Plain {
+		b.WriteString("yes\n")
+	} else {
+		b.WriteString("no\n")
 	}
-	fmt.Fprintf(&b, "\nCHANGES SO FAR: %d\n", changes)
+	fmt.Fprintf(&b, "CHANGES SINCE PLAIN: %d\n", site.ChangesSincePlain)
+
+	triggerIDs := make(map[int64]bool, len(triggers))
+	for _, trigger := range triggers {
+		triggerIDs[trigger.ID] = true
+	}
 
 	b.WriteString("\nRECENT POSTS, oldest first:\n")
 	if len(posts) == 0 {
@@ -431,22 +461,35 @@ func userPrompt(site Site, posts []Post, trigger Post) string {
 			author = "anon"
 		}
 		body := p.Body
-		if p.ID != trigger.ID {
+		if !triggerIDs[p.ID] {
 			body = clip(body, historyPostLen)
 		}
 		fmt.Fprintf(&b, "#%d %s: %s\n", p.ID, author, body)
 	}
 
-	b.WriteString("\nNEW POST")
-	if trigger.ID != 0 {
-		fmt.Fprintf(&b, " #%d", trigger.ID)
+	if len(triggers) == 1 {
+		trigger := triggers[0]
+		b.WriteString("\nNEW POST")
+		if trigger.ID != 0 {
+			fmt.Fprintf(&b, " #%d", trigger.ID)
+		}
+		if trigger.Author != "" {
+			fmt.Fprintf(&b, " from %s", trigger.Author)
+		}
+		b.WriteString(":\n")
+		b.WriteString(trigger.Body)
+		b.WriteString("\nThe poster is looking at this post.\n")
+	} else {
+		b.WriteString("\nNEW POSTS since the last change:\n")
+		for _, trigger := range triggers {
+			author := trigger.Author
+			if author == "" {
+				author = "anon"
+			}
+			fmt.Fprintf(&b, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
+		}
+		b.WriteString("The posters are looking at their own posts.\n")
 	}
-	if trigger.Author != "" {
-		fmt.Fprintf(&b, " from %s", trigger.Author)
-	}
-	b.WriteString(":\n")
-	b.WriteString(trigger.Body)
-	b.WriteString("\nThe poster is looking at this post.\n")
 
 	return b.String()
 }

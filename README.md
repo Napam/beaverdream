@@ -35,14 +35,15 @@ It is a toy. It runs on localhost and calls a local model.
 - The model can also declare a tiny shared state: counters, lists and choices,
   through `set_state_schema`. The page reads it from the `bd-state` JSON tag or
   `GET /x/state`, and visitors change it with `POST /x/state/{key}`. It is the
-  model's backend without giving it arbitrary Go.
+  model's backend without giving it arbitrary Go. Restores keep the values;
+  reset and heal clear them.
 - A new post returns immediately. A single worker coalesces posts that arrive
   during a rewrite, so a burst becomes one mutation. Open pages poll
   `/version`: a stylesheet-only change is swapped in place, and a markup change
   reloads after saving the draft and reading position.
 - After 20 quiet minutes the board copies the seed forward, keeping the posts
-  and shared state. The next visitor gets the plain board and the reveal again.
-  The admin panel can trigger the same heal immediately.
+  and clearing shared state. The next visitor gets the plain board and the
+  reveal again. The admin panel can trigger the same heal immediately.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds with four tools
   (`set_css`, `set_region`, `set_note`, `done`). The result is stored as a new
   version plus a `mutation_runs` row holding the whole conversation.

@@ -186,12 +186,27 @@ func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 	}
 }
 
+func TestSiteDocSubstitutesTheVisitorName(t *testing.T) {
+	doc := SiteDoc(
+		Site{Name: `<b>dave</b>`, Board: `<p>{{name}}</p>` + PostsPlaceholder},
+		nil,
+	)
+	if !strings.Contains(doc, `&lt;b&gt;dave&lt;/b&gt;`) {
+		t.Errorf("name was not escaped into the page: %s", doc)
+	}
+	if strings.Contains(doc, "{{name}}") {
+		t.Error("name placeholder was not replaced")
+	}
+}
+
 func TestSiteDocEmbedsSharedStateSafely(t *testing.T) {
 	doc := SiteDoc(
 		Site{
 			Board:       PostsPlaceholder,
 			StateSchema: `{"votes":{"op":"counter"}}`,
-			State:       map[string]string{"votes": `{"html":"<b>x</b>"}`},
+			State: map[string]json.RawMessage{
+				"votes": json.RawMessage(`{"html":"<b>x</b>"}`),
+			},
 		},
 		nil,
 	)

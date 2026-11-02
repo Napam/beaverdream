@@ -55,19 +55,24 @@ type Handlers struct {
 	// waiting beats two of them writing versions over each other.
 	mu sync.Mutex
 
+	// stateMu serializes shared-state writes, so two clicks cannot read the
+	// same counter and write the same next value.
+	stateMu sync.Mutex
+
 	// The worker coalesces posts that arrive while a mutation is running, so
 	// a burst becomes one rewrite instead of a queue of them.
-	liveMu       sync.Mutex
-	version      int64
-	pending      []sqlc.Post
-	running      *runState
-	lastError    string
-	lastPostAt   map[string]time.Time
-	lastActivity time.Time
-	wake         chan struct{}
-	stop         chan struct{}
-	closeOnce    sync.Once
-	workerWG     sync.WaitGroup
+	liveMu        sync.Mutex
+	version       int64
+	pending       []sqlc.Post
+	running       *runState
+	lastError     string
+	lastRewriteAt map[string]time.Time
+	lastStateAt   map[string]time.Time
+	lastActivity  time.Time
+	wake          chan struct{}
+	stop          chan struct{}
+	closeOnce     sync.Once
+	workerWG      sync.WaitGroup
 }
 
 // New wires the handlers.
@@ -79,19 +84,21 @@ func New(
 	cfg Config,
 ) *Handlers {
 	h := &Handlers{
-		logger:       logger,
-		db:           dbConn,
-		queries:      queries,
-		mutator:      mutator,
-		cfg:          cfg,
-		lastPostAt:   make(map[string]time.Time),
-		lastActivity: time.Now(),
-		wake:         make(chan struct{}, 1),
-		stop:         make(chan struct{}),
+		logger:        logger,
+		db:            dbConn,
+		queries:       queries,
+		mutator:       mutator,
+		cfg:           cfg,
+		lastRewriteAt: make(map[string]time.Time),
+		lastStateAt:   make(map[string]time.Time),
+		lastActivity:  time.Now(),
+		wake:          make(chan struct{}, 1),
+		stop:          make(chan struct{}),
 	}
 	if site, err := queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID
 	}
+	mutator.OnRound = h.setRunningRound
 	h.workerWG.Add(2)
 	go func() {
 		defer h.workerWG.Done()
@@ -139,13 +146,16 @@ func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webm
 		h.logger.Error("Failed to load shared state", slog.Any("error", err))
 		return site
 	}
-	site.State = make(map[string]string, len(rows))
-	for _, state := range rows {
-		if _, declared := schema[state.Key]; declared {
-			site.State[state.Key] = state.Value
-		}
-	}
+	site.State = stateValues(schema, rows)
 	return site
+}
+
+func sameSiteContent(a, b sqlc.SiteVersion) bool {
+	return a.Css == b.Css &&
+		a.Note == b.Note &&
+		a.Header == b.Header &&
+		a.Board == b.Board &&
+		a.Footer == b.Footer
 }
 
 // normalizeStateSchema keeps an empty schema as a valid JSON object.
@@ -200,19 +210,25 @@ func (h *Handlers) mutate(
 	h.beginRun(kind, nil)
 	ctx, cancel := mutationContext(ctx)
 	defer cancel()
-	res, err := h.mutateHeld(ctx, kind, instruction, triggerPost)
+
+	var triggers []sqlc.Post
+	if triggerPost != nil {
+		triggers = []sqlc.Post{*triggerPost}
+	}
+	res, err := h.mutateHeld(ctx, kind, instruction, triggers)
 	h.endRun(err)
 	return res, err
 }
 
-// mutateHeld is mutate with h.mu already held. triggerPost is nil for admin
-// instructions, which never become posts. On a model error the site is left
-// alone; a partial rewrite is worse than no rewrite.
+// mutateHeld is mutate with h.mu already held. triggerPosts is empty for admin
+// instructions, which never become posts. A burst arrives as several triggers.
+// On a model error the site is left alone; a partial rewrite is worse than no
+// rewrite.
 func (h *Handlers) mutateHeld(
 	ctx context.Context,
 	kind string,
 	instruction string,
-	triggerPost *sqlc.Post,
+	triggerPosts []sqlc.Post,
 ) (webmaster.Result, error) {
 	current, err := h.queries.CurrentSite(ctx)
 	if err != nil {
@@ -228,15 +244,35 @@ func (h *Handlers) mutateHeld(
 		posts[i] = postFromRow(row)
 	}
 
-	trigger := webmaster.Post{Author: "admin", Body: instruction}
+	triggers := make([]webmaster.Post, 0, len(triggerPosts))
 	var triggerID sql.NullInt64
-	if triggerPost != nil {
-		trigger = postFromRow(*triggerPost)
-		triggerID = sql.NullInt64{Int64: triggerPost.ID, Valid: true}
+	for _, post := range triggerPosts {
+		triggers = append(triggers, postFromRow(post))
+		triggerID = sql.NullInt64{Int64: post.ID, Valid: true}
+	}
+	if len(triggers) == 0 {
+		triggers = []webmaster.Post{{Author: "admin", Body: instruction}}
+	}
+
+	currentSite := h.siteWithState(ctx, current)
+	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
+		currentSite.Plain = sameSiteContent(current, seed)
+		lastPlain, err := h.queries.LastVersionMatching(ctx, sqlc.LastVersionMatchingParams{
+			Css:    seed.Css,
+			Note:   seed.Note,
+			Header: seed.Header,
+			Board:  seed.Board,
+			Footer: seed.Footer,
+		})
+		if err == nil {
+			if id, ok := lastPlain.(int64); ok && id > 0 {
+				currentSite.ChangesSincePlain = int(current.ID - id)
+			}
+		}
 	}
 
 	start := time.Now()
-	res, mutErr := h.mutator.Mutate(ctx, h.siteWithState(ctx, current), posts, trigger)
+	res, mutErr := h.mutator.MutatePosts(ctx, currentSite, posts, triggers)
 	elapsed := time.Since(start).Milliseconds()
 
 	if mutErr != nil {
@@ -332,6 +368,11 @@ func (h *Handlers) worker() {
 }
 
 func (h *Handlers) runPending() {
+	// Take the mutation lock before looking at the queue. A reset that holds
+	// the lock then clears pending, so its posts cannot run after the reset.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.liveMu.Lock()
 	batch := h.pending
 	h.pending = nil
@@ -348,23 +389,17 @@ func (h *Handlers) runPending() {
 		batch = batch[len(batch)-maxBatchPosts:]
 	}
 
-	last := batch[len(batch)-1]
 	body := batchBody(batch)
-	trigger := last
-	trigger.Body = body
-
 	h.beginRun("post", postAuthors(batch))
-	h.mu.Lock()
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
-	_, err := h.mutateHeld(ctx, "post", body, &trigger)
+	_, err := h.mutateHeld(ctx, "post", body, batch)
 	cancel()
-	h.mu.Unlock()
 	h.endRun(err)
 
 	if err != nil {
 		h.logger.Error(
 			"Mutation failed",
-			slog.Int64("post_id", last.ID),
+			slog.Int64("post_id", batch[len(batch)-1].ID),
 			slog.Int("batch", len(batch)),
 			slog.Any("error", err),
 		)
@@ -420,6 +455,14 @@ func (h *Handlers) endRun(err error) {
 	}
 }
 
+func (h *Handlers) setRunningRound(round int) {
+	h.liveMu.Lock()
+	if h.running != nil {
+		h.running.Round = round
+	}
+	h.liveMu.Unlock()
+}
+
 func (h *Handlers) setVersion(version int64) {
 	h.liveMu.Lock()
 	h.version = version
@@ -473,8 +516,9 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 }
 
 const (
-	postCooldown  = 3 * time.Second
-	idleHealAfter = 20 * time.Minute
+	rewriteCooldown = 3 * time.Second
+	stateCooldown   = 250 * time.Millisecond
+	idleHealAfter   = 20 * time.Minute
 )
 
 // healer brings the board back to its plain seed after a quiet spell, so the
@@ -528,6 +572,9 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
+	if err := h.queries.DeleteSiteState(ctx); err != nil {
+		return false, fmt.Errorf("clear shared state: %w", err)
+	}
 	healed, err := h.queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:         seed.Css,
 		Note:        seed.Note,
@@ -546,16 +593,29 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// allowPost stops a script on the model's page from posting from every open
-// tab in a loop. One post per visitor per few seconds is enough.
-func (h *Handlers) allowPost(name string) bool {
+// allowRewrite stops a script on the model's page from triggering a rewrite
+// from every open tab in a loop. The post is still stored; only the costly
+// model call is skipped.
+func (h *Handlers) allowStateWrite(name, key string) bool {
+	now := time.Now()
+	slot := name + "\x00" + key
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	if last, ok := h.lastStateAt[slot]; ok && now.Sub(last) < stateCooldown {
+		return false
+	}
+	h.lastStateAt[slot] = now
+	return true
+}
+
+func (h *Handlers) allowRewrite(name string) bool {
 	now := time.Now()
 	h.liveMu.Lock()
 	defer h.liveMu.Unlock()
-	if last, ok := h.lastPostAt[name]; ok && now.Sub(last) < postCooldown {
+	if last, ok := h.lastRewriteAt[name]; ok && now.Sub(last) < rewriteCooldown {
 		return false
 	}
-	h.lastPostAt[name] = now
+	h.lastRewriteAt[name] = now
 	return true
 }
 

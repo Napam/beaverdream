@@ -38,21 +38,21 @@ func TestPostAuthorsDeduplicates(t *testing.T) {
 	}
 }
 
-func TestAllowPostThrottlesByName(t *testing.T) {
-	h := &Handlers{lastPostAt: make(map[string]time.Time)}
+func TestAllowRewriteThrottlesByName(t *testing.T) {
+	h := &Handlers{lastRewriteAt: make(map[string]time.Time)}
 
-	if !h.allowPost("dave") {
-		t.Fatal("first post was throttled")
+	if !h.allowRewrite("dave") {
+		t.Fatal("first rewrite was throttled")
 	}
-	if h.allowPost("dave") {
-		t.Fatal("second post was not throttled")
+	if h.allowRewrite("dave") {
+		t.Fatal("second rewrite was not throttled")
 	}
-	if !h.allowPost("kit") {
+	if !h.allowRewrite("kit") {
 		t.Fatal("a different name was throttled")
 	}
 
-	h.lastPostAt["dave"] = time.Now().Add(-postCooldown)
-	if !h.allowPost("dave") {
-		t.Fatal("post was still throttled after the cooldown")
+	h.lastRewriteAt["dave"] = time.Now().Add(-rewriteCooldown)
+	if !h.allowRewrite("dave") {
+		t.Fatal("rewrite was still throttled after the cooldown")
 	}
 }

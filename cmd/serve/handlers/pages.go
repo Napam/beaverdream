@@ -45,11 +45,11 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 		converted[i] = postFromRow(p)
 	}
 
+	docSite := h.siteWithState(r.Context(), site)
+	docSite.Name = identityFromRequest(r)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if _, err := io.WriteString(
-		w,
-		webmaster.SiteDoc(h.siteWithState(r.Context(), site), converted),
-	); err != nil {
+	if _, err := io.WriteString(w, webmaster.SiteDoc(docSite, converted)); err != nil {
 		h.logger.Error("Failed to write index page", slog.Any("error", err))
 	}
 }
@@ -73,10 +73,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	if !h.allowPost(author) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
+	rewrite := h.allowRewrite(author)
 	body = truncate(body, maxBodyLen)
 
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
@@ -94,8 +91,12 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	// already, so the anchor exists even before the rewrite lands.
 	location := fmt.Sprintf("/#p%d", post.ID)
 
-	if h.overDailyCap(r.Context()) {
-		h.logger.Warn("Daily mutation cap reached, post stored without a rewrite")
+	capped := h.overDailyCap(r.Context())
+	if !rewrite || capped {
+		h.logger.Warn("Post stored without a rewrite",
+			slog.Bool("throttled", !rewrite),
+			slog.Bool("capped", capped),
+		)
 		http.Redirect(w, r, location, http.StatusSeeOther)
 		return
 	}
@@ -108,7 +109,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 // they are open. With ?have=N it also says whether the page can take the new
 // stylesheet in place or needs to reload.
 func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
-	version, pending, running, lastError := h.liveSnapshot()
+	version, pending, running, _ := h.liveSnapshot()
 	if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
 		if id, ok := raw.(int64); ok && id > 0 && id != version {
 			version = id
@@ -129,12 +130,10 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 		Swap    string    `json:"swap,omitempty"`
 		Pending int       `json:"pending"`
 		Running *runState `json:"running,omitempty"`
-		Error   string    `json:"error,omitempty"`
 	}{
 		Version: version,
 		Pending: pending,
 		Running: running,
-		Error:   lastError,
 	}
 
 	have := r.URL.Query().Get("have")

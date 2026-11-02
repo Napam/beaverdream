@@ -93,7 +93,7 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 }
 
 func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
-	site := Site{Version: 8, Board: PostsPlaceholder}
+	site := Site{Version: 8, Board: PostsPlaceholder, ChangesSincePlain: 7}
 	posts := []Post{{
 		ID:     1,
 		Author: "long",
@@ -101,11 +101,14 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	}}
 	trigger := Post{ID: 9, Author: "dave", Body: "hello"}
 
-	got := userPrompt(site, posts, trigger)
+	got := userPrompt(site, posts, []Post{trigger})
 	if strings.Contains(got, strings.Repeat("x", historyPostLen+1)) {
 		t.Error("old post was not shortened")
 	}
-	if !strings.Contains(got, "CHANGES SO FAR: 7") {
+	if !strings.Contains(got, "BOARD IS PLAIN: no") {
+		t.Error("prompt does not say whether the board is plain")
+	}
+	if !strings.Contains(got, "CHANGES SINCE PLAIN: 7") {
 		t.Error("prompt does not carry the change count")
 	}
 	if !strings.Contains(got, "NEW POST #9 from dave") {
@@ -113,6 +116,22 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	}
 	if !strings.Contains(got, "The poster is looking at this post.") {
 		t.Error("prompt does not anchor the change to the poster")
+	}
+}
+
+func TestUserPromptCreditsABurstToEveryone(t *testing.T) {
+	got := userPrompt(Site{Version: 9}, nil, []Post{
+		{ID: 8, Author: "kit", Body: "one"},
+		{ID: 9, Author: "dave", Body: "two"},
+	})
+	if !strings.Contains(got, "NEW POSTS since the last change") {
+		t.Errorf("burst is not labeled as several posts: %s", got)
+	}
+	if !strings.Contains(got, "#8 kit: one") || !strings.Contains(got, "#9 dave: two") {
+		t.Errorf("burst is missing a poster: %s", got)
+	}
+	if !strings.Contains(got, "The posters are looking at their own posts.") {
+		t.Errorf("burst uses the singular poster line: %s", got)
 	}
 }
 

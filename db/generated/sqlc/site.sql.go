@@ -127,6 +127,40 @@ func (q *Queries) GetSiteVersion(ctx context.Context, id int64) (SiteVersion, er
 	return i, err
 }
 
+const lastVersionMatching = `-- name: LastVersionMatching :one
+SELECT
+  MAX(id)
+FROM
+  site_versions
+WHERE
+  css = ?
+  AND note = ?
+  AND header = ?
+  AND board = ?
+  AND footer = ?
+`
+
+type LastVersionMatchingParams struct {
+	Css    string
+	Note   string
+	Header string
+	Board  string
+	Footer string
+}
+
+func (q *Queries) LastVersionMatching(ctx context.Context, arg LastVersionMatchingParams) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, lastVersionMatching,
+		arg.Css,
+		arg.Note,
+		arg.Header,
+		arg.Board,
+		arg.Footer,
+	)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
 const listSiteVersions = `-- name: ListSiteVersions :many
 SELECT
   id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema

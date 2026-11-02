@@ -45,38 +45,68 @@ func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown", http.StatusInternalServerError)
 		return
 	}
-	stored := make(map[string]string, len(rows))
-	for _, row := range rows {
-		stored[row.Key] = row.Value
-	}
-
-	state := make(map[string]json.RawMessage, len(schema))
-	for key, def := range schema {
-		raw := stored[key]
-		if raw == "" {
-			switch def.Op {
-			case "counter":
-				raw = "0"
-			case "list":
-				raw = "[]"
-			case "choice":
-				raw = "{}"
-			default:
-				raw = "null"
-			}
-		}
-		if !json.Valid([]byte(raw)) {
-			raw = "null"
-		}
-		state[key] = json.RawMessage(raw)
-	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(struct {
 		Schema map[string]webmaster.StateKey `json:"schema"`
 		State  map[string]json.RawMessage    `json:"state"`
-	}{Schema: schema, State: state})
+	}{Schema: schema, State: stateValues(schema, rows)})
+}
+
+// stateValues fills every declared key with a value of the shape its op
+// expects. A stored value with the wrong shape is replaced by the default, so
+// a schema change cannot serve a string where the page expects a list.
+func stateValues(
+	schema map[string]webmaster.StateKey,
+	rows []sqlc.SiteState,
+) map[string]json.RawMessage {
+	stored := make(map[string]string, len(rows))
+	for _, row := range rows {
+		stored[row.Key] = row.Value
+	}
+
+	values := make(map[string]json.RawMessage, len(schema))
+	for key, def := range schema {
+		raw := stored[key]
+		if !stateValueMatches(def, raw) {
+			raw = stateDefault(def)
+		}
+		values[key] = json.RawMessage(raw)
+	}
+	return values
+}
+
+func stateDefault(def webmaster.StateKey) string {
+	switch def.Op {
+	case "counter":
+		return "0"
+	case "list":
+		return "[]"
+	case "choice":
+		return "{}"
+	default:
+		return "null"
+	}
+}
+
+func stateValueMatches(def webmaster.StateKey, raw string) bool {
+	if raw == "" || !json.Valid([]byte(raw)) {
+		return false
+	}
+	switch def.Op {
+	case "counter":
+		var count int64
+		return json.Unmarshal([]byte(raw), &count) == nil
+	case "list":
+		var entries []stateEntry
+		return json.Unmarshal([]byte(raw), &entries) == nil
+	case "choice":
+		var tally map[string]int
+		return json.Unmarshal([]byte(raw), &tally) == nil
+	default:
+		return false
+	}
 }
 
 // SetState applies one visitor action to a declared key. A form gets sent
@@ -108,7 +138,16 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		writeStateError(w, http.StatusNotFound, "unknown state key")
 		return
 	}
+	if !h.allowStateWrite(author, key) {
+		if wantsHTML(r) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		writeStateError(w, http.StatusTooManyRequests, "slow down")
+		return
+	}
 
+	h.stateMu.Lock()
 	existing := ""
 	if row, err := h.queries.GetSiteState(r.Context(), key); err == nil {
 		existing = row.Value
@@ -121,6 +160,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		time.Now(),
 	)
 	if err != nil {
+		h.stateMu.Unlock()
 		writeStateError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -128,10 +168,13 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		Key:   key,
 		Value: value,
 	}); err != nil {
+		h.stateMu.Unlock()
 		h.logger.Error("Failed to store shared state", slog.Any("error", err))
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
 	}
+	h.stateMu.Unlock()
+	h.touchActivity()
 
 	if wantsHTML(r) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -170,7 +213,7 @@ func applyState(
 			_ = json.Unmarshal([]byte(existing), &entries)
 		}
 		entries = append(entries, stateEntry{
-			Author: author,
+			Author: webmaster.CleanStateValue(author),
 			Value:  value,
 			At:     now.UTC().Format(time.RFC3339),
 		})

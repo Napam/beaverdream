@@ -36,7 +36,9 @@ func setup(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
 
-	dbConn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	dbPath := filepath.Join(t.TempDir(), "test.db") +
+		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	dbConn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -208,6 +210,41 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	}
 }
 
+func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	first := postForm(t, h.CreatePost, "/posts", url.Values{"body": {"one"}})
+	if first.Code != http.StatusSeeOther {
+		t.Fatalf("first status = %d", first.Code)
+	}
+	waitFor(t, "the first rewrite", func() bool {
+		runs, err := queries.ListMutationRuns(ctx, 10)
+		return err == nil && len(runs) == 1
+	})
+
+	second := postForm(t, h.CreatePost, "/posts", url.Values{"body": {"two"}})
+	if second.Code != http.StatusSeeOther {
+		t.Fatalf("second status = %d", second.Code)
+	}
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 6 || posts[len(posts)-1].Body != "two" {
+		t.Fatalf("throttled post was lost: %+v", posts)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	runs, err := queries.ListMutationRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Errorf("throttled post started %d runs, want 1", len(runs))
+	}
+}
+
 func TestAdminMutateDoesNotCreatePost(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -256,6 +293,7 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		"<h1>beaverdream</h1>",
 		`class="postbox"`,
 		`action="/posts"`,
+		`posting as dave`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -577,8 +615,9 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 		}
 	}
 
-	for want := 1; want <= 2; want++ {
-		rec := stateForm(t, h.SetState, "votes", url.Values{}, "dave")
+	for i, name := range []string{"dave", "kit"} {
+		want := i + 1
+		rec := stateForm(t, h.SetState, "votes", url.Values{}, name)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("vote status = %d", rec.Code)
 		}
@@ -736,6 +775,13 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 		t.Fatal("the mutation did not change the site")
 	}
 
+	if err := queries.UpsertSiteState(ctx, sqlc.UpsertSiteStateParams{
+		Key:   "votes",
+		Value: "7",
+	}); err != nil {
+		t.Fatalf("upsert state: %v", err)
+	}
+
 	heal := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
 	if heal.Code != http.StatusSeeOther {
 		t.Fatalf("heal status = %d", heal.Code)
@@ -756,6 +802,13 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	}
 	if len(posts) != 4 {
 		t.Errorf("heal changed the posts: %d", len(posts))
+	}
+	state, err := queries.ListSiteState(ctx)
+	if err != nil {
+		t.Fatalf("list state: %v", err)
+	}
+	if len(state) != 0 {
+		t.Errorf("heal kept stale shared state: %+v", state)
 	}
 
 	again := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})

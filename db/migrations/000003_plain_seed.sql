@@ -9,7 +9,7 @@ SET
     '<form class="postbox" method="post" action="/posts">' ||
     '<p class="postbox-title">post a message</p>' ||
     '<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>' ||
-    '<div class="postbox-actions"><span>no account needed</span>' ||
+    '<div class="postbox-actions"><span>posting as {{name}}</span>' ||
     '<button type="submit">post</button></div>' ||
     '</form>' ||
     '<div class="thread">{{posts}}</div>' ||

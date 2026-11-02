@@ -121,9 +121,10 @@ workspace must allow that in the OpenCode Console privacy settings.
   a new row,
 - a reset button that restores the seed posts, deletes every later version, and
   clears the mutation history, keeping only the original version,
-- every mutation run with its full conversation: system and user prompts,
-  assistant reasoning (when the server returns it), tool calls, tool results,
-  errors, and duration.
+- the newest mutation runs with their full conversation: system and user
+  prompts, assistant reasoning (when the server returns it), tool calls, tool
+  results, errors, and duration. Older runs keep a summary so the page stays
+  small.
 
 Admin is always token-protected. Set `ADMIN_TOKEN` yourself, or let the server
 generate a random one at startup and log the full admin URL. There is no

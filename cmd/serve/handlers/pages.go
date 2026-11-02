@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -92,9 +91,8 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	h.touchActivity()
 
-	// Land on the new post instead of the top of the page. The post is stored
-	// already, so the anchor exists even before the rewrite lands.
-	location := fmt.Sprintf("/#p%d", post.ID)
+	// The board shows newest first, so the new post is already at the top.
+	location := "/"
 
 	capped := h.overDailyCap(r.Context())
 	if !rewrite || capped {

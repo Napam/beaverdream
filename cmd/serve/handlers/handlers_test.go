@@ -161,6 +161,9 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
+	if got := rec.Header().Get("Location"); got != "/" {
+		t.Errorf("Location = %q, want / so the page stays at the top", got)
+	}
 
 	posts, err := queries.ListPosts(ctx)
 	if err != nil {

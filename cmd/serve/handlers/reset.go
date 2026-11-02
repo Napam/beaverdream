@@ -19,6 +19,8 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 	// reset or write a version that references a deleted post.
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
 
 	ctx := r.Context()
 	tx, err := h.db.BeginTx(ctx, nil)

@@ -554,6 +554,8 @@ func (h *Handlers) healIfIdle(ctx context.Context) {
 func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.stateMu.Lock()
+	defer h.stateMu.Unlock()
 
 	current, err := h.queries.CurrentSite(ctx)
 	if err != nil {

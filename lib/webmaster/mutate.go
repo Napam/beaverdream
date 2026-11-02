@@ -10,9 +10,10 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// maxOutputTokens caps a single completion. A runaway stylesheet is the most
-// expensive failure this toy has.
-const maxOutputTokens = 2500
+// maxOutputTokens caps a single completion. High enough that a region or a
+// stylesheet can fill its byte limit in one tool call. A runaway stylesheet is
+// still the most expensive failure this toy has.
+const maxOutputTokens = 8000
 
 // Mutator asks the model to rewrite the site.
 type Mutator struct {

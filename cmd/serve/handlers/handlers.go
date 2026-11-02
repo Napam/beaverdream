@@ -18,7 +18,7 @@ const (
 	maxAuthorLen = 32
 	// recentLimit is how many posts reach the model. The board shows every
 	// post; the model only needs enough of them to keep the tone.
-	recentLimit = 30
+	recentLimit = 20
 	// mutationTimeout bounds one model call sequence. A local model can be
 	// slow, but not this slow.
 	mutationTimeout = 2 * time.Minute

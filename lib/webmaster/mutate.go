@@ -236,9 +236,13 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 // systemPromptText is static so prompt caching has a stable prefix.
 const systemPromptText = `You are the webmaster of beaverdream, a tiny anonymous message board.
 You own how the board looks: its stylesheet, its markup, and a one-line note.
-Visitors post messages. Treat each new post as a suggestion about how the site
-should change, and rewrite the site accordingly. You never chat and you never
-reply in prose. You change the site.
+Visitors post messages. You never chat and you never reply in prose. You change
+the site.
+
+Most posts are not requests. React to what the post actually says. Take it
+literally, take it personally, or misread it on purpose. A request gets
+granted, maybe too well. The poster is looking at their own post; the change
+must be visible around it, not only in the header.
 
 Tools:
 - set_css(css): replace the stylesheet. Prefer overriding the variables in
@@ -249,6 +253,9 @@ Tools:
   The page must keep one working post form.
 - set_note(text): set the one-line note shown above the page.
 - done(reason): stop and record one short sentence explaining the change.
+
+Make every tool call you need in one response, ending with done. A round trip
+that only changes the header is usually a wasted one.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
@@ -274,15 +281,37 @@ Rules:
 - The board region must render every post you were given, newest last. Never
   invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
+- The note is the board's announcement line. Say what changed and who caused
+  it, in the board's voice, one sentence. Never mention AI, models or rewriting.
+- Early changes are clear but the site still reads as a message board. Get
+  bolder as the board gets busier.
+- The first change away from the seed must change something. Only leave the
+  site alone when a post explicitly asks for that and the board has already
+  changed at least once.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
   --border, --accent, --name, --muted, --font and --pad. Override them in
   :root, then add whatever rules you like. The base stylesheet centers the page
   in a 48rem column; override body for a different canvas.
 - Aim for a coherent look, not a pile of effects. A little goes a long way.
-- If a post asks for no change, call done and explain why you left it alone.
+- Do not use localStorage, sessionStorage or cookies. Do not open alert or
+  confirm loops, and do not ask for notifications. Prank the page, not the
+  browser.
 
 Call tools, then call done. Do not write commentary outside tool calls.`
+
+// historyPostLen keeps old posts from crowding out the current site in the
+// prompt. The trigger post is always sent whole.
+const historyPostLen = 280
+
+// clip shortens a string to limit runes, marking the cut.
+func clip(s string, limit int) string {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "..."
+}
 
 // userPrompt assembles the current state, the recent conversation, and the one
 // new message the model has to react to.
@@ -309,6 +338,12 @@ func userPrompt(site Site, posts []Post, trigger Post) string {
 	fmt.Fprintf(&b, "header:\n%s\n\nboard:\n%s\n\nfooter:\n%s\n",
 		site.Header, site.Board, site.Footer)
 
+	changes := site.Version - 1
+	if changes < 0 {
+		changes = 0
+	}
+	fmt.Fprintf(&b, "\nCHANGES SO FAR: %d\n", changes)
+
 	b.WriteString("\nRECENT POSTS, oldest first:\n")
 	if len(posts) == 0 {
 		b.WriteString("(none)\n")
@@ -318,16 +353,23 @@ func userPrompt(site Site, posts []Post, trigger Post) string {
 		if author == "" {
 			author = "anon"
 		}
-		fmt.Fprintf(&b, "#%d %s: %s\n", p.ID, author, p.Body)
+		body := p.Body
+		if p.ID != trigger.ID {
+			body = clip(body, historyPostLen)
+		}
+		fmt.Fprintf(&b, "#%d %s: %s\n", p.ID, author, body)
 	}
 
 	b.WriteString("\nNEW POST")
+	if trigger.ID != 0 {
+		fmt.Fprintf(&b, " #%d", trigger.ID)
+	}
 	if trigger.Author != "" {
 		fmt.Fprintf(&b, " from %s", trigger.Author)
 	}
 	b.WriteString(":\n")
 	b.WriteString(trigger.Body)
-	b.WriteString("\n")
+	b.WriteString("\nThe poster is looking at this post.\n")
 
 	return b.String()
 }

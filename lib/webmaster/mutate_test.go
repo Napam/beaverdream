@@ -92,6 +92,30 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 	}
 }
 
+func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
+	site := Site{Version: 8, Board: PostsPlaceholder}
+	posts := []Post{{
+		ID:     1,
+		Author: "long",
+		Body:   strings.Repeat("x", 1000),
+	}}
+	trigger := Post{ID: 9, Author: "dave", Body: "hello"}
+
+	got := userPrompt(site, posts, trigger)
+	if strings.Contains(got, strings.Repeat("x", historyPostLen+1)) {
+		t.Error("old post was not shortened")
+	}
+	if !strings.Contains(got, "CHANGES SO FAR: 7") {
+		t.Error("prompt does not carry the change count")
+	}
+	if !strings.Contains(got, "NEW POST #9 from dave") {
+		t.Error("prompt does not name the trigger post")
+	}
+	if !strings.Contains(got, "The poster is looking at this post.") {
+		t.Error("prompt does not anchor the change to the poster")
+	}
+}
+
 func TestMutateReportsModelFailure(t *testing.T) {
 	m, closeServer := testMutator(t)
 	defer closeServer()

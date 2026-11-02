@@ -40,6 +40,9 @@ It is a toy. It runs on localhost and calls a local model.
   during a rewrite, so a burst becomes one mutation. Open pages poll
   `/version`: a stylesheet-only change is swapped in place, and a markup change
   reloads after saving the draft and reading position.
+- After 20 quiet minutes the board copies the seed forward, keeping the posts
+  and shared state. The next visitor gets the plain board and the reveal again.
+  The admin panel can trigger the same heal immediately.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds with four tools
   (`set_css`, `set_region`, `set_note`, `done`). The result is stored as a new
   version plus a `mutation_runs` row holding the whole conversation.

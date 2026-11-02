@@ -14,6 +14,16 @@ ORDER BY
 LIMIT
   1;
 
+-- name: SeedSiteVersion :one
+SELECT
+  *
+FROM
+  site_versions
+ORDER BY
+  id ASC
+LIMIT
+  1;
+
 -- name: GetSiteVersion :one
 SELECT
   *

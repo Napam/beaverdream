@@ -133,13 +133,22 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 						<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
 						<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nNOTE:\n" + site.Note + "\n\nSTATE SCHEMA:\n" + site.StateSchema }</pre>
 					</details>
-					<form method="post" action="/admin/undo" class="mt-3">
-						<input type="hidden" name="token" value={ token }/>
-						<button
-							type="submit"
-							class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-						>undo last change</button>
-					</form>
+					<div class="mt-3 flex flex-wrap gap-2">
+						<form method="post" action="/admin/undo">
+							<input type="hidden" name="token" value={ token }/>
+							<button
+								type="submit"
+								class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+							>undo last change</button>
+						</form>
+						<form method="post" action="/admin/heal">
+							<input type="hidden" name="token" value={ token }/>
+							<button
+								type="submit"
+								class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+							>heal now</button>
+						</form>
+					</div>
 				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>talk to the webmaster</p>

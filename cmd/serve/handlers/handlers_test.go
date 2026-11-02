@@ -714,6 +714,63 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 	}
 }
 
+func TestHealBoardReturnsToTheSeed(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("mutate status = %d", rec.Code)
+	}
+	changed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if changed.Css == seed.Css {
+		t.Fatal("the mutation did not change the site")
+	}
+
+	heal := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	if heal.Code != http.StatusSeeOther {
+		t.Fatalf("heal status = %d", heal.Code)
+	}
+	healed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if healed.ID <= changed.ID {
+		t.Fatalf("heal did not append a version: %d", healed.ID)
+	}
+	if healed.Css != seed.Css || healed.Note != seed.Note || healed.Board != seed.Board {
+		t.Errorf("heal did not restore the seed: %+v", healed)
+	}
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 4 {
+		t.Errorf("heal changed the posts: %d", len(posts))
+	}
+
+	again := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	if again.Code != http.StatusSeeOther {
+		t.Fatalf("second heal status = %d", again.Code)
+	}
+	after, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if after.ID != healed.ID {
+		t.Errorf("healing a plain board appended version %d", after.ID)
+	}
+}
+
 func TestUndoLastAtTheSeedDoesNothing(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()

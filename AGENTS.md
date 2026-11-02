@@ -67,9 +67,13 @@ prefer simple, readable code over production hardening.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the failed run is still recorded.
 - Restore copies an old version forward as a new row. History stays immutable.
+- A quiet board heals back to the seed by copying it forward as a new row. It
+  keeps posts and shared state, takes `h.mu`, and never calls the model. The
+  admin panel can heal immediately.
 - Reset is the one destructive action: it keeps the oldest version, restores the
-  seed posts from `seed_posts`, deletes later versions and mutation runs, and
-  rewinds the id sequences. It takes `h.mu`, so it cannot race a mutation.
+  seed posts from `seed_posts`, deletes later versions, mutation runs and shared
+  state, and rewinds the id sequences. It takes `h.mu`, so it cannot race a
+  mutation.
 
 ## Frontend
 

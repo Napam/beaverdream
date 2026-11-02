@@ -88,6 +88,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not post", http.StatusInternalServerError)
 		return
 	}
+	h.touchActivity()
 
 	// Land on the new post instead of the top of the page. The post is stored
 	// already, so the anchor exists even before the rewrite lands.

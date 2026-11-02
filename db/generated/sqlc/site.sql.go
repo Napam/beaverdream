@@ -171,3 +171,32 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 	}
 	return items, nil
 }
+
+const seedSiteVersion = `-- name: SeedSiteVersion :one
+SELECT
+  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+FROM
+  site_versions
+ORDER BY
+  id ASC
+LIMIT
+  1
+`
+
+func (q *Queries) SeedSiteVersion(ctx context.Context) (SiteVersion, error) {
+	row := q.db.QueryRowContext(ctx, seedSiteVersion)
+	var i SiteVersion
+	err := row.Scan(
+		&i.ID,
+		&i.Css,
+		&i.Note,
+		&i.Header,
+		&i.Board,
+		&i.Footer,
+		&i.TriggerPostID,
+		&i.Reason,
+		&i.CreatedAt,
+		&i.StateSchema,
+	)
+	return i, err
+}

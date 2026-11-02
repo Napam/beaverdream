@@ -186,8 +186,28 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setVersion(restored.ID)
+	h.touchActivity()
 
 	h.redirectAdmin(w, r, fmt.Sprintf("undid version %d", current.ID))
+}
+
+// HealBoard puts the plain seed back now instead of waiting for the idle
+// timer. Posts and shared state stay.
+func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	changed, err := h.heal(r.Context())
+	if err != nil {
+		h.logger.Error("Failed to heal the board", slog.Any("error", err))
+		h.redirectAdmin(w, r, "heal failed: "+err.Error())
+		return
+	}
+	if !changed {
+		h.redirectAdmin(w, r, "the board is already plain")
+		return
+	}
+	h.redirectAdmin(w, r, "the board went back to the seed")
 }
 
 // AdminMutate sends a free-form instruction straight to the model. It can also
@@ -274,6 +294,7 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setVersion(restored.ID)
+	h.touchActivity()
 
 	h.redirectAdmin(w, r, fmt.Sprintf("restored version %d", id))
 }

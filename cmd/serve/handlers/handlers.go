@@ -57,15 +57,16 @@ type Handlers struct {
 
 	// The worker coalesces posts that arrive while a mutation is running, so
 	// a burst becomes one rewrite instead of a queue of them.
-	liveMu     sync.Mutex
-	version    int64
-	pending    []sqlc.Post
-	running    *runState
-	lastError  string
-	lastPostAt map[string]time.Time
-	wake       chan struct{}
-	stop       chan struct{}
-	closeOnce  sync.Once
+	liveMu       sync.Mutex
+	version      int64
+	pending      []sqlc.Post
+	running      *runState
+	lastError    string
+	lastPostAt   map[string]time.Time
+	lastActivity time.Time
+	wake         chan struct{}
+	stop         chan struct{}
+	closeOnce    sync.Once
 }
 
 // New wires the handlers.
@@ -77,19 +78,21 @@ func New(
 	cfg Config,
 ) *Handlers {
 	h := &Handlers{
-		logger:     logger,
-		db:         dbConn,
-		queries:    queries,
-		mutator:    mutator,
-		cfg:        cfg,
-		lastPostAt: make(map[string]time.Time),
-		wake:       make(chan struct{}, 1),
-		stop:       make(chan struct{}),
+		logger:       logger,
+		db:           dbConn,
+		queries:      queries,
+		mutator:      mutator,
+		cfg:          cfg,
+		lastPostAt:   make(map[string]time.Time),
+		lastActivity: time.Now(),
+		wake:         make(chan struct{}, 1),
+		stop:         make(chan struct{}),
 	}
 	if site, err := queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID
 	}
 	go h.worker()
+	go h.healer()
 	return h
 }
 
@@ -177,6 +180,7 @@ func (h *Handlers) mutate(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.touchActivity()
 	h.beginRun(kind, nil)
 	ctx, cancel := mutationContext(ctx)
 	defer cancel()
@@ -287,6 +291,7 @@ func (h *Handlers) mutateHeld(
 // mutation is running are collected into the next one, so a burst becomes one
 // rewrite rather than a long queue.
 func (h *Handlers) mutateInBackground(post sqlc.Post) {
+	h.touchActivity()
 	h.liveMu.Lock()
 	h.pending = append(h.pending, post)
 	h.liveMu.Unlock()
@@ -405,6 +410,12 @@ func (h *Handlers) setVersion(version int64) {
 	h.liveMu.Unlock()
 }
 
+func (h *Handlers) touchActivity() {
+	h.liveMu.Lock()
+	h.lastActivity = time.Now()
+	h.liveMu.Unlock()
+}
+
 func (h *Handlers) setLastError(message string) {
 	h.liveMu.Lock()
 	h.lastError = message
@@ -417,6 +428,7 @@ func (h *Handlers) resetLive(version int64) {
 	h.pending = nil
 	h.running = nil
 	h.lastError = ""
+	h.lastActivity = time.Now()
 	h.liveMu.Unlock()
 }
 
@@ -444,7 +456,79 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 	return site.ID, nil
 }
 
-const postCooldown = 3 * time.Second
+const (
+	postCooldown  = 3 * time.Second
+	idleHealAfter = 20 * time.Minute
+)
+
+// healer brings the board back to its plain seed after a quiet spell, so the
+// next visitor gets the reveal again. Posts stay on the board.
+func (h *Handlers) healer() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.stop:
+			return
+		case <-ticker.C:
+			h.healIfIdle(context.Background())
+		}
+	}
+}
+
+func (h *Handlers) healIfIdle(ctx context.Context) {
+	h.liveMu.Lock()
+	idle := time.Since(h.lastActivity)
+	busy := h.running != nil || len(h.pending) > 0
+	h.liveMu.Unlock()
+
+	if busy || idle < idleHealAfter {
+		return
+	}
+	if _, err := h.heal(ctx); err != nil {
+		h.logger.Error("Failed to heal the board", slog.Any("error", err))
+	}
+}
+
+// heal copies the seed version forward. It is a restore, not a model call.
+func (h *Handlers) heal(ctx context.Context) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	current, err := h.queries.CurrentSite(ctx)
+	if err != nil {
+		return false, fmt.Errorf("current site: %w", err)
+	}
+	seed, err := h.queries.SeedSiteVersion(ctx)
+	if err != nil {
+		return false, fmt.Errorf("seed site: %w", err)
+	}
+	if current.Css == seed.Css &&
+		current.Note == seed.Note &&
+		current.Header == seed.Header &&
+		current.Board == seed.Board &&
+		current.Footer == seed.Footer {
+		h.touchActivity()
+		return false, nil
+	}
+
+	healed, err := h.queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: normalizeStateSchema(seed.StateSchema),
+		Reason:      "the board went quiet",
+	})
+	if err != nil {
+		return false, fmt.Errorf("store healed version: %w", err)
+	}
+	h.setVersion(healed.ID)
+	h.touchActivity()
+	h.logger.Info("Board returned to the seed", slog.Int64("version_id", healed.ID))
+	return true, nil
+}
 
 // allowPost stops a script on the model's page from posting from every open
 // tab in a loop. One post per visitor per few seconds is enough.

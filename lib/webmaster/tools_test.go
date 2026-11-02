@@ -114,6 +114,27 @@ func TestSiteDocSubstitutesPosts(t *testing.T) {
 	}
 }
 
+func TestRenderPostsAddsBoardConventions(t *testing.T) {
+	got := RenderPosts([]Post{{
+		ID:     3,
+		Author: "dave",
+		When:   "now",
+		Body:   ">>1\n>still flooded\n<script>x</script>",
+	}})
+	if !strings.Contains(got, `<a class="post-ref" href="#p1">&gt;&gt;1</a>`) {
+		t.Errorf("missing a quote link: %s", got)
+	}
+	if !strings.Contains(got, `<span class="quote">&gt;still flooded</span>`) {
+		t.Errorf("missing greentext: %s", got)
+	}
+	if !strings.Contains(got, "No.3") {
+		t.Errorf("missing the post number: %s", got)
+	}
+	if strings.Contains(got, "<script>x</script>") {
+		t.Errorf("post body was not escaped: %s", got)
+	}
+}
+
 func TestSiteDocKeepsPostsWhenPlaceholderMissing(t *testing.T) {
 	doc := SiteDoc(
 		Site{Board: "<main>no placeholder here</main>"},

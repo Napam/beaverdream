@@ -5,6 +5,7 @@ package webmaster
 import (
 	"fmt"
 	"html"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -45,12 +46,13 @@ type Post struct {
 // place.
 const BaseCSS = `
 :root{
-  --bg:#f7f5ef;
-  --panel:#fffdf7;
+  --bg:#f2efe6;
+  --panel:#fbf9f2;
   --fg:#1f1f1f;
-  --accent:#1f6b45;
+  --accent:#34345c;
+  --name:#117743;
   --muted:#6b6b63;
-  --border:#dcd6c8;
+  --border:#cfc8b8;
   --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --pad:1.5rem;
 }
@@ -64,11 +66,14 @@ h1{font-size:1.7em;letter-spacing:-.02em}
 .tagline{color:var(--muted);margin:0 0 1.25em;font-size:.95em}
 main{margin-top:1.25em}
 .board-title{font-size:.8em;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:1.5em 0 .5em}
-.post{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.8em .9em;margin-bottom:.7em}
-.post-head{display:flex;gap:.6em;align-items:baseline;font-size:.85em}
-.post-author{color:var(--accent);font-weight:700}
+.post{background:var(--panel);border:1px solid var(--border);border-radius:2px;padding:.65em .75em;margin-bottom:.55em}
+.post-head{display:flex;gap:.5em;align-items:baseline;font-size:.82em;flex-wrap:wrap}
+.post-author{color:var(--name);font-weight:700}
 .post-when{color:var(--muted)}
-.post-body{white-space:pre-wrap;margin-top:.35em;overflow-wrap:anywhere}
+.post-no{color:var(--muted);margin-left:auto}
+.post-body{white-space:pre-wrap;margin-top:.3em;overflow-wrap:anywhere}
+.post-body .quote{color:#789922}
+.post-body .post-ref{color:var(--accent);text-decoration:underline}
 .empty{color:var(--muted);font-style:italic}
 .colophon{margin-top:2em;padding-top:.8em;border-top:1px solid var(--border);color:var(--muted);font-size:.8em}
 .beaver-note{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent);padding:.6em .8em;color:var(--muted);margin:0 0 1.25em;font-size:.9em}
@@ -83,8 +88,12 @@ main{margin-top:1.25em}
 .postbox button:hover{filter:brightness(1.08)}
 `
 
+var postRefPattern = regexp.MustCompile(`&gt;&gt;(\d+)`)
+
 // RenderPosts turns stored posts into the markup that replaces
 // PostsPlaceholder. Everything is escaped: post bodies are untrusted input.
+// The small board conventions survive escaping: lines that start with > are
+// greentext, and >>12 links to another post.
 func RenderPosts(posts []Post) string {
 	if len(posts) == 0 {
 		return `<p class="empty">no posts yet</p>`
@@ -99,15 +108,36 @@ func RenderPosts(posts []Post) string {
 			&b,
 			`<article class="post" id="p%d"><div class="post-head">`+
 				`<span class="post-author">%s</span>`+
-				`<time class="post-when">%s</time></div>`+
+				`<time class="post-when">%s</time>`+
+				`<span class="post-no">No.%d</span></div>`+
 				`<div class="post-body">%s</div></article>`,
 			p.ID,
 			html.EscapeString(author),
 			html.EscapeString(p.When),
-			html.EscapeString(p.Body),
+			p.ID,
+			renderPostBody(p.Body),
 		)
 	}
 	return b.String()
+}
+
+// renderPostBody escapes a post line by line, then adds greentext and quote
+// links. Escaping happens before either feature, so a body cannot smuggle
+// markup in.
+func renderPostBody(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		escaped := postRefPattern.ReplaceAllString(
+			html.EscapeString(line),
+			`<a class="post-ref" href="#p$1">&gt;&gt;$1</a>`,
+		)
+		if strings.HasPrefix(line, ">") && !strings.HasPrefix(line, ">>") {
+			lines[i] = `<span class="quote">` + escaped + `</span>`
+		} else {
+			lines[i] = escaped
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // FormatWhen renders a stored timestamp for a post header, falling back to the
@@ -147,10 +177,10 @@ func IdentityDoc() string {
 		`</style></head><body>` +
 		`<h1>beaverdream</h1><p class="tagline">a small message board</p>` +
 		`<form class="postbox" method="post" action="/identity">` +
-		`<p class="postbox-title">pick a name</p>` +
-		`<input name="name" maxlength="32" required autofocus autocomplete="nickname" placeholder="your name" aria-label="your name">` +
-		`<div class="postbox-actions"><span>no account needed</span>` +
-		`<button type="submit">join</button></div>` +
+		`<p class="postbox-title">name</p>` +
+		`<input name="name" maxlength="32" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="name">` +
+		`<div class="postbox-actions"><span>shown next to your posts</span>` +
+		`<button type="submit">enter</button></div>` +
 		`</form></body></html>`
 }
 

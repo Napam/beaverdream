@@ -60,9 +60,9 @@ prefer simple, readable code over production hardening.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the failed run is still recorded.
 - Restore copies an old version forward as a new row. History stays immutable.
-- Reset is the one destructive action: it keeps the oldest version, deletes all
-  posts, later versions and mutation runs, and rewinds the id sequences. It
-  takes `h.mu`, so it cannot race a mutation.
+- Reset is the one destructive action: it keeps the oldest version, restores the
+  seed posts from `seed_posts`, deletes later versions and mutation runs, and
+  rewinds the id sequences. It takes `h.mu`, so it cannot race a mutation.
 
 ## Frontend
 

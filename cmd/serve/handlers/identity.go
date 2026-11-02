@@ -57,16 +57,19 @@ func (h *Handlers) SetIdentity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := cleanIdentity(r.FormValue("name"))
-	if name != "" {
-		http.SetCookie(w, &http.Cookie{
-			Name:     IdentityCookieName,
-			Value:    url.QueryEscape(name),
-			Path:     "/",
-			MaxAge:   int(identityCookieAge.Seconds()),
-			Expires:  time.Now().Add(identityCookieAge),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
+	if name == "" || strings.EqualFold(name, "admin") {
+		// Anonymous is the default, and "admin" is reserved for the admin
+		// panel's own posts so the model can tell them apart.
+		name = "Anonymous"
 	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     IdentityCookieName,
+		Value:    url.QueryEscape(name),
+		Path:     "/",
+		MaxAge:   int(identityCookieAge.Seconds()),
+		Expires:  time.Now().Add(identityCookieAge),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

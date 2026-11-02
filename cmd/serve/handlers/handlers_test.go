@@ -135,11 +135,15 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 1 || posts[0].Body != "make it matrix" {
-		t.Fatalf("posts = %+v", posts)
+	if len(posts) != 5 {
+		t.Fatalf("posts = %d, want 4 seed posts and the new one", len(posts))
 	}
-	if posts[0].Author != "dave" {
-		t.Errorf("author = %q, want the cookie identity", posts[0].Author)
+	latest := posts[len(posts)-1]
+	if latest.Body != "make it matrix" {
+		t.Fatalf("latest post = %+v", latest)
+	}
+	if latest.Author != "dave" {
+		t.Errorf("author = %q, want the cookie identity", latest.Author)
 	}
 
 	waitFor(t, "a new version", func() bool {
@@ -190,8 +194,8 @@ func TestAdminMutateDoesNotCreatePost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 0 {
-		t.Fatalf("admin instruction created %d posts", len(posts))
+	if len(posts) != 4 {
+		t.Fatalf("admin instruction changed the posts: %d", len(posts))
 	}
 
 	current, err := queries.CurrentSite(ctx)
@@ -277,7 +281,7 @@ func TestIndexAsksForNameOnFirstVisit(t *testing.T) {
 	for _, want := range []string{
 		`action="/identity"`,
 		`name="name"`,
-		"pick a name",
+		"shown next to your posts",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("identity page is missing %q", want)
@@ -334,17 +338,23 @@ func TestSetIdentityStoresCookie(t *testing.T) {
 	}
 }
 
-func TestSetIdentityRejectsAnEmptyName(t *testing.T) {
+func TestSetIdentityDefaultsAnUsableName(t *testing.T) {
 	h, _ := setup(t)
 
-	rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
-		"name": {"<><><>"},
-	}, "")
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
-	}
-	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
-		t.Fatalf("empty name set %d cookies", len(cookies))
+	for _, input := range []string{"", "   ", "<><><>", "admin", "ADMIN"} {
+		rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
+			"name": {input},
+		}, "")
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("input %q: status = %d, want 303", input, rec.Code)
+		}
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("input %q: cookies = %d, want 1", input, len(cookies))
+		}
+		if cookies[0].Value != "Anonymous" {
+			t.Errorf("input %q: value = %q, want Anonymous", input, cookies[0].Value)
+		}
 	}
 }
 
@@ -365,7 +375,7 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 0 {
+	if len(posts) != 4 {
 		t.Fatalf("post without identity was stored: %+v", posts)
 	}
 }
@@ -401,7 +411,7 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	}
 }
 
-func TestResetBoardClearsPostsAndHistory(t *testing.T) {
+func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -426,8 +436,11 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 0 {
-		t.Fatalf("posts survived the reset: %d", len(posts))
+	if len(posts) != 4 {
+		t.Fatalf("posts after reset = %d, want the 4 seed posts", len(posts))
+	}
+	if posts[0].Body != "first" || posts[1].Author != "kit" {
+		t.Errorf("reset did not restore the seed posts: %+v", posts)
 	}
 
 	site, err := queries.CurrentSite(ctx)
@@ -464,8 +477,8 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create post: %v", err)
 	}
-	if fresh.ID != 1 {
-		t.Errorf("next post id = %d, want 1", fresh.ID)
+	if fresh.ID != 5 {
+		t.Errorf("next post id = %d, want 5", fresh.ID)
 	}
 }
 
@@ -489,7 +502,7 @@ func TestResetBoardRequiresToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 1 {
+	if len(posts) != 5 {
 		t.Fatalf("unauthenticated reset changed the board: %d posts", len(posts))
 	}
 }
@@ -515,7 +528,7 @@ func TestModelFailureLeavesSiteAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 1 {
+	if len(posts) != 5 {
 		t.Fatalf("post was lost: %d posts", len(posts))
 	}
 

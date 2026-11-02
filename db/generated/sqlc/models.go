@@ -29,6 +29,13 @@ type Post struct {
 	CreatedAt string
 }
 
+type SeedPost struct {
+	ID     int64
+	Author string
+	Body   string
+	Age    string
+}
+
 type SiteVersion struct {
 	ID            int64
 	Css           string

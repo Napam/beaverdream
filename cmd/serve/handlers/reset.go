@@ -6,10 +6,10 @@ import (
 	"net/http"
 )
 
-// ResetBoard returns the board to the state the first migration created: one
-// seed version, no posts, and no mutation history. It keeps the oldest version
-// instead of reinserting the seed, so the seed content lives in one place. The
-// next mutation becomes version 2.
+// ResetBoard returns the board to the state the first migrations created: one
+// seed version, the seed posts, and no mutation history. It keeps the oldest
+// version instead of reinserting it, so the seed content lives in one place.
+// The next mutation becomes version 2.
 func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
@@ -51,6 +51,13 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		{`UPDATE site_versions SET trigger_post_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 		{`DELETE FROM posts`, nil},
 		{`DELETE FROM sqlite_sequence WHERE name IN ('mutation_runs', 'posts')`, nil},
+		// Reset restores the board the migrations seeded, including the posts
+		// that make an empty board feel alive.
+		{`INSERT INTO posts (author, body, created_at)
+			SELECT author, body, strftime('%Y-%m-%dT%H:%M:%fZ', 'now', age)
+			FROM seed_posts ORDER BY id`, nil},
+		{`INSERT OR REPLACE INTO sqlite_sequence (name, seq)
+			VALUES ('posts', (SELECT MAX(id) FROM posts))`, nil},
 		// AUTOINCREMENT remembers the highest id ever used. Bring it back to
 		// the seed so the next version is seed+1 instead of one past the
 		// history that was just deleted.

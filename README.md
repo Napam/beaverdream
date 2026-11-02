@@ -109,8 +109,8 @@ workspace must allow that in the OpenCode Console privacy settings.
   storing it as a post),
 - the version list, with a restore button that copies an old version forward as
   a new row,
-- a reset button that deletes every post, every later version, and the mutation
-  history, keeping only the original version,
+- a reset button that restores the seed posts, deletes every later version, and
+  clears the mutation history, keeping only the original version,
 - every mutation run with its full conversation: system and user prompts,
   assistant reasoning (when the server returns it), tool calls, tool results,
   errors, and duration.

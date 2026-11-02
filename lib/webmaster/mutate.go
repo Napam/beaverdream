@@ -276,9 +276,9 @@ Rules:
 - Keep one working post form in the page, in whichever region fits the design.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
-  --border, --accent, --muted, --font and --pad. Override them in :root, then
-  add whatever rules you like. The base stylesheet centers the page in a 48rem
-  column; override body for a different canvas.
+  --border, --accent, --name, --muted, --font and --pad. Override them in
+  :root, then add whatever rules you like. The base stylesheet centers the page
+  in a 48rem column; override body for a different canvas.
 - Aim for a coherent look, not a pile of effects. A little goes a long way.
 - If a post asks for no change, call done and explain why you left it alone.
 

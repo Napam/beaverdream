@@ -144,7 +144,7 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 					<form
 						method="post"
 						action="/admin/reset"
-						onsubmit="return confirm('Delete every post, every later version, and the mutation history? This cannot be undone.')"
+						onsubmit="return confirm('Restore the seed posts, delete every later version, and clear the mutation history? This cannot be undone.')"
 					>
 						<input type="hidden" name="token" value={ token }/>
 						<button
@@ -153,7 +153,7 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 						>reset the board</button>
 					</form>
 					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-						Deletes every post, every later version, and the mutation history. The original version stays.
+						Restores the seed posts, deletes every later version, and clears the mutation history. The original version stays.
 					</p>
 				</section>
 			</div>

@@ -200,7 +200,6 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		"<!doctype html>",
 		"<h1>beaverdream</h1>",
 		`action="/posts"`,
-		`href="/admin"`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -262,6 +261,99 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	}
 	if cookies := authed.Result().Cookies(); len(cookies) != 0 {
 		t.Errorf("admin set %d cookies, want none", len(cookies))
+	}
+}
+
+func TestResetBoardClearsPostsAndHistory(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	rec := postForm(t, h.CreatePost, "/posts", url.Values{
+		"author": {"dave"},
+		"body":   {"make it matrix"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("post status = %d, want 303", rec.Code)
+	}
+	waitFor(t, "the rewrite", func() bool {
+		site, err := queries.CurrentSite(ctx)
+		return err == nil && site.ID > 1
+	})
+
+	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
+	if reset.Code != http.StatusSeeOther {
+		t.Fatalf("reset status = %d, want 303", reset.Code)
+	}
+
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 0 {
+		t.Fatalf("posts survived the reset: %d", len(posts))
+	}
+
+	site, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if site.ID != 1 {
+		t.Errorf("current version = %d, want the seed at 1", site.ID)
+	}
+	if !strings.Contains(site.Note, "nothing has happened yet") {
+		t.Errorf("current version is not the seed: %q", site.Note)
+	}
+
+	runs, err := queries.ListMutationRuns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("mutation history survived the reset: %d", len(runs))
+	}
+
+	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Board:  webmaster.PostsPlaceholder,
+		Reason: "after reset",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if next.ID != 2 {
+		t.Errorf("next version id = %d, want 2", next.ID)
+	}
+
+	fresh, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Body: "fresh"})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	if fresh.ID != 1 {
+		t.Errorf("next post id = %d, want 1", fresh.ID)
+	}
+}
+
+func TestResetBoardRequiresToken(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "keep me",
+	}); err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+
+	rec := postForm(t, h.ResetBoard, "/admin/reset", url.Values{})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("unauthenticated reset changed the board: %d posts", len(posts))
 	}
 }
 

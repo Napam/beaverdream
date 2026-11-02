@@ -54,7 +54,7 @@ const BaseCSS = `
 }
 *{box-sizing:border-box}
 html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.55;padding:var(--pad);padding-bottom:calc(var(--pad) + 6rem);font-size:15px}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.55;padding:var(--pad);font-size:15px}
 a{color:var(--accent)}
 h1,h2,h3{line-height:1.2;margin:0 0 .5em}
 h1{font-size:1.6em;letter-spacing:-.02em}
@@ -70,14 +70,6 @@ main{margin-top:1.5em}
 .empty{color:var(--muted);font-style:italic}
 .colophon{margin-top:2.5em;padding-top:1em;border-top:1px solid color-mix(in srgb,var(--fg) 18%,transparent);color:var(--muted);font-size:.75em}
 .beaver-note{border-left:2px solid var(--accent);padding-left:.75em;color:var(--accent);margin:0 0 1.5em}
-.beaver-controls{position:fixed;left:0;right:0;bottom:0;z-index:2147483647;display:flex;flex-wrap:wrap;align-items:center;gap:.5em .9em;padding:.6em max(1rem,calc((100vw - 62rem)/2)) calc(.6em + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(8px);border-top:1px solid color-mix(in srgb,var(--fg) 18%,transparent)}
-.beaver-controls form{display:flex;flex:1 1 32rem;align-items:center;gap:.5em;min-width:0}
-.beaver-controls input,.beaver-controls textarea{background:color-mix(in srgb,var(--bg) 85%,var(--fg) 8%);color:var(--fg);border:1px solid color-mix(in srgb,var(--fg) 25%,transparent);border-radius:4px;padding:.5em .6em;font:inherit;font-size:.9em}
-.beaver-controls input{flex:0 0 7rem;min-width:0}
-.beaver-controls textarea{flex:1 1 auto;min-width:0;resize:vertical;max-height:8rem}
-.beaver-controls input:focus,.beaver-controls textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
-.beaver-controls button{background:var(--accent);color:var(--bg);border:0;border-radius:4px;padding:.5em 1.1em;font:inherit;font-weight:700;cursor:pointer}
-.beaver-links{display:flex;gap:.9em;color:var(--muted);font-size:.75em}
 `
 
 // RenderPosts turns stored posts into the markup that replaces
@@ -117,18 +109,6 @@ func FormatWhen(s string) string {
 	return t.Format("Jan 2 15:04")
 }
 
-// controls is the only fixed markup in the page. It is pinned to the bottom of
-// the viewport, so the form stays reachable however long the board gets. The
-// model can style it away or delete it with script. /admin stays reachable by
-// URL.
-const controls = `<section class="beaver-controls" aria-label="post to the board">` +
-	`<form method="post" action="/posts">` +
-	`<input name="author" maxlength="32" placeholder="name" autocomplete="off" aria-label="name">` +
-	`<textarea name="body" required maxlength="2000" rows="1" placeholder="say something and the board changes" aria-label="message"></textarea>` +
-	`<button type="submit">post</button>` +
-	`</form>` +
-	`<nav class="beaver-links"><a href="/admin">admin</a></nav></section>`
-
 // liveReload reloads the page when someone else's post lands. The model can
 // break it, which is part of the game; it is convenience, not a guarantee.
 const liveReload = `<script>
@@ -146,9 +126,9 @@ const liveReload = `<script>
 </script>`
 
 // SiteDoc builds the page served to visitors. There is no sandbox: the
-// model's regions, CSS and scripts are the page. The only code-owned parts
-// are the note, the post form and the two links, and even those can be
-// styled away by the model. That is the point.
+// model's regions, CSS and scripts are the page. The only code-owned parts are
+// the note, the document shell, and the live reload script. The post form is
+// model markup, so it can move it, restyle it, or break it.
 func SiteDoc(site Site, posts []Post) string {
 	board := site.Board
 	rendered := RenderPosts(posts)
@@ -180,7 +160,6 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(site.Header)
 	b.WriteString(board)
 	b.WriteString(site.Footer)
-	b.WriteString(controls)
 	b.WriteString(liveReload)
 	b.WriteString(`</body></html>`)
 	return b.String()

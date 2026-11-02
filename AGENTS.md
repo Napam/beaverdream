@@ -38,8 +38,10 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the note, the post form pinned to the bottom of the
-  viewport, and the `/admin` link. Keep them minimal.
+- The only fixed markup is the note and the document shell. The post form is
+  model markup: the system prompt gives it the exact method, action and field
+  names. Do not reintroduce a code-owned composer; a broken form is a valid
+  outcome.
 - Admin is always token-protected. The token travels in the query string or a
   hidden form field, never a cookie: model scripts are same-origin and must not
   inherit admin access. When `ADMIN_TOKEN` is empty the server generates one
@@ -50,6 +52,9 @@ prefer simple, readable code over production hardening.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the failed run is still recorded.
 - Restore copies an old version forward as a new row. History stays immutable.
+- Reset is the one destructive action: it keeps the oldest version, deletes all
+  posts, later versions and mutation runs, and rewinds the id sequences. It
+  takes `h.mu`, so it cannot race a mutation.
 
 ## Frontend
 

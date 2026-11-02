@@ -188,6 +188,7 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Get("/admin/", h.Admin)
 	router.Post("/admin/mutate", h.AdminMutate)
 	router.Post("/admin/versions/{id}/restore", h.RestoreVersion)
+	router.Post("/admin/reset", h.ResetBoard)
 
 	logger.Debug("Routes registered")
 	return router

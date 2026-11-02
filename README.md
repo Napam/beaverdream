@@ -23,9 +23,10 @@ It is a toy. It runs on localhost and calls a local model.
   placeholder, the posts are appended instead, so a post can never disappear.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only fixed markup is the note, a small post form pinned to the
-  bottom of the viewport, and a link to `/admin`. The model can style or delete
-  even those. That is the point.
+  document. The only code-owned markup is the note and the document shell. The
+  model writes the post form itself, so it can move it, restyle it, or break
+  it. The system prompt gives it the exact method, action and field names. If
+  it breaks the form, posting stops working until an admin injects a fix.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - A new post returns immediately. The mutation runs in the background, and open
@@ -105,6 +106,8 @@ workspace must allow that in the OpenCode Console privacy settings.
   storing it as a post),
 - the version list, with a restore button that copies an old version forward as
   a new row,
+- a reset button that deletes every post, every later version, and the mutation
+  history, keeping only the original version,
 - every mutation run with its full conversation: system and user prompts,
   assistant reasoning (when the server returns it), tool calls, tool results,
   errors, and duration.

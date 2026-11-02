@@ -139,6 +139,23 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 						@runCard(view)
 					}
 				</section>
+				<section class={ adminCard + " border-red-500/30" }>
+					<p class={ adminLabel }>reset</p>
+					<form
+						method="post"
+						action="/admin/reset"
+						onsubmit="return confirm('Delete every post, every later version, and the mutation history? This cannot be undone.')"
+					>
+						<input type="hidden" name="token" value={ token }/>
+						<button
+							type="submit"
+							class="cursor-pointer rounded-sm border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+						>reset the board</button>
+					</form>
+					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
+						Deletes every post, every later version, and the mutation history. The original version stays.
+					</p>
+				</section>
 			</div>
 		</body>
 	</html>

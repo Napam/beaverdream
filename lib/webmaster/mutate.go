@@ -202,7 +202,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					},
 					"html": map[string]any{
 						"type":        "string",
-						"description": "HTML for the region. The board region must contain {{posts}}.",
+						"description": "HTML for the region. The board region must contain {{posts}}. The page must keep one post form.",
 					},
 				},
 				"required": []string{"region", "html"},
@@ -246,18 +246,31 @@ Tools:
 - set_region(region, html): replace one region. Regions are header, board and
   footer. The board region must contain the literal placeholder {{posts}},
   which is where the real posts are inserted. Write whatever surrounds them.
+  The page must keep one working post form.
 - set_note(text): set the one-line note shown above the page.
 - done(reason): stop and record one short sentence explaining the change.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
 allowed: if a post asks you to prank the board or its visitors, you may. If you
-break the page, that is a valid outcome. The code pins a small post form to the
-bottom of the viewport; style or remove it if you like.
+break the page, that is a valid outcome.
+
+Every version must contain a working post form, in any region. Use this exact
+contract, because the server only listens on these names:
+
+<form method="post" action="/posts">
+  <input name="author" maxlength="32" placeholder="name" autocomplete="off">
+  <textarea name="body" required maxlength="2000" placeholder="say something"></textarea>
+  <button type="submit">post</button>
+</form>
+
+Style it, move it, wrap it, make it strange. Keep the method, action and field
+names working unless the post asks you to break posting.
 
 Rules:
 - The board region must render every post you were given, newest last. Never
   invent a post and never drop one.
+- Keep one working post form in the page, in whichever region fits the design.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base variables are --bg, --fg, --accent, --muted, --font and --pad.
   Override them in :root, then add whatever rules you like.

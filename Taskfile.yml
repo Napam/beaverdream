@@ -6,10 +6,6 @@ env:
   LIVE_RELOAD_PROXY_HOST: "localhost"
   LIVE_RELOAD_PROXY_PORT: "6931"
   DB_MIGRATE_ON_START: "true"
-  # A real OpenAI-compatible server (llama.cpp, LM Studio, OpenAI) goes here.
-  # The defaults point at `task dev.mock-llm`, which needs no model at all.
-  OPENAI_BASE_URL: "http://localhost:6701"
-  OPENAI_MODEL: "mock-model"
 
 tasks:
   init:
@@ -46,14 +42,16 @@ tasks:
 
   dev.muse:
     desc: Run the dev server against OpenCode Go with Muse Spark
-    env:
-      OPENAI_BASE_URL: "https://opencode.ai/inference/go/openai/v1"
-      OPENAI_MODEL: "muse-spark-1.3-contributor"
-      OPENAI_API_KEY_FILE: "./data/openai.key"
-      OPENAI_REASONING_EFFORT: "minimal"
-      MUTATION_ROUNDS: "5"
+    deps:
+      - init
     cmds:
-      - task: dev
+      # refuse to start if orphaned watchers from a previous session hold the proxy port
+      - |
+        if nc -z "$LIVE_RELOAD_PROXY_HOST" "$LIVE_RELOAD_PROXY_PORT" 2>/dev/null; then
+          echo "$LIVE_RELOAD_PROXY_HOST:$LIVE_RELOAD_PROXY_PORT is already in use — another dev session or orphaned watchers?" >&2
+          exit 1
+        fi
+      - task --parallel dev.tailwind dev.web dev.sql dev.go PROVIDER=muse
 
   gen.templ:
     desc: Generate go code from templ templates
@@ -130,6 +128,13 @@ tasks:
     desc: Run the server with templ watch mode and live reload
     env:
       TEMPL_DEV_MODE: true
+      # The provider vars live on this leaf task: Taskfile env does not flow
+      # from a calling task into a called one. dev.muse passes PROVIDER=muse.
+      OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "muse"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
+      OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "muse"}}muse-spark-1.3-contributor{{else}}mock-model{{end}}'
+      OPENAI_API_KEY_FILE: '{{if eq (default "" .PROVIDER) "muse"}}./data/openai.key{{end}}'
+      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "muse"}}minimal{{end}}'
+      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "muse"}}5{{else}}3{{end}}'
     cmds:
       - |
         go tool templ generate \

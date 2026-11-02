@@ -1,2 +1,5 @@
 # Finder (MacOS) folder config
 .DS_Store
+
+# Local secrets and overrides
+.env

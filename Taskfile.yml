@@ -132,7 +132,6 @@ tasks:
       # from a calling task into a called one. dev.muse passes PROVIDER=muse.
       OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "muse"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
       OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "muse"}}muse-spark-1.3-contributor{{else}}mock-model{{end}}'
-      OPENAI_API_KEY_FILE: '{{if eq (default "" .PROVIDER) "muse"}}./data/openai.key{{end}}'
       OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "muse"}}minimal{{end}}'
       MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "muse"}}5{{else}}3{{end}}'
     cmds:

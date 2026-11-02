@@ -64,8 +64,9 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
   `mocknoop` and `mockfail` test the no-op and error paths.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
-  supports OpenAI-style tool calls is required. Keys come from
-  `OPENAI_API_KEY` or `OPENAI_API_KEY_FILE`. OpenCode Go also gets a generated
+  supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
+  usually via `.env` (gitignored, `.env.example` is the template). Real
+  environment variables win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
   models can take `OPENAI_REASONING_EFFORT` (Muse Spark: `minimal`).
 - The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy

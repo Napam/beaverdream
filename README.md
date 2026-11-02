@@ -50,8 +50,9 @@ task dev.mock-llm  # terminal 1: deterministic fake model on :6701
 task dev           # terminal 2: server on :6930, live reload proxy on :6931
 ```
 
-To use OpenCode Go instead of the mock, put the key in `data/openai.key` and
-run `task dev.muse`. It points at Muse Spark with minimal reasoning.
+To use OpenCode Go instead of the mock, copy `.env.example` to `.env`, put the
+key in `OPENAI_API_KEY`, and run `task dev.muse`. It points at Muse Spark with
+minimal reasoning.
 
 Open `http://localhost:6931`. The mock model picks a theme from keywords in
 your post: `matrix`, `pink`/`cute`, `brutalist`/`concrete`, or
@@ -65,18 +66,20 @@ embedded.
 
 ## Using a real model
 
-Point the server at any OpenAI-compatible chat completions endpoint. OpenCode
-Go with Muse Spark:
+Point the server at any OpenAI-compatible chat completions endpoint. Copy the
+example file, fill in the key, and run the binary:
 
 ```sh
-HOST=localhost PORT=6930 \
-DB_PATH=./tmp/real.db DB_MIGRATE_ON_START=true \
-OPENAI_BASE_URL=https://opencode.ai/inference/go/openai/v1 \
-OPENAI_MODEL=muse-spark-1.3-contributor \
-OPENAI_API_KEY_FILE=./data/openai.key \
-OPENAI_REASONING_EFFORT=minimal \
-MUTATION_ROUNDS=5 \
+cp .env.example .env
+$EDITOR .env
 ./bin/app
+```
+
+`.env` is loaded at startup. Variables already set in the shell win, so you can
+still override any of them on the command line:
+
+```sh
+PORT=6940 DB_PATH=./tmp/real.db DB_MIGRATE_ON_START=true ./bin/app
 ```
 
 A local llama.cpp server works the same way, just with its own base URL and
@@ -84,10 +87,10 @@ model id. `task dev` reads the same variables; override them on the command
 line or edit the `env` block in `Taskfile.yml`. The defaults match
 `task dev.mock-llm`.
 
-`OPENAI_API_KEY` takes precedence over `OPENAI_API_KEY_FILE`. The server sends a
-`User-Agent` and, for `opencode.ai` URLs, a stable `x-opencode-session` header.
-Set `OPENAI_SESSION_ID` to pin that session. `OPENAI_REASONING_EFFORT` accepts
-`minimal`, `low`, `medium`, `high` or `xhigh` and is omitted when empty.
+The server sends a `User-Agent` and, for `opencode.ai` URLs, a stable
+`x-opencode-session` header. Set `OPENAI_SESSION_ID` to pin that session.
+`OPENAI_REASONING_EFFORT` accepts `minimal`, `low`, `medium`, `high` or `xhigh`
+and is omitted when empty.
 
 The model must support tool calls. If it answers in prose without calling a
 tool, the site does not change. Muse Spark trains on request data, so the
@@ -114,6 +117,9 @@ the query string, and the forms carry it as a hidden field.
 
 ## Configuration
 
+`.env` in the working directory is loaded at startup, and real environment
+variables win over it. `.env` is gitignored; `.env.example` is the template.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HOST` / `PORT` | `localhost` / `6930` | HTTP listen address |
@@ -121,8 +127,7 @@ the query string, and the forms carry it as a hidden field.
 | `DB_MIGRATE_ON_START` | `false` | run goose migrations at startup |
 | `OPENAI_BASE_URL` | `http://localhost:6700` | chat completions base URL |
 | `OPENAI_MODEL` | `mock-model` | model id |
-| `OPENAI_API_KEY` | empty | provider key; wins over the file |
-| `OPENAI_API_KEY_FILE` | empty | file to read the key from |
+| `OPENAI_API_KEY` | empty | provider key, usually from `.env` |
 | `OPENAI_SESSION_ID` | generated | `x-opencode-session` value for `opencode.ai` |
 | `OPENAI_REASONING_EFFORT` | empty | `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |

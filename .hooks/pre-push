@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Pre-push: full static and compile checks"
+task check
+echo "Pre-push: all checks passed ✅"

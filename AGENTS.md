@@ -20,13 +20,14 @@ prefer simple, readable code over production hardening.
 - `posts` is the truth. `site_versions` is the render, append-only; the current
   site is `MAX(id)`. `mutation_runs` stores the full conversation per mutation
   so `/admin` can replay it. `site_state` holds the model-declared shared
-  values, and its schema travels on the version row.
+  values, and its schema travels on the version row. `user_overrides` holds the
+  per-visitor versions of the page, keyed by `version_id` and name.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
-  `tools.go` (tool execution and validation), `mutate.go` (the loop, prompts,
-  tool schemas).
+  `override.go` (per-visitor pages), `tools.go` (tool execution and validation),
+  `mutate.go` (the loop, prompts, tool schemas).
 - `cmd/serve/handlers` owns HTTP: `pages.go` (board, post, version),
-  `admin.go` (auth, inject, restore), `handlers.go` (mutation wrapper, cap,
-  config).
+  `overrides.go` (visitor pages, version writes), `admin.go` (auth, inject,
+  restore), `handlers.go` (mutation wrapper, cap, config).
 - GET requests never call the model. Only a post or an admin instruction
   mutates the site.
 
@@ -39,12 +40,19 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the note, the document shell, the live script, the
-  `bd-state` JSON tag, and the small `change name` link. The server also
-  replaces `{{name}}` in the model's regions with the escaped cookie name. The
-  post form is model markup: the system prompt gives it the exact method,
-  action and field names. Do not reintroduce a code-owned composer; a broken
-  form is a valid outcome.
+- The only fixed markup is the document shell, the live script, the `bd-state`
+  JSON tag, and the small `set name` link. The server also replaces `{{name}}`
+  in the model's regions with the escaped cookie name. The post form is model
+  markup: the system prompt gives it the exact method, action and field names.
+  Do not reintroduce a code-owned composer; a broken form is a valid outcome.
+- Visitor overrides are model-owned and belong to the version row. Only a name
+  on the current version gets one, matched case-insensitively after
+  `webmaster.CleanIdentity`, and later mutations inherit the map until the model
+  clears it. A later `set_user_override` merges, so fields the model omits stay.
+  CSS is appended to the site stylesheet; regions replace. Undo, restore and
+  heal copy the overrides of the version they carry; reset drops them with the
+  versions. Admin can clear one by name. Do not let overrides bypass `cleanCSS`
+  or `cleanRegion`.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
@@ -52,14 +60,14 @@ prefer simple, readable code over production hardening.
   store raw HTML. Reset and heal clear the state; restores keep the values and
   take the old schema.
 - The seed page reads like a plain light message board. Do not mention
-  rewriting, AI, or the gimmick in its note, header, form or footer; the first
-  post is the reveal. Keep `000003_plain_seed.sql` and the form example in the
-  system prompt in sync.
+  rewriting, AI, or the gimmick in its header, form or footer; the first post is
+  the reveal. Keep `000003_plain_seed.sql` and the form example in the system
+  prompt in sync.
 - Identity is one HttpOnly cookie, `beaverdream_name`, set by `/identity`. A
   first visit gets the code-owned name page, and `GET /identity` opens the same
-  form prefilled so a visitor can change it. Posts use the cookie value as the
-  author. Names are not unique and there are no accounts. The server ignores
-  any author field in model markup.
+  form prefilled so a visitor can set their display name again. Posts use the
+  cookie value as the author. Names are not unique and there are no accounts.
+  The server ignores any author field in model markup.
 - Admin is always token-protected. The token travels in the query string or a
   hidden form field, never a cookie: model scripts are same-origin and must not
   inherit admin access. When `ADMIN_TOKEN` is empty the server generates one
@@ -73,12 +81,12 @@ prefer simple, readable code over production hardening.
   and no version row is written, but the failed run is still recorded.
 - Restore copies an old version forward as a new row. History stays immutable.
 - A quiet board heals back to the seed by copying it forward as a new row. It
-  keeps posts, clears shared state, takes `h.mu`, and never calls the model.
-  The admin panel can heal immediately.
+  keeps posts, clears shared state and visitor overrides, takes `h.mu`, and
+  never calls the model. The admin panel can heal immediately.
 - Reset is the one destructive action: it keeps the oldest version, restores the
-  seed posts from `seed_posts`, deletes later versions, mutation runs and shared
-  state, and rewinds the id sequences. It takes `h.mu`, so it cannot race a
-  mutation.
+  seed posts from `seed_posts`, deletes later versions (with their overrides),
+  mutation runs and shared state, and rewinds the id sequences. It takes
+  `h.mu`, so it cannot race a mutation.
 
 ## Frontend
 
@@ -91,7 +99,8 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 
 - Mock model: `task dev.mock-llm` on `localhost:6701`, model id `mock-model`.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
-  `mocknoop` and `mockfail` test the no-op and error paths.
+  `curse`/`only me` adds a per-visitor override; `mocknoop` and `mockfail`
+  test the no-op and error paths.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
   supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
   usually via `.env` (gitignored, `.env.example` is the template). Real

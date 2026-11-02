@@ -60,20 +60,18 @@ func TestSetRegionEnforcesLength(t *testing.T) {
 func TestSetSiteUpdatesOnlyProvidedFields(t *testing.T) {
 	ed := newEditor(Site{
 		CSS:    "old css",
-		Note:   "old note",
 		Header: "<h1>old header</h1>",
 		Board:  "<main>old board</main>",
 		Footer: "<footer>old footer</footer>",
 	})
 	got := ed.run("set_site", args(t, map[string]any{
 		"css":   "body{color:red}",
-		"note":  "new note",
 		"board": "<main>{{posts}}</main>",
 	}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}
-	if ed.site.CSS != "body{color:red}" || ed.site.Note != "new note" {
+	if ed.site.CSS != "body{color:red}" {
 		t.Errorf("provided fields were not applied: %+v", ed.site)
 	}
 	if ed.site.Header != "<h1>old header</h1>" ||
@@ -91,6 +89,109 @@ func TestSetSiteNeedsAField(t *testing.T) {
 	}
 }
 
+func TestSetUserOverrideTargetsThePoster(t *testing.T) {
+	ed := newEditor(Site{})
+	ed.authors = []string{"dave", "kit"}
+	got := ed.run("set_user_override", args(t, map[string]any{
+		"name":   "poster",
+		"css":    ":root{--bg:#000}",
+		"footer": "<footer>only you</footer>",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	for _, name := range []string{"dave", "kit"} {
+		override, ok := ed.site.Overrides[OverrideKey(name)]
+		if !ok {
+			t.Fatalf("no override for %s: %+v", name, ed.site.Overrides)
+		}
+		if override.CSS == nil || *override.CSS != ":root{--bg:#000}" {
+			t.Errorf("override css = %+v", override.CSS)
+		}
+		if override.Footer == nil || *override.Footer != "<footer>only you</footer>" {
+			t.Errorf("override footer = %+v", override.Footer)
+		}
+	}
+}
+
+func TestSetUserOverrideCleansTheName(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_user_override", args(t, map[string]any{
+		"name": "Dave!",
+		"css":  "body{color:red}",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	override, ok := ed.site.Overrides["dave"]
+	if !ok {
+		t.Fatalf("override was not stored under the clean name: %+v", ed.site.Overrides)
+	}
+	if override.Name != "Dave" {
+		t.Fatalf("display name = %q, want Dave", override.Name)
+	}
+}
+
+func TestSetUserOverrideKeepsFieldsItDidNotSend(t *testing.T) {
+	footer := "<footer>only you</footer>"
+	ed := newEditor(Site{Overrides: map[string]Override{
+		"dave": {Name: "dave", Footer: &footer},
+	}})
+	got := ed.run("set_user_override", args(t, map[string]any{
+		"name": "dave",
+		"css":  "body{color:red}",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	override := ed.site.Overrides["dave"]
+	if override.CSS == nil || *override.CSS != "body{color:red}" {
+		t.Errorf("new css was not applied: %+v", override.CSS)
+	}
+	if override.Footer == nil || *override.Footer != footer {
+		t.Errorf("existing footer was dropped: %+v", override.Footer)
+	}
+}
+
+func TestSetUserOverrideNeedsAField(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_user_override", args(t, map[string]any{"name": "dave"}))
+	if !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("got %q, want a rejection", got)
+	}
+}
+
+func TestSetUserOverrideClearRemovesThePage(t *testing.T) {
+	ed := newEditor(Site{Overrides: map[string]Override{
+		"dave": {Name: "dave"},
+	}})
+	got := ed.run("set_user_override", args(t, map[string]any{
+		"name":  "Dave",
+		"clear": true,
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if len(ed.site.Overrides) != 0 {
+		t.Fatalf("override was not cleared: %+v", ed.site.Overrides)
+	}
+}
+
+func TestApplyOverrideAppendsCSSAndReplacesRegions(t *testing.T) {
+	css := "body{background:#000}"
+	footer := "<footer>just for you</footer>"
+	site := ApplyOverride(
+		Site{CSS: "h1{color:red}", Footer: "<footer>everyone</footer>"},
+		&Override{CSS: &css, Footer: &footer},
+	)
+	if site.CSS != "h1{color:red}\nbody{background:#000}" {
+		t.Errorf("css = %q", site.CSS)
+	}
+	if site.Footer != footer {
+		t.Errorf("footer = %q", site.Footer)
+	}
+}
+
 func TestSetCSSKeepsBreakoutsAndURLs(t *testing.T) {
 	css := `body{background:url(https://example.com/x.png)}` +
 		`</style><script>alert(1)</script>`
@@ -101,14 +202,6 @@ func TestSetCSSKeepsBreakoutsAndURLs(t *testing.T) {
 	}
 	if ed.site.CSS != css {
 		t.Fatalf("css was altered: %q", ed.site.CSS)
-	}
-}
-
-func TestSetNoteTruncates(t *testing.T) {
-	ed := newEditor(Site{})
-	ed.run("set_note", args(t, map[string]string{"text": strings.Repeat("a", maxNoteLen+50)}))
-	if got := len([]rune(ed.site.Note)); got != maxNoteLen {
-		t.Fatalf("note length = %d, want %d", got, maxNoteLen)
 	}
 }
 
@@ -207,13 +300,16 @@ func TestRenderPostsAddsBoardConventions(t *testing.T) {
 
 func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 	doc := SiteDoc(
-		Site{Version: 4, CSS: "body{background:#000}", Note: "changed", Board: PostsPlaceholder},
+		Site{Version: 4, CSS: "body{background:#000}", Board: PostsPlaceholder},
 		nil,
 	)
-	for _, want := range []string{`id="bd-css"`, `id="bd-note"`, `data-version="4"`} {
+	for _, want := range []string{`id="bd-css"`, `data-version="4"`} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("page is missing %q", want)
 		}
+	}
+	if strings.Contains(doc, "beaver-note") {
+		t.Error("the page still renders a note above the board")
 	}
 	if strings.Index(doc, "beaverdream:update") > strings.Index(doc, "</head>") {
 		t.Error("live script is not in the head, where regions cannot swallow it")

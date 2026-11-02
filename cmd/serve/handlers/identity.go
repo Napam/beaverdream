@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
@@ -30,25 +29,7 @@ func identityFromRequest(r *http.Request) string {
 	if err != nil {
 		value = cookie.Value
 	}
-	return cleanIdentity(value)
-}
-
-// cleanIdentity keeps a display name to letters, digits, spaces and a few
-// harmless punctuation marks, collapses runs of whitespace, and caps the
-// result at maxAuthorLen runes.
-func cleanIdentity(value string) string {
-	value = strings.Map(func(r rune) rune {
-		switch {
-		case unicode.IsLetter(r), unicode.IsDigit(r):
-			return r
-		case r == ' ', r == '_', r == '-', r == '.', r == '\'':
-			return r
-		default:
-			return -1
-		}
-	}, value)
-	value = strings.Join(strings.Fields(value), " ")
-	return truncate(value, maxAuthorLen)
+	return webmaster.CleanIdentity(value)
 }
 
 // Identity shows the name form, prefilled when the visitor already has one.
@@ -69,7 +50,7 @@ func (h *Handlers) SetIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := cleanIdentity(r.FormValue("name"))
+	name := webmaster.CleanIdentity(r.FormValue("name"))
 	if name == "" || strings.EqualFold(name, "admin") {
 		// Anonymous is the default, and "admin" is reserved for the admin
 		// panel's own posts so the model can tell them apart.

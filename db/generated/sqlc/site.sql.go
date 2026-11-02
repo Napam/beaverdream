@@ -134,7 +134,6 @@ FROM
   site_versions
 WHERE
   css = ?
-  AND note = ?
   AND header = ?
   AND board = ?
   AND footer = ?
@@ -142,7 +141,6 @@ WHERE
 
 type LastVersionMatchingParams struct {
 	Css    string
-	Note   string
 	Header string
 	Board  string
 	Footer string
@@ -151,7 +149,6 @@ type LastVersionMatchingParams struct {
 func (q *Queries) LastVersionMatching(ctx context.Context, arg LastVersionMatchingParams) (interface{}, error) {
 	row := q.db.QueryRowContext(ctx, lastVersionMatching,
 		arg.Css,
-		arg.Note,
 		arg.Header,
 		arg.Board,
 		arg.Footer,

@@ -39,7 +39,6 @@ FROM
   site_versions
 WHERE
   css = ?
-  AND note = ?
   AND header = ?
   AND board = ?
   AND footer = ?;

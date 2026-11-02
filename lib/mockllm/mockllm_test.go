@@ -77,7 +77,7 @@ func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
 	for _, call := range got.Choices[0].Message.ToolCalls {
 		names[call.Function.Name] = call.Function.Arguments
 	}
-	for _, want := range []string{"set_css", "set_region", "set_note"} {
+	for _, want := range []string{"set_css", "set_region"} {
 		if _, ok := names[want]; !ok {
 			t.Errorf("missing tool %q, got %v", want, names)
 		}
@@ -87,6 +87,30 @@ func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
 	}
 	if !strings.Contains(names["set_region"], "{{posts}}") {
 		t.Errorf("board lost the posts placeholder: %s", names["set_region"])
+	}
+}
+
+func TestCursePromptTargetsThePoster(t *testing.T) {
+	srv := httptest.NewServer(Handler())
+	defer srv.Close()
+
+	status, raw := post(t, srv, `{"messages":[{"role":"user","content":"curse me"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+
+	var got completion
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var override string
+	for _, call := range got.Choices[0].Message.ToolCalls {
+		if call.Function.Name == "set_user_override" {
+			override = call.Function.Arguments
+		}
+	}
+	if !strings.Contains(override, `"name":"poster"`) {
+		t.Fatalf("curse theme does not target the poster: %q", override)
 	}
 }
 

@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	maxBodyLen   = 2000
-	maxAuthorLen = 32
+	maxBodyLen = 2000
 	// recentLimit is how many posts reach the model. The board shows every
 	// post; the model only needs enough of them to keep the tone.
 	recentLimit = 20
@@ -152,7 +151,6 @@ func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webm
 
 func sameSiteContent(a, b sqlc.SiteVersion) bool {
 	return a.Css == b.Css &&
-		a.Note == b.Note &&
 		a.Header == b.Header &&
 		a.Board == b.Board &&
 		a.Footer == b.Footer
@@ -255,11 +253,15 @@ func (h *Handlers) mutateHeld(
 	}
 
 	currentSite := h.siteWithState(ctx, current)
+	overrides, err := h.overridesFor(ctx, current.ID)
+	if err != nil {
+		return webmaster.Result{}, err
+	}
+	currentSite.Overrides = overrides
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
-		currentSite.Plain = sameSiteContent(current, seed)
+		currentSite.Plain = sameSiteContent(current, seed) && len(overrides) == 0
 		lastPlain, err := h.queries.LastVersionMatching(ctx, sqlc.LastVersionMatchingParams{
 			Css:    seed.Css,
-			Note:   seed.Note,
 			Header: seed.Header,
 			Board:  seed.Board,
 			Footer: seed.Footer,
@@ -282,7 +284,7 @@ func (h *Handlers) mutateHeld(
 	status := "unchanged"
 	var versionID sql.NullInt64
 	if res.Changed {
-		version, err := h.queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		version, err := h.createVersion(ctx, sqlc.CreateSiteVersionParams{
 			Css:           res.Site.CSS,
 			Note:          res.Site.Note,
 			Header:        res.Site.Header,
@@ -291,7 +293,7 @@ func (h *Handlers) mutateHeld(
 			StateSchema:   normalizeStateSchema(res.Site.StateSchema),
 			TriggerPostID: triggerID,
 			Reason:        res.Reason,
-		})
+		}, res.Site.Overrides)
 		if err != nil {
 			mutErr = fmt.Errorf("store site version: %w", err)
 		} else {
@@ -565,11 +567,11 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("seed site: %w", err)
 	}
-	if current.Css == seed.Css &&
-		current.Note == seed.Note &&
-		current.Header == seed.Header &&
-		current.Board == seed.Board &&
-		current.Footer == seed.Footer {
+	overrides, err := h.overridesFor(ctx, current.ID)
+	if err != nil {
+		return false, err
+	}
+	if len(overrides) == 0 && sameSiteContent(current, seed) {
 		h.touchActivity()
 		return false, nil
 	}
@@ -577,17 +579,9 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	if err := h.queries.DeleteSiteState(ctx); err != nil {
 		return false, fmt.Errorf("clear shared state: %w", err)
 	}
-	healed, err := h.queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:         seed.Css,
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
-		StateSchema: normalizeStateSchema(seed.StateSchema),
-		Reason:      "the board went quiet",
-	})
+	healed, err := h.carryVersion(ctx, seed, "the board went quiet")
 	if err != nil {
-		return false, fmt.Errorf("store healed version: %w", err)
+		return false, err
 	}
 	h.setVersion(healed.ID)
 	h.touchActivity()

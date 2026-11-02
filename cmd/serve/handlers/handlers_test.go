@@ -298,7 +298,7 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		`action="/posts"`,
 		`posting as dave`,
 		`href="/identity"`,
-		`change name`,
+		`set name`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -356,7 +356,7 @@ func TestIndexAsksForNameOnFirstVisit(t *testing.T) {
 	for _, want := range []string{
 		`action="/identity"`,
 		`name="name"`,
-		"shown next to your posts",
+		"shown next to every post you write",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("identity page is missing %q", want)
@@ -427,7 +427,8 @@ func TestIdentityPagePrefillsTheCurrentName(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`value="dave"`,
-		"change name",
+		"your display name",
+		"save name",
 		`href="/"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -574,6 +575,412 @@ func TestVersionReportsReloadForStyleBreakout(t *testing.T) {
 	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
 	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
 		t.Errorf("swap = %s, want reload", rec.Body.String())
+	}
+}
+
+func TestVisitorOverrideChangesOnlyThatVisitorsPage(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+
+	rec := postFormAs(t, h.CreatePost, "/posts", url.Values{
+		"body": {"curse me"},
+	}, "dave")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	waitFor(t, "the visitor override", func() bool {
+		current, err := queries.CurrentSite(ctx)
+		if err != nil || current.ID <= seed.ID {
+			return false
+		}
+		_, err = queries.GetUserOverride(ctx, sqlc.GetUserOverrideParams{
+			VersionID: current.ID,
+			NameKey:   "dave",
+		})
+		return err == nil
+	})
+
+	pageFor := func(name string) string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(identityCookie(name))
+		out := httptest.NewRecorder()
+		h.Index(out, req)
+		if out.Code != http.StatusOK {
+			t.Fatalf("page for %s: status = %d", name, out.Code)
+		}
+		return out.Body.String()
+	}
+
+	dave := pageFor("dave")
+	for _, want := range []string{"only you can see this page.", "--accent:#ff3b3b"} {
+		if !strings.Contains(dave, want) {
+			t.Errorf("dave's page is missing %q", want)
+		}
+	}
+	kit := pageFor("kit")
+	for _, unwanted := range []string{"only you can see this page.", "--accent:#ff3b3b"} {
+		if strings.Contains(kit, unwanted) {
+			t.Errorf("kit's page has dave's override %q", unwanted)
+		}
+	}
+}
+
+func TestVersionReloadsWhenOnlyTheVisitorOverrideChanges(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "override only",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: next.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","board":"<main>{{posts}}</main>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	dave := httptest.NewRequest(http.MethodGet, "/version?have=1", nil)
+	dave.AddCookie(identityCookie("dave"))
+	rec := httptest.NewRecorder()
+	h.Version(rec, dave)
+	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
+		t.Errorf("dave's swap = %s, want reload", rec.Body.String())
+	}
+
+	kit := httptest.NewRequest(http.MethodGet, "/version?have=1", nil)
+	kit.AddCookie(identityCookie("kit"))
+	rec = httptest.NewRecorder()
+	h.Version(rec, kit)
+	if !strings.Contains(rec.Body.String(), `"swap":"css"`) {
+		t.Errorf("kit's swap = %s, want css", rec.Body.String())
+	}
+}
+
+func TestAdminClearOverrideGivesThePageBack(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "a private page",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","footer":"<footer>only you</footer>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	pageForDave := func() string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(identityCookie("dave"))
+		out := httptest.NewRecorder()
+		h.Index(out, req)
+		return out.Body.String()
+	}
+	if !strings.Contains(pageForDave(), "only you") {
+		t.Fatal("dave's override is not on the page")
+	}
+
+	rec := postForm(t, h.ClearOverride, "/admin/overrides/clear?token="+testAdminToken, url.Values{
+		"name": {"dave"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("clear status = %d", rec.Code)
+	}
+	if strings.Contains(pageForDave(), "only you") {
+		t.Error("dave still sees the override after clearing it")
+	}
+
+	undo := postForm(t, h.UndoLast, "/admin/undo?token="+testAdminToken, url.Values{})
+	if undo.Code != http.StatusSeeOther {
+		t.Fatalf("undo status = %d", undo.Code)
+	}
+	if !strings.Contains(pageForDave(), "only you") {
+		t.Error("undo did not restore the cleared override")
+	}
+}
+
+func TestAdminShowsVisitorOverrides(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "a private page",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","footer":"<footer>only you</footer>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Admin(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/admin?token="+testAdminToken,
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"visitor overrides", "dave", "only you"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin page is missing %q", want)
+		}
+	}
+}
+
+func TestResetBoardDropsVisitorOverrides(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "a private page",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","footer":"<footer>only you</footer>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	rec := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("reset status = %d", rec.Code)
+	}
+	rows, err := queries.ListUserOverrides(ctx, version.ID)
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("reset kept visitor overrides: %+v", rows)
+	}
+}
+
+func TestVersionCSSIncludesTheVisitorOverride(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css + "\nbody{background:#111}",
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "css and override",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","css":"h1{color:red}"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	cssFor := func(name string) string {
+		req := withURLParam(
+			httptest.NewRequest(http.MethodGet, "/version/2/css", nil),
+			"id", strconv.FormatInt(version.ID, 10),
+		)
+		req.AddCookie(identityCookie(name))
+		rec := httptest.NewRecorder()
+		h.VersionCSS(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("css for %s: status = %d", name, rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	dave := cssFor("dave")
+	if !strings.Contains(dave, "background:#111") || !strings.Contains(dave, "h1{color:red}") {
+		t.Errorf("dave's css is missing a layer: %s", dave)
+	}
+	kit := cssFor("kit")
+	if !strings.Contains(kit, "background:#111") {
+		t.Errorf("kit lost the shared css: %s", kit)
+	}
+	if strings.Contains(kit, "h1{color:red}") {
+		t.Errorf("kit sees dave's css: %s", kit)
+	}
+}
+
+func TestTheNextMutationKeepsVisitorOverrides(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "a private page",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","footer":"<footer>only you</footer>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("mutate status = %d", rec.Code)
+	}
+	current, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	rows, err := queries.ListUserOverrides(ctx, current.ID)
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(rows) != 1 || rows[0].NameKey != "dave" {
+		t.Fatalf("override did not carry forward: %+v", rows)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(identityCookie("dave"))
+	out := httptest.NewRecorder()
+	h.Index(out, req)
+	if !strings.Contains(out.Body.String(), "only you") {
+		t.Error("dave's page lost the override after another mutation")
+	}
+}
+
+func TestHealClearsAnOverrideOnAPlainPage(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "only the private page changed",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","footer":"<footer>only you</footer>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	rec := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("heal status = %d", rec.Code)
+	}
+	current, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if current.ID <= version.ID {
+		t.Fatalf("heal did not append a version: %d", current.ID)
+	}
+	rows, err := queries.ListUserOverrides(ctx, current.ID)
+	if err != nil {
+		t.Fatalf("list overrides: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("heal kept the override: %+v", rows)
 	}
 }
 

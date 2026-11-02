@@ -38,10 +38,10 @@ type toolCall struct {
 }
 
 type theme struct {
-	css    string
-	title  string
-	note   string
-	header string
+	css      string
+	title    string
+	header   string
+	personal bool
 }
 
 // Handler serves chat completions and a model list.
@@ -133,7 +133,6 @@ func pickTheme(prompt string) theme {
 				`h1{text-shadow:0 0 14px var(--accent);letter-spacing:.08em}` +
 				`.post{border-color:#053d1a}.post-author{text-shadow:0 0 8px var(--accent)}`,
 			title: "follow the white rabbit",
-			note:  "everything that has a beginning has a glitch.",
 		}
 	case strings.Contains(prompt, "chaos") ||
 		strings.Contains(prompt, "sabotage") ||
@@ -145,7 +144,6 @@ func pickTheme(prompt string) theme {
 				`@keyframes hue{to{filter:hue-rotate(360deg)}}` +
 				`h1{letter-spacing:.2em;text-transform:uppercase}`,
 			title:  "chaos board",
-			note:   "the board is not your friend.",
 			header: `<h1>beaverdream</h1><script>document.title="chaos board"</script>`,
 		}
 	case strings.Contains(prompt, "pink") || strings.Contains(prompt, "cute"):
@@ -155,7 +153,6 @@ func pickTheme(prompt string) theme {
 				`--font:Georgia,"Times New Roman",serif}` +
 				`h1{letter-spacing:.02em}.post{border-color:#3a1b2c;border-radius:12px;padding-left:.9em}`,
 			title: "soft board",
-			note:  "be nice to each other, the walls are listening.",
 		}
 	case strings.Contains(prompt, "brutalist") || strings.Contains(prompt, "concrete"):
 		return theme{
@@ -165,19 +162,23 @@ func pickTheme(prompt string) theme {
 				`h1{text-transform:uppercase;letter-spacing:-.03em;font-size:2.2em}` +
 				`.post{border-top:3px solid #111}`,
 			title: "raw feed",
-			note:  "no decoration. no excuses.",
+		}
+	case strings.Contains(prompt, "curse") || strings.Contains(prompt, "only me"):
+		return theme{
+			css:      `:root{--bg:#180b0b;--fg:#f2dede;--accent:#ff6b6b;--muted:#9a6f6f;--panel:#241010;--border:#5a2a2a}`,
+			title:    "the usual board",
+			personal: true,
 		}
 	default:
 		return theme{
 			css:   `:root{--bg:#0b0b0f;--fg:#e6e6e6;--accent:#9db4ff;--muted:#6d7280;--panel:#15151b;--border:#2a2a33}`,
 			title: "the board",
-			note:  "a quiet board tonight.",
 		}
 	}
 }
 
-// calls renders a theme as the three edits the webmaster tools expect. The
-// board keeps the {{posts}} placeholder, so the real posts stay in place.
+// calls renders a theme as the edits the webmaster tools expect. The board
+// keeps the {{posts}} placeholder, so the real posts stay in place.
 const postForm = `<form class="postbox" method="post" action="/posts">` +
 	`<p class="postbox-title">post a message</p>` +
 	`<textarea name="body" required maxlength="2000" rows="3" placeholder="say something"></textarea>` +
@@ -206,14 +207,20 @@ func (t theme) calls() []toolCall {
 				}),
 			},
 		},
-		{
-			ID:   "call_note",
+	}
+	if t.personal {
+		calls = append(calls, toolCall{
+			ID:   "call_override",
 			Type: "function",
 			Function: functionCall{
-				Name:      "set_note",
-				Arguments: mustJSON(map[string]string{"text": t.note}),
+				Name: "set_user_override",
+				Arguments: mustJSON(map[string]any{
+					"name":   "poster",
+					"css":    ":root{--bg:#2a0808;--accent:#ff3b3b}",
+					"footer": `<footer class="colophon">only you can see this page.</footer>`,
+				}),
 			},
-		},
+		})
 	}
 	if t.header != "" {
 		calls = append(calls, toolCall{

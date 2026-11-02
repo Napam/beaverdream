@@ -6,9 +6,9 @@ model answers by rewriting the page's CSS and markup instead of writing a
 reply. The current page is the latest answer; every earlier answer stays in the
 version history.
 
-There are no accounts and no per-user threads. One post changes the page for
-everyone, and if someone talks the model into making the board hostile, it can.
-That is the game.
+There are no accounts and no per-user threads. A post usually changes the page
+for everyone, though the model can also give one visitor a private version. If
+someone talks it into making the board hostile, it can. That is the game.
 
 It is a toy. It runs on localhost and calls a local model.
 
@@ -17,20 +17,26 @@ It is a toy. It runs on localhost and calls a local model.
 - `posts` holds the messages. `site_versions` holds full snapshots of the
   design. The current site is the newest version row; each mutation appends a
   new one. Nothing is overwritten.
-- A version has a stylesheet, a note, and three HTML regions: `header`, `board`,
-  and `footer`. The board contains the literal placeholder `{{posts}}`, which
-  the server replaces with the code-owned post list. If the model drops the
+- A version has a stylesheet and three HTML regions: `header`, `board`, and
+  `footer`. The board contains the literal placeholder `{{posts}}`, which the
+  server replaces with the code-owned post list. If the model drops the
   placeholder, the posts are appended instead, so a post can never disappear.
+- A version can also carry overrides for individual visitor names. The model
+  can restyle the whole page for one person while everyone else keeps the
+  normal board. Overrides belong to the version, so undo, restore and heal move
+  them with the rest of the page.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only code-owned markup is the note, the document shell, the
-  live-update script and the shared-state tag. The model writes the post form
-  itself, so it can move it, restyle it, or break it. The system prompt gives it the exact method, action and field names. If
-  it breaks the form, posting stops working until an admin injects a fix.
-- The first visit asks for a name. It goes into an HttpOnly cookie and becomes
-  the author of that visitor's posts. There are no accounts and names are not
-  unique. The name page is code-owned and plain; the model never sees it.
-  Visit `/identity` to change the name; the board links there at the bottom.
+  document. The only code-owned markup is the document shell, the live-update
+  script, the shared-state tag and the small name link. The model writes the
+  post form itself, so it can move it, restyle it, or break it. The system
+  prompt gives it the exact method, action and field names. If it breaks the
+  form, posting stops working until an admin injects a fix.
+- The first visit asks for a display name. It goes into an HttpOnly cookie and
+  becomes the author of that visitor's posts. There are no accounts and names
+  are not unique. The name page is code-owned and plain; the model never sees
+  it. Visit `/identity`, or the **set name** link at the bottom of the board, to
+  set it again.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - The model can also declare a tiny shared state: counters, lists and choices,
@@ -41,13 +47,16 @@ It is a toy. It runs on localhost and calls a local model.
 - A new post returns immediately. A single worker coalesces posts that arrive
   during a rewrite, so a burst becomes one mutation. Open pages poll
   `/version`: a stylesheet-only change is swapped in place, and a markup change
-  reloads after saving the draft and reading position.
+  reloads after saving the draft and reading position. An override that changes
+  only one visitor's markup reloads that visitor and leaves everyone else alone.
 - After 20 quiet minutes the board copies the seed forward, keeping the posts
-  and clearing shared state. The next visitor gets the plain board and the
-  reveal again. The admin panel can trigger the same heal immediately.
-- A mutation runs up to `MUTATION_ROUNDS` model rounds with four tools
-  (`set_css`, `set_region`, `set_note`, `done`). The result is stored as a new
-  version plus a `mutation_runs` row holding the whole conversation.
+  and clearing shared state and visitor overrides. The next visitor gets the
+  plain board and the reveal again. The admin panel can trigger the same heal
+  immediately.
+- A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
+  stylesheet, the regions, shared state and per-visitor overrides, then calls
+  `done`. The result is stored as a new version plus a `mutation_runs` row
+  holding the whole conversation.
 
 **Do not expose this to the open internet.** Model-generated scripts run in
 every visitor's browser with the board's origin. That is the game. The admin
@@ -72,9 +81,9 @@ minimal reasoning.
 Open `http://localhost:6931`. The mock model picks a theme from keywords in
 your post: `matrix`, `pink`/`cute`, `brutalist`/`concrete`, or
 `chaos`/`sabotage`/`prank` (which writes a script, so you can watch the page
-sabotage itself). Anything else gets a neutral theme. `mocknoop` asks it to
-leave the site alone; `mockfail` makes it fail, which is useful for testing
-error handling.
+sabotage itself). `curse` or `only me` gives the poster a private page. Anything
+else gets a neutral theme. `mocknoop` asks it to leave the site alone;
+`mockfail` makes it fail, which is useful for testing error handling.
 
 Production binary: `task build.go` writes `bin/app` with assets and migrations
 embedded.
@@ -118,6 +127,8 @@ workspace must allow that in the OpenCode Console privacy settings.
 - the current version and its CSS/regions,
 - a form that sends an instruction straight to the model (optionally also
   storing it as a post),
+- the visitor overrides on the current version, with a clear button that gives
+  one person the normal page back,
 - the version list, with a restore button that copies an old version forward as
   a new row,
 - a reset button that restores the seed posts, deletes every later version, and

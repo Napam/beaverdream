@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 // the response is written directly: there is no shell and no iframe, so the
 // model's markup is the document.
 func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
+	// The page depends on the visitor's cookie and on their override.
+	w.Header().Set("Cache-Control", "private, no-store")
 	if identityFromRequest(r) == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
@@ -51,6 +54,10 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)
+	docSite = webmaster.ApplyOverride(
+		docSite,
+		h.visitorOverride(r.Context(), site.ID, docSite.Name),
+	)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, webmaster.SiteDoc(docSite, converted)); err != nil {
@@ -148,7 +155,12 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 			h.setVersion(current.ID)
 			if id, err := strconv.ParseInt(have, 10, 64); err == nil {
 				if previous, err := h.queries.GetSiteVersion(r.Context(), id); err == nil {
-					resp.Swap = swapKind(previous, current)
+					resp.Swap = h.swapKind(
+						r.Context(),
+						identityFromRequest(r),
+						previous,
+						current,
+					)
 				}
 			}
 		}
@@ -161,14 +173,29 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 
 // swapKind reports whether the only change is one that can be applied without
 // a navigation. A stylesheet that breaks out of its style tag also forces a
-// reload, because in-place text cannot remove the elements it created.
-func swapKind(previous, current sqlc.SiteVersion) string {
+// reload, because in-place text cannot remove the elements it created. The
+// visitor's override counts: markup that only they can see still needs a
+// reload, even when the shared page is unchanged.
+func (h *Handlers) swapKind(
+	ctx context.Context,
+	name string,
+	previous, current sqlc.SiteVersion,
+) string {
 	if previous.Header != current.Header ||
 		previous.Board != current.Board ||
 		previous.Footer != current.Footer ||
-		previous.StateSchema != current.StateSchema ||
-		breaksOutOfStyle(previous.Css) ||
-		breaksOutOfStyle(current.Css) {
+		previous.StateSchema != current.StateSchema {
+		return "reload"
+	}
+	previousOverride := h.visitorOverride(ctx, previous.ID, name)
+	currentOverride := h.visitorOverride(ctx, current.ID, name)
+	if webmaster.OverrideMarkupChanged(previousOverride, currentOverride) {
+		return "reload"
+	}
+	if breaksOutOfStyle(previous.Css) ||
+		breaksOutOfStyle(current.Css) ||
+		breaksOutOfStyle(webmaster.OverrideCSS(previousOverride)) ||
+		breaksOutOfStyle(webmaster.OverrideCSS(currentOverride)) {
 		return "reload"
 	}
 	return "css"
@@ -179,8 +206,9 @@ func breaksOutOfStyle(css string) bool {
 	return strings.Contains(lower, "</style") || strings.Contains(lower, "<script")
 }
 
-// VersionCSS returns the stylesheet and note for one version. The client uses
-// it only after Version reports a css-only change.
+// VersionCSS returns the stylesheet for one version, with the requesting
+// visitor's override folded in. The client uses it only after Version reports a
+// css-only change.
 func (h *Handlers) VersionCSS(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -192,11 +220,14 @@ func (h *Handlers) VersionCSS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	merged := webmaster.ApplyOverride(
+		webmaster.Site{CSS: site.Css},
+		h.visitorOverride(r.Context(), site.ID, identityFromRequest(r)),
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"css":  site.Css,
-		"note": site.Note,
+		"css": merged.CSS,
 	})
 }

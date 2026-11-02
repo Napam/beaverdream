@@ -9,7 +9,6 @@ import (
 const (
 	maxCSSLen      = 20000
 	maxRegionLen   = 20000
-	maxNoteLen     = 280
 	minRegionLen   = 8
 	maxStateKeys   = 8
 	maxStateName   = 32
@@ -39,10 +38,11 @@ type stateKeyInput struct {
 // database until the whole mutation finishes, so a failed round cannot leave a
 // half-written page behind.
 type editor struct {
-	site   Site
-	reason string
-	done   bool
-	dirty  bool
+	site    Site
+	reason  string
+	done    bool
+	dirty   bool
+	authors []string
 }
 
 func newEditor(site Site) *editor {
@@ -57,7 +57,6 @@ func (e *editor) run(name, arguments string) string {
 	case "set_site":
 		var in struct {
 			CSS    *string `json:"css"`
-			Note   *string `json:"note"`
 			Header *string `json:"header"`
 			Board  *string `json:"board"`
 			Footer *string `json:"footer"`
@@ -65,8 +64,7 @@ func (e *editor) run(name, arguments string) string {
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 			return "rejected: arguments are not valid JSON"
 		}
-		if in.CSS == nil && in.Note == nil && in.Header == nil && in.Board == nil &&
-			in.Footer == nil {
+		if in.CSS == nil && in.Header == nil && in.Board == nil && in.Footer == nil {
 			return "rejected: set_site needs at least one field"
 		}
 		if in.CSS != nil {
@@ -75,9 +73,6 @@ func (e *editor) run(name, arguments string) string {
 				return "rejected: " + err.Error()
 			}
 			e.site.CSS = css
-		}
-		if in.Note != nil {
-			e.site.Note = truncateRunes(strings.TrimSpace(*in.Note), maxNoteLen)
 		}
 		regions := []struct {
 			name   string
@@ -139,14 +134,57 @@ func (e *editor) run(name, arguments string) string {
 		e.dirty = true
 		return "ok"
 
-	case "set_note":
+	case "set_user_override":
 		var in struct {
-			Text string `json:"text"`
+			Name   string  `json:"name"`
+			CSS    *string `json:"css"`
+			Header *string `json:"header"`
+			Board  *string `json:"board"`
+			Footer *string `json:"footer"`
+			Clear  bool    `json:"clear"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 			return "rejected: arguments are not valid JSON"
 		}
-		e.site.Note = truncateRunes(strings.TrimSpace(in.Text), maxNoteLen)
+		names, err := e.overrideTargets(in.Name)
+		if err != nil {
+			return "rejected: " + err.Error()
+		}
+		if in.Clear {
+			for _, name := range names {
+				key := OverrideKey(name)
+				if _, ok := e.site.Overrides[key]; ok {
+					delete(e.site.Overrides, key)
+					e.dirty = true
+				}
+			}
+			return "ok"
+		}
+		override, err := cleanOverride(in.CSS, in.Header, in.Board, in.Footer)
+		if err != nil {
+			return "rejected: " + err.Error()
+		}
+		if len(override.FieldNames()) == 0 {
+			return "rejected: set_user_override needs a field to change, or clear=true"
+		}
+		if e.site.Overrides == nil {
+			e.site.Overrides = make(map[string]Override, len(names))
+		}
+		grown := 0
+		for _, name := range names {
+			if _, exists := e.site.Overrides[OverrideKey(name)]; !exists {
+				grown++
+			}
+		}
+		if len(e.site.Overrides)+grown > maxOverrides {
+			return fmt.Sprintf("rejected: at most %d visitor overrides", maxOverrides)
+		}
+		for _, name := range names {
+			key := OverrideKey(name)
+			merged := MergeOverride(e.site.Overrides[key], override)
+			merged.Name = name
+			e.site.Overrides[key] = merged
+		}
 		e.dirty = true
 		return "ok"
 
@@ -176,6 +214,33 @@ func (e *editor) run(name, arguments string) string {
 	}
 
 	return fmt.Sprintf("rejected: unknown tool %q", name)
+}
+
+// overrideTargets resolves the name a tool call targets. "poster" is a shortcut
+// for the people whose posts triggered this rewrite, which is the case the
+// model reaches for most.
+func (e *editor) overrideTargets(name string) ([]string, error) {
+	name = CleanIdentity(name)
+	if name == "" {
+		return nil, fmt.Errorf("name is empty")
+	}
+	if !strings.EqualFold(name, "poster") {
+		return []string{name}, nil
+	}
+
+	names := make([]string, 0, len(e.authors))
+	for _, author := range e.authors {
+		// Admin instructions use the same author name as the reserved admin
+		// visitor, and neither has a page worth overriding.
+		if author == "" || strings.EqualFold(author, "admin") {
+			continue
+		}
+		names = append(names, author)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf(`no poster to target; use a visitor name, not "poster"`)
+	}
+	return names, nil
 }
 
 func cleanRegion(name, html string) (string, error) {

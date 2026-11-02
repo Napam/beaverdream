@@ -93,6 +93,7 @@ func (m *Mutator) MutatePosts(
 		triggers = []Post{{Author: "admin"}}
 	}
 	ed := newEditor(current)
+	ed.authors = editorAuthors(triggers)
 	sys := systemPromptText
 	usr := userPrompt(current, posts, triggers)
 
@@ -190,8 +191,8 @@ func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam
 	}
 }
 
-// toolParams advertises the mutation tools. There are only four on purpose:
-// every extra knob is another way a small model can produce broken output.
+// toolParams advertises the mutation tools. Every extra knob is another way a
+// small model can produce broken output.
 func toolParams() []openai.ChatCompletionToolUnionParam {
 	return []openai.ChatCompletionToolUnionParam{
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
@@ -207,7 +208,6 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 						"type":        "string",
 						"description": "CSS rules without a style tag.",
 					},
-					"note":   map[string]any{"type": "string", "maxLength": maxNoteLen},
 					"header": map[string]any{"type": "string"},
 					"board": map[string]any{
 						"type":        "string",
@@ -215,6 +215,40 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					},
 					"footer": map[string]any{"type": "string"},
 				},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "set_user_override",
+			Description: openai.String(
+				"Make the page different for one visitor. The name \"poster\" means " +
+					"the people who just posted. Other visitors keep the normal page. " +
+					"Only the fields you send change; the rest of that visitor's page stays. " +
+					"To remove one part, clear the override and set it again. " +
+					"CSS is added after the site stylesheet; regions replace the global ones.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "A visitor name, or \"poster\" (reserved) for the people who just posted.",
+					},
+					"css": map[string]any{
+						"type":        "string",
+						"description": "Extra CSS rules, added after the site stylesheet.",
+					},
+					"header": map[string]any{"type": "string"},
+					"board": map[string]any{
+						"type":        "string",
+						"description": "Must contain {{posts}}.",
+					},
+					"footer": map[string]any{"type": "string"},
+					"clear": map[string]any{
+						"type":        "boolean",
+						"description": "Give this visitor the normal page again.",
+					},
+				},
+				"required": []string{"name"},
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
@@ -252,20 +286,6 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					},
 				},
 				"required": []string{"region", "html"},
-			},
-		}),
-		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name: "set_note",
-			Description: openai.String(
-				"Set the one-line note shown above the page. " +
-					"Call it in the same response as your other edits.",
-			),
-			Parameters: shared.FunctionParameters{
-				"type": "object",
-				"properties": map[string]any{
-					"text": map[string]any{"type": "string", "maxLength": maxNoteLen},
-				},
-				"required": []string{"text"},
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
@@ -323,9 +343,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 
 // systemPromptText is static so prompt caching has a stable prefix.
 const systemPromptText = `You are the webmaster of beaverdream, a tiny anonymous message board.
-You own how the board looks: its stylesheet, its markup, and a one-line note.
-Visitors post messages. You never chat and you never reply in prose. You change
-the site.
+You own how the board looks: its stylesheet and its markup. Visitors post
+messages. You never chat and you never reply in prose. You change the site.
 
 Most posts are not requests. React to what the post actually says. Take it
 literally, take it personally, or misread it on purpose. A request gets
@@ -333,17 +352,22 @@ granted, maybe too well. The poster is looking at their own post; the change
 must be visible around it, not only in the header.
 
 Tools:
-- set_site(css, note, header, board, footer): replace several parts at once.
-  Use this for a full restyle. Only the fields you send change. The board must
-  contain the literal placeholder {{posts}}. The page must keep one working
-  post form.
+- set_site(css, header, board, footer): replace several parts at once. Use this
+  for a full restyle. Only the fields you send change. The board must contain
+  the literal placeholder {{posts}}. The page must keep one working post form.
+- set_user_override(name, css, header, board, footer, clear): make the page
+  different for one visitor. name is a visitor name, or "poster" for the people
+  who just posted. Only the fields you send change; the rest of that visitor's
+  page stays. CSS is added after the site stylesheet, so write a delta; header,
+  board and footer replace the global ones for that visitor. clear=true gives
+  them the normal page again. Everyone else keeps the normal page. Keep at most
+  12 visitors at a time.
 - set_css(css): replace only the stylesheet. Prefer overriding the variables in
   :root over rewriting every rule.
 - set_region(region, html): replace one region. Regions are header, board and
   footer. The board region must contain the literal placeholder {{posts}},
   which is where the real posts are inserted. Write whatever surrounds them.
   The page must keep one working post form.
-- set_note(text): set the one-line note shown above the page.
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
   the options). Up to 8 keys. Declare only what the page actually uses.
@@ -389,16 +413,17 @@ Rules:
 - The board region must render every post you were given. The server inserts
   the current posts newest first. Never invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
-- The note is the board's announcement line. Say what changed and who caused
-  it, in the board's voice, one sentence. Never mention AI, models or rewriting.
 - Early changes are clear but the site still reads as a message board. Get
   bolder as the board gets busier.
 - BOARD IS PLAIN means the page still matches the seed. The first change away
   from a plain board must change something visible. After a quiet board heals,
   start gentle again.
-- When one person asks, name them in the note. When several people ask for
-  different things, name them and pick a side. Only leave the site alone when a
-  post explicitly asks for that and the board has already changed at least once.
+- Per-visitor overrides are a private joke. The named visitor sees the change;
+  everyone else keeps the normal page. Use one when a post is personal, when
+  someone asks to be special, or when one person deserves it. Keep existing
+  overrides unless that visitor asks to be normal again.
+- Only leave the site alone when a post explicitly asks for that and the board
+  has already changed at least once.
 - Never show that the site is working, loading or thinking.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
@@ -438,14 +463,6 @@ func userPrompt(site Site, posts []Post, triggers []Post) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\nCURRENT NOTE:\n")
-	if strings.TrimSpace(site.Note) == "" {
-		b.WriteString("(empty)\n")
-	} else {
-		b.WriteString(site.Note)
-		b.WriteString("\n")
-	}
-
 	b.WriteString("\nCURRENT REGIONS:\n")
 	fmt.Fprintf(&b, "header:\n%s\n\nboard:\n%s\n\nfooter:\n%s\n",
 		site.Header, site.Board, site.Footer)
@@ -468,6 +485,21 @@ func userPrompt(site Site, posts []Post, triggers []Post) string {
 			for _, key := range keys {
 				fmt.Fprintf(&b, "%s: %s\n", key, site.State[key])
 			}
+		}
+	}
+
+	b.WriteString("\nCURRENT PER-VISITOR OVERRIDES:\n")
+	if len(site.Overrides) == 0 {
+		b.WriteString("(none)\n")
+	} else {
+		keys := make([]string, 0, len(site.Overrides))
+		for key := range site.Overrides {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			override := site.Overrides[key]
+			fmt.Fprintf(&b, "- %s: %s\n", override.Name, strings.Join(override.FieldNames(), ", "))
 		}
 	}
 
@@ -525,6 +557,25 @@ func userPrompt(site Site, posts []Post, triggers []Post) string {
 	}
 
 	return b.String()
+}
+
+// editorAuthors collects the names the "poster" override target expands to.
+func editorAuthors(triggers []Post) []string {
+	authors := make([]string, 0, len(triggers))
+	seen := make(map[string]bool, len(triggers))
+	for _, trigger := range triggers {
+		name := strings.TrimSpace(trigger.Author)
+		if name == "" {
+			continue
+		}
+		key := OverrideKey(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		authors = append(authors, name)
+	}
+	return authors
 }
 
 // reasoningOf pulls "reasoning_content" out of an OpenAI-compatible reply. It

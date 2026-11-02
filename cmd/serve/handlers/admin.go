@@ -89,8 +89,14 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	overrides, err := h.overridesFor(ctx, site.ID)
+	if err != nil {
+		h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
+	}
+
 	if err := pages.AdminPage(
 		site,
+		sortedOverrides(overrides),
 		views,
 		versions,
 		r.URL.Query().Get("msg"),
@@ -171,15 +177,11 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 		h.redirectAdmin(w, r, "the previous version is gone")
 		return
 	}
-	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
-		Css:         previous.Css,
-		Note:        previous.Note,
-		Header:      previous.Header,
-		Board:       previous.Board,
-		Footer:      previous.Footer,
-		StateSchema: normalizeStateSchema(previous.StateSchema),
-		Reason:      fmt.Sprintf("undid version %d", current.ID),
-	})
+	restored, err := h.carryVersion(
+		r.Context(),
+		previous,
+		fmt.Sprintf("undid version %d", current.ID),
+	)
 	if err != nil {
 		h.logger.Error("Failed to undo the last version", slog.Any("error", err))
 		http.Error(w, "Could not undo", http.StatusInternalServerError)
@@ -279,15 +281,11 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
-		Css:         version.Css,
-		Note:        version.Note,
-		Header:      version.Header,
-		Board:       version.Board,
-		Footer:      version.Footer,
-		StateSchema: normalizeStateSchema(version.StateSchema),
-		Reason:      fmt.Sprintf("restored version %d", id),
-	})
+	restored, err := h.carryVersion(
+		r.Context(),
+		version,
+		fmt.Sprintf("restored version %d", id),
+	)
 	if err != nil {
 		h.logger.Error("Failed to restore version", slog.Any("error", err))
 		http.Error(w, "Could not restore", http.StatusInternalServerError)
@@ -297,6 +295,65 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 	h.touchActivity()
 
 	h.redirectAdmin(w, r, fmt.Sprintf("restored version %d", id))
+}
+
+// ClearOverride gives one visitor the normal page again. It appends a version
+// rather than editing the current one, so undo still works.
+func (h *Handlers) ClearOverride(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	key := webmaster.OverrideKey(name)
+	if key == "" {
+		h.redirectAdmin(w, r, "pick an override")
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ctx := r.Context()
+	current, err := h.queries.CurrentSite(ctx)
+	if err != nil {
+		h.logger.Error("Failed to load current site", slog.Any("error", err))
+		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
+		return
+	}
+	overrides, err := h.overridesFor(ctx, current.ID)
+	if err != nil {
+		h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
+		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
+		return
+	}
+	if _, ok := overrides[key]; !ok {
+		h.redirectAdmin(w, r, "that visitor already has the normal page")
+		return
+	}
+	delete(overrides, key)
+
+	cleared, err := h.createVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         current.Css,
+		Note:        current.Note,
+		Header:      current.Header,
+		Board:       current.Board,
+		Footer:      current.Footer,
+		StateSchema: normalizeStateSchema(current.StateSchema),
+		Reason:      fmt.Sprintf("cleared the page for %s", name),
+	}, overrides)
+	if err != nil {
+		h.logger.Error("Failed to clear the visitor override", slog.Any("error", err))
+		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
+		return
+	}
+	h.setVersion(cleared.ID)
+	h.touchActivity()
+
+	h.redirectAdmin(w, r, fmt.Sprintf("%s has the normal page again", name))
 }
 
 func (h *Handlers) redirectAdmin(w http.ResponseWriter, r *http.Request, message string) {

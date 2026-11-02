@@ -43,9 +43,6 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	if !strings.Contains(res.Site.Board, PostsPlaceholder) {
 		t.Errorf("board lost the posts placeholder: %q", res.Site.Board)
 	}
-	if res.Site.Note == "" {
-		t.Error("note was not set")
-	}
 	if res.Reason == "" {
 		t.Error("done reason was not recorded")
 	}
@@ -57,13 +54,38 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	if res.Messages[0].Role != "system" || res.Messages[1].Role != "user" {
 		t.Fatalf("unexpected prefix: %q, %q", res.Messages[0].Role, res.Messages[1].Role)
 	}
-	if len(res.Messages[2].ToolCalls) != 3 {
-		t.Fatalf("first round called %d tools, want 3", len(res.Messages[2].ToolCalls))
+	if len(res.Messages[2].ToolCalls) != 2 {
+		t.Fatalf("first round called %d tools, want 2", len(res.Messages[2].ToolCalls))
 	}
 	for _, call := range res.Messages[2].ToolCalls {
 		if call.Result != "ok" {
 			t.Errorf("tool %s result = %q, want ok", call.Name, call.Result)
 		}
+	}
+}
+
+func TestMutateGivesThePosterAPrivatePage(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		nil,
+		Post{Author: "dave", Body: "curse me"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	override, ok := res.Site.Overrides["dave"]
+	if !ok {
+		t.Fatalf("no override for the poster: %+v", res.Site.Overrides)
+	}
+	if override.Footer == nil || !strings.Contains(*override.Footer, "only you") {
+		t.Errorf("override footer = %+v", override.Footer)
+	}
+	if override.CSS == nil || !strings.Contains(*override.CSS, "ff3b3b") {
+		t.Errorf("override css = %+v", override.CSS)
 	}
 }
 

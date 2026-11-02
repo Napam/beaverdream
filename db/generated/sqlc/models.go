@@ -54,3 +54,10 @@ type SiteVersion struct {
 	CreatedAt     string
 	StateSchema   string
 }
+
+type UserOverride struct {
+	VersionID int64
+	Name      string
+	NameKey   string
+	Fields    string
+}

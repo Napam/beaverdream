@@ -328,6 +328,11 @@ Shared state:
 - Use state for polls, counters, guestbooks and reaction buttons. State
   survives restores; reset clears it. Do not store HTML in it.
 
+Live state:
+- html[data-bd-state] is idle, queued, running or error. The page fires
+  beaverdream:status and beaverdream:update events. Use them for small live
+  touches; never block the page with them.
+
 Rules:
 - The board region must render every post you were given, newest last. Never
   invent a post and never drop one.

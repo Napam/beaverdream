@@ -558,6 +558,14 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 		t.Fatalf("create version: %v", err)
 	}
 
+	page := httptest.NewRecorder()
+	pageReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	pageReq.AddCookie(identityCookie("dave"))
+	h.Index(page, pageReq)
+	if !strings.Contains(page.Body.String(), `id="bd-state"`) {
+		t.Error("board page does not carry the shared-state tag")
+	}
+
 	read := httptest.NewRecorder()
 	h.State(read, httptest.NewRequest(http.MethodGet, "/x/state", nil))
 	if read.Code != http.StatusOK {

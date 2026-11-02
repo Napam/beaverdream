@@ -108,6 +108,12 @@ func (h *Handlers) AdminStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	version, pending, running, lastError := h.liveSnapshot()
+	if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
+		if id, ok := raw.(int64); ok && id > 0 && id != version {
+			version = id
+			h.setVersion(id)
+		}
+	}
 	if version == 0 {
 		var err error
 		version, err = h.currentVersion(r.Context())

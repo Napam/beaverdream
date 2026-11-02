@@ -186,6 +186,26 @@ func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 	}
 }
 
+func TestSiteDocEmbedsSharedStateSafely(t *testing.T) {
+	doc := SiteDoc(
+		Site{
+			Board:       PostsPlaceholder,
+			StateSchema: `{"votes":{"op":"counter"}}`,
+			State:       map[string]string{"votes": `{"html":"<b>x</b>"}`},
+		},
+		nil,
+	)
+	if !strings.Contains(doc, `id="bd-state"`) {
+		t.Fatal("shared state tag is missing")
+	}
+	if strings.Contains(doc, "<b>x</b>") {
+		t.Fatal("shared state was embedded as raw HTML")
+	}
+	if !strings.Contains(doc, `\u003cb\u003e`) {
+		t.Errorf("state is not JSON-escaped: %s", doc)
+	}
+}
+
 func TestSiteDocKeepsPostsWhenPlaceholderMissing(t *testing.T) {
 	doc := SiteDoc(
 		Site{Board: "<main>no placeholder here</main>"},

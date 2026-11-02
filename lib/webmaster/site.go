@@ -262,7 +262,7 @@ const liveScript = `<script>
     fetchPage('/version?have=' + version, { cache: 'no-store' })
       .then(function (r) { return r.json() })
       .then(function (d) {
-        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : 'idle')
+        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : (d.error ? 'error' : 'idle'))
         document.documentElement.setAttribute('data-bd-state', state)
         document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
         if (String(d.version) === version) return

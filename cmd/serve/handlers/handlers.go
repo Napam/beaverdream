@@ -67,6 +67,7 @@ type Handlers struct {
 	wake         chan struct{}
 	stop         chan struct{}
 	closeOnce    sync.Once
+	workerWG     sync.WaitGroup
 }
 
 // New wires the handlers.
@@ -91,14 +92,25 @@ func New(
 	if site, err := queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID
 	}
-	go h.worker()
-	go h.healer()
+	h.workerWG.Add(2)
+	go func() {
+		defer h.workerWG.Done()
+		h.worker()
+	}()
+	go func() {
+		defer h.workerWG.Done()
+		h.healer()
+	}()
 	return h
 }
 
-// Close stops the background worker. Tests call it; the server can too.
+// Close stops the background workers and waits for them to finish. Tests call
+// it; the server can too.
 func (h *Handlers) Close() {
-	h.closeOnce.Do(func() { close(h.stop) })
+	h.closeOnce.Do(func() {
+		close(h.stop)
+		h.workerWG.Wait()
+	})
 }
 
 func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
@@ -117,17 +129,21 @@ func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
 // it is rendered or sent to the model.
 func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webmaster.Site {
 	site := siteFromRow(row)
+	schema := parseStateSchema(row.StateSchema)
+	if len(schema) == 0 {
+		return site
+	}
+
 	rows, err := h.queries.ListSiteState(ctx)
 	if err != nil {
 		h.logger.Error("Failed to load shared state", slog.Any("error", err))
 		return site
 	}
-	if len(rows) == 0 {
-		return site
-	}
 	site.State = make(map[string]string, len(rows))
 	for _, state := range rows {
-		site.State[state.Key] = state.Value
+		if _, declared := schema[state.Key]; declared {
+			site.State[state.Key] = state.Value
+		}
 	}
 	return site
 }

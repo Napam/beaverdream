@@ -55,13 +55,13 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not load the site", http.StatusInternalServerError)
 		return
 	}
-	runs, err := h.queries.ListMutationRuns(ctx, 50)
+	runs, err := h.queries.ListMutationRuns(ctx, 20)
 	if err != nil {
 		h.logger.Error("Failed to list mutation runs", slog.Any("error", err))
 		http.Error(w, "Could not load history", http.StatusInternalServerError)
 		return
 	}
-	versions, err := h.queries.ListSiteVersions(ctx, 20)
+	versions, err := h.queries.ListSiteVersions(ctx, 12)
 	if err != nil {
 		h.logger.Error("Failed to list versions", slog.Any("error", err))
 		http.Error(w, "Could not load versions", http.StatusInternalServerError)
@@ -69,15 +69,24 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	views := make([]pages.RunView, 0, len(runs))
-	for _, run := range runs {
+	for i, run := range runs {
+		// The newest conversations are the ones worth opening. Older runs
+		// keep their summaries so the page does not carry every prompt.
+		loaded := i < 8
 		var messages []webmaster.Message
-		if err := json.Unmarshal([]byte(run.Messages), &messages); err != nil {
-			h.logger.Warn("Stored mutation messages are not valid JSON",
-				slog.Int64("run_id", run.ID),
-				slog.Any("error", err),
-			)
+		if loaded {
+			if err := json.Unmarshal([]byte(run.Messages), &messages); err != nil {
+				h.logger.Warn("Stored mutation messages are not valid JSON",
+					slog.Int64("run_id", run.ID),
+					slog.Any("error", err),
+				)
+			}
 		}
-		views = append(views, pages.RunView{Run: run, Messages: messages})
+		views = append(views, pages.RunView{
+			Run:            run,
+			Messages:       messages,
+			MessagesLoaded: loaded,
+		})
 	}
 
 	if err := pages.AdminPage(
@@ -89,6 +98,89 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 	).Render(ctx, w); err != nil {
 		h.logger.Error("Failed to render admin page", slog.Any("error", err))
 	}
+}
+
+// AdminStatus is the small live card on the admin page. It reports the same
+// state the board sees, plus today's mutation count against the cap.
+func (h *Handlers) AdminStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+
+	version, pending, running, lastError := h.liveSnapshot()
+	if version == 0 {
+		var err error
+		version, err = h.currentVersion(r.Context())
+		if err != nil {
+			http.Error(w, "unknown", http.StatusInternalServerError)
+			return
+		}
+	}
+	today, err := h.queries.CountMutationsSince(r.Context(), utcDayStart())
+	if err != nil {
+		h.logger.Error("Failed to count mutations", slog.Any("error", err))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Version int64     `json:"version"`
+		Pending int       `json:"pending"`
+		Running *runState `json:"running,omitempty"`
+		Error   string    `json:"error,omitempty"`
+		Today   int64     `json:"today"`
+		Cap     int       `json:"cap"`
+	}{
+		Version: version,
+		Pending: pending,
+		Running: running,
+		Error:   lastError,
+		Today:   today,
+		Cap:     h.cfg.MaxMutationsPerDay,
+	})
+}
+
+// UndoLast copies the version before the current one forward. It is the
+// one-click answer to a rewrite that went too far.
+func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	current, err := h.queries.CurrentSite(r.Context())
+	if err != nil {
+		h.logger.Error("Failed to load current site", slog.Any("error", err))
+		http.Error(w, "Could not undo", http.StatusInternalServerError)
+		return
+	}
+	if current.ID <= 1 {
+		h.redirectAdmin(w, r, "nothing to undo")
+		return
+	}
+
+	previous, err := h.queries.GetSiteVersion(r.Context(), current.ID-1)
+	if err != nil {
+		h.redirectAdmin(w, r, "the previous version is gone")
+		return
+	}
+	restored, err := h.queries.CreateSiteVersion(r.Context(), sqlc.CreateSiteVersionParams{
+		Css:    previous.Css,
+		Note:   previous.Note,
+		Header: previous.Header,
+		Board:  previous.Board,
+		Footer: previous.Footer,
+		Reason: fmt.Sprintf("undid version %d", current.ID),
+	})
+	if err != nil {
+		h.logger.Error("Failed to undo the last version", slog.Any("error", err))
+		http.Error(w, "Could not undo", http.StatusInternalServerError)
+		return
+	}
+	h.setVersion(restored.ID)
+
+	h.redirectAdmin(w, r, fmt.Sprintf("undid version %d", current.ID))
 }
 
 // AdminMutate sends a free-form instruction straight to the model. It can also

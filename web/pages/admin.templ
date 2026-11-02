@@ -11,8 +11,9 @@ import (
 // RunView pairs a stored run with its parsed conversation, so the admin
 // template never touches JSON.
 type RunView struct {
-	Run      sqlc.MutationRun
-	Messages []webmaster.Message
+	Run            sqlc.MutationRun
+	Messages       []webmaster.Message
+	MessagesLoaded bool
 }
 
 const (
@@ -62,6 +63,65 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 				if flash != "" {
 					<p class="rounded-sm border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{ flash }</p>
 				}
+				<section class={ adminCard } data-admin-status="1" data-token={ token }>
+					<p class={ adminLabel }>live</p>
+					<div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 dark:text-neutral-400">
+						<span>state <span data-live-state class="font-mono text-gray-900 dark:text-neutral-100">idle</span></span>
+						<span>version <span data-live-version class="font-mono text-gray-900 dark:text-neutral-100">v{ strconv.FormatInt(site.ID, 10) }</span></span>
+						<span>queued <span data-live-pending class="font-mono text-gray-900 dark:text-neutral-100">0</span></span>
+						<span>today <span data-live-today class="font-mono text-gray-900 dark:text-neutral-100">…</span></span>
+					</div>
+					<p data-live-detail class="mt-1 text-xs text-gray-500 dark:text-neutral-400">waiting for a post</p>
+					<p data-live-error class="mt-1 text-xs text-red-600 dark:text-red-400"></p>
+					<script>
+						(function () {
+							var card = document.querySelector("[data-admin-status]");
+							if (!card) return;
+							var token = card.getAttribute("data-token");
+							var state = card.querySelector("[data-live-state]");
+							var version = card.querySelector("[data-live-version]");
+							var pending = card.querySelector("[data-live-pending]");
+							var today = card.querySelector("[data-live-today]");
+							var detail = card.querySelector("[data-live-detail]");
+							var error = card.querySelector("[data-live-error]");
+							function tick() {
+								if (document.hidden) return;
+								fetch("/admin/status?token=" + encodeURIComponent(token), {
+									cache: "no-store",
+								})
+									.then(function (r) {
+										return r.json();
+									})
+									.then(function (d) {
+										state.textContent = d.running
+											? "running"
+											: d.pending > 0
+												? "queued"
+												: "idle";
+										version.textContent = "v" + d.version;
+										pending.textContent = String(d.pending || 0);
+										today.textContent =
+											String(d.today) + (d.cap > 0 ? " / " + d.cap : "");
+										if (d.running) {
+											detail.textContent =
+												d.running.kind +
+												" by " +
+												(d.running.authors || []).join(", ") +
+												" (round " +
+												d.running.round +
+												")";
+										} else {
+											detail.textContent = "waiting for a post";
+										}
+										error.textContent = d.error || "";
+									})
+									.catch(function () {});
+							}
+							setInterval(tick, 2000);
+							tick();
+						})();
+					</script>
+				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>current version</p>
 					<p class="text-sm">
@@ -73,6 +133,13 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 						<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
 						<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nNOTE:\n" + site.Note }</pre>
 					</details>
+					<form method="post" action="/admin/undo" class="mt-3">
+						<input type="hidden" name="token" value={ token }/>
+						<button
+							type="submit"
+							class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+						>undo last change</button>
+					</form>
 				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>talk to the webmaster</p>
@@ -180,8 +247,12 @@ templ runCard(view RunView) {
 			if view.Run.ErrorText != "" {
 				<pre class={ adminPre + " text-red-600 dark:text-red-400" }>{ view.Run.ErrorText }</pre>
 			}
-			for _, message := range view.Messages {
-				@messageBlock(message)
+			if view.MessagesLoaded {
+				for _, message := range view.Messages {
+					@messageBlock(message)
+				}
+			} else {
+				<p class="text-xs text-gray-400 dark:text-neutral-600">conversation not loaded for older runs</p>
 			}
 		</div>
 	</details>

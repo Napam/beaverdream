@@ -518,6 +518,91 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	}
 }
 
+func TestAdminStatusReportsLiveState(t *testing.T) {
+	h, _ := setup(t)
+
+	rec := httptest.NewRecorder()
+	h.AdminStatus(
+		rec,
+		httptest.NewRequest(http.MethodGet, "/admin/status?token="+testAdminToken, nil),
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"version":1`, `"pending":0`, `"today":0`, `"cap":0`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status response is missing %q: %s", want, body)
+		}
+	}
+
+	open := httptest.NewRecorder()
+	h.AdminStatus(open, httptest.NewRequest(http.MethodGet, "/admin/status", nil))
+	if open.Code != http.StatusNotFound {
+		t.Errorf("unauthenticated status = %d, want 404", open.Code)
+	}
+}
+
+func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("mutate status = %d", rec.Code)
+	}
+	changed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if changed.ID <= seed.ID {
+		t.Fatalf("mutation did not create a version: %d", changed.ID)
+	}
+
+	undo := postForm(t, h.UndoLast, "/admin/undo?token="+testAdminToken, url.Values{})
+	if undo.Code != http.StatusSeeOther {
+		t.Fatalf("undo status = %d", undo.Code)
+	}
+	restored, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if restored.ID <= changed.ID {
+		t.Fatalf("undo did not append a version: %d", restored.ID)
+	}
+	if restored.Css != seed.Css || restored.Note != seed.Note {
+		t.Errorf("undo did not restore the previous version: %+v", restored)
+	}
+}
+
+func TestUndoLastAtTheSeedDoesNothing(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	before, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	rec := postForm(t, h.UndoLast, "/admin/undo?token="+testAdminToken, url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	after, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if after.ID != before.ID {
+		t.Errorf("undo at the seed created version %d", after.ID)
+	}
+}
+
 func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()

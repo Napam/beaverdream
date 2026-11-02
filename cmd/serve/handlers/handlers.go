@@ -435,13 +435,16 @@ func (h *Handlers) overDailyCap(ctx context.Context) bool {
 	if h.cfg.MaxMutationsPerDay <= 0 {
 		return false
 	}
-	start := time.Now().UTC().Format("2006-01-02T00:00:00.000Z")
-	count, err := h.queries.CountMutationsSince(ctx, start)
+	count, err := h.queries.CountMutationsSince(ctx, utcDayStart())
 	if err != nil {
 		h.logger.Error("Failed to count mutations", slog.Any("error", err))
 		return false
 	}
 	return count >= int64(h.cfg.MaxMutationsPerDay)
+}
+
+func utcDayStart() string {
+	return time.Now().UTC().Format("2006-01-02T00:00:00.000Z")
 }
 
 // mutationContext detaches the work from the request, so a refresh does not

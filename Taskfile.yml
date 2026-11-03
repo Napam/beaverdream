@@ -19,11 +19,16 @@ tasks:
 
   init.hooks:
     desc: Symlink .hooks as the git hooks directory
+    # .git is a file inside a worktree, so the hooks live in the common dir,
+    # which every worktree shares.
+    vars:
+      GIT_COMMON:
+        sh: git rev-parse --git-common-dir
     status:
-      - test "$(readlink .git/hooks)" = "../.hooks"
+      - test "$(readlink "{{.GIT_COMMON}}/hooks")" = "../.hooks"
     cmds:
-      - rm -rf .git/hooks
-      - ln -s ../.hooks .git/hooks
+      - rm -rf "{{.GIT_COMMON}}/hooks"
+      - ln -s ../.hooks "{{.GIT_COMMON}}/hooks"
 
   init.js:
     desc: Install js dependencies into web/node_modules

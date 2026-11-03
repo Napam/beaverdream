@@ -395,6 +395,20 @@ func (h *Handlers) mutateHeld(
 		status = "error"
 	}
 
+	// A turn that ran out of rounds without done is the one case where the
+	// reason line is the only clue, so say what the last round was doing.
+	if mutErr == nil && !res.Done {
+		h.logger.Warn("Mutation ended without done",
+			slog.Int64("turn_id", turn.ID),
+			slog.Int("rounds", len(res.Rounds)),
+			slog.Int("max_rounds", h.mutator.MaxRounds()),
+			slog.String("status", status),
+			slog.String("reason", res.Reason),
+			slog.Bool("changed", res.Changed),
+			slog.String("last_round", lastRoundLine(res)),
+		)
+	}
+
 	// Notes survive a turn that changed nothing, and a failed turn: they are
 	// the webmaster's memory, not part of the page.
 	notes := room.Notes
@@ -525,11 +539,14 @@ func (h *Handlers) mutateHeld(
 // last round after earlier rounds is a round spent on one sentence, which the
 // prompt asks the model to avoid.
 func roundAttrs(res webmaster.Result) []any {
-	var prompt, cached, rejected int64
+	var prompt, cached, rejected, truncated int64
 	for _, round := range res.Rounds {
 		prompt += round.PromptTokens
 		cached += round.CachedTokens
 		rejected += int64(round.Rejected)
+		if round.FinishReason == "length" {
+			truncated++
+		}
 	}
 	doneOnly := false
 	if n := len(res.Rounds); n > 1 {
@@ -543,11 +560,22 @@ func roundAttrs(res webmaster.Result) []any {
 	return []any{
 		slog.Int("rounds", len(res.Rounds)),
 		slog.Int("done_round", res.DoneRound),
+		slog.Bool("done", res.Done),
 		slog.Bool("last_round_done_only", doneOnly),
 		slog.Int64("rejected", rejected),
+		slog.Int64("truncated_rounds", truncated),
 		slog.Int64("prompt_tokens", prompt),
 		slog.Float64("cached_ratio", cacheRatio),
 	}
+}
+
+// lastRoundLine names what the final round called and what came back, so a
+// turn that ran out of rounds says what the model was busy with.
+func lastRoundLine(res webmaster.Result) string {
+	if len(res.Rounds) == 0 {
+		return ""
+	}
+	return strings.Join(res.Rounds[len(res.Rounds)-1].Outcomes, " | ")
 }
 
 // triggerIDs is the set of posts a turn answers, which the log skips.
@@ -924,15 +952,23 @@ func (h *Handlers) setRunningRound(round int) {
 }
 
 func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
-	h.logger.Info("Mutation round finished",
+	attrs := []any{
 		slog.Int("round", stats.Round),
 		slog.Int64("ms", stats.Elapsed.Milliseconds()),
 		slog.Int64("prompt_tokens", stats.PromptTokens),
 		slog.Int64("cached_tokens", stats.CachedTokens),
 		slog.Int64("completion_tokens", stats.CompletionTokens),
+		slog.Int("reply_runes", stats.ReplyRunes),
+		slog.Int("reasoning_runes", stats.ReasoningRunes),
 		slog.String("tools", strings.Join(stats.Tools, ",")),
 		slog.Int("rejected", stats.Rejected),
-	)
+		slog.String("finish_reason", stats.FinishReason),
+		slog.String("outcomes", strings.Join(stats.Outcomes, " | ")),
+	}
+	if stats.Deferred != "" {
+		attrs = append(attrs, slog.String("done_deferred", stats.Deferred))
+	}
+	h.logger.Info("Mutation round finished", attrs...)
 }
 
 func (h *Handlers) setVersion(version int64) {

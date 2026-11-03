@@ -81,6 +81,12 @@ func completions(w http.ResponseWriter, r *http.Request) {
 		writeTextCompletion(w, "the room changed look twice. dave and kit asked for it.")
 		return
 	}
+	// mockprose answers in words with no tool call, the shape a model takes
+	// when it explains instead of acting. The turn ends there.
+	if strings.Contains(joined, "mockprose") {
+		writeTextCompletion(w, "i would restyle this, but i have nothing in hand.")
+		return
+	}
 
 	calls := decide(joined, hasToolResult(req.Messages))
 	if req.Stream != nil && *req.Stream {

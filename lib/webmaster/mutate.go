@@ -97,6 +97,19 @@ type RoundStats struct {
 	CompletionTokens int64         `json:"completion_tokens"`
 	Tools            []string      `json:"tools,omitempty"`
 	Rejected         int           `json:"rejected,omitempty"`
+	// ReplyRunes and ReasoningRunes are the size of what the model said, so a
+	// log can tell a model that thought long from one that wrote a lot.
+	ReplyRunes     int `json:"reply_runes,omitempty"`
+	ReasoningRunes int `json:"reasoning_runes,omitempty"`
+	// FinishReason is the completion's own word for why it stopped: "length"
+	// means it ran into the output cap, "stop" means it chose to stop.
+	FinishReason string `json:"finish_reason,omitempty"`
+	// Outcomes is one clipped line per tool call, in order, so a log shows
+	// what each call returned without carrying the full result.
+	Outcomes []string `json:"outcomes,omitempty"`
+	// Deferred is the reason a done call was pushed back into another round.
+	// Empty when the round was not paused.
+	Deferred string `json:"deferred,omitempty"`
 }
 
 // Mutate asks the model to rewrite the site in response to one trigger. The
@@ -138,6 +151,12 @@ func (m *Mutator) MutatePosts(
 
 	hiddenWarned := false
 	journalWarned := false
+	// Where the loop stopped when it did not stop on done. A model that
+	// answers without a tool call ends the turn in one round no matter how
+	// large the budget is, so the reason has to name the round, not the budget.
+	proseRound := 0
+	truncatedRound := 0
+	emptyRound := 0
 	for round := 0; round < m.maxRounds; round++ {
 		if m.OnRound != nil {
 			m.OnRound(round + 1)
@@ -161,17 +180,26 @@ func (m *Mutator) MutatePosts(
 		stats.CachedTokens = cachedTokens(resp.Usage)
 		stats.CompletionTokens = resp.Usage.CompletionTokens
 		if len(resp.Choices) == 0 {
+			emptyRound = round + 1
 			m.reportRound(&res, stats)
 			break
 		}
 
 		reply := resp.Choices[0].Message
+		stats.FinishReason = resp.Choices[0].FinishReason
+		reasoning := reasoningOf(reply)
 		entry := Message{
 			Role:      "assistant",
 			Content:   reply.Content,
-			Reasoning: reasoningOf(reply),
+			Reasoning: reasoning,
 		}
+		stats.ReplyRunes = utf8.RuneCountInString(strings.TrimSpace(reply.Content))
+		stats.ReasoningRunes = utf8.RuneCountInString(reasoning)
 		if len(reply.ToolCalls) == 0 {
+			proseRound = round + 1
+			if stats.FinishReason == "length" {
+				truncatedRound = round + 1
+			}
 			m.reportRound(&res, stats)
 			entry.Stats = &stats
 			res.Messages = append(res.Messages, entry)
@@ -196,7 +224,6 @@ func (m *Mutator) MutatePosts(
 			stats.Tools = append(stats.Tools, record.Name)
 		}
 		stats.Rejected = ed.rejected
-		m.reportRound(&res, stats)
 		entry.Stats = &stats
 
 		// A response that calls done next to a rejected call would end the
@@ -232,12 +259,17 @@ func (m *Mutator) MutatePosts(
 		}
 		if deferred != "" {
 			ed.done = false
+			stats.Deferred = deferred
 			for i := range entry.ToolCalls {
 				if entry.ToolCalls[i].Name == "done" {
 					entry.ToolCalls[i].Result = deferred
 				}
 			}
 		}
+		for _, call := range entry.ToolCalls {
+			stats.Outcomes = append(stats.Outcomes, outcomeLine(call))
+		}
+		m.reportRound(&res, stats)
 
 		res.Messages = append(res.Messages, entry)
 		messages = append(
@@ -264,6 +296,14 @@ func (m *Mutator) MutatePosts(
 		res.Changes = DescribeChanges(current, ed.site)
 	}
 	res.Changed = res.Changes != ""
+	// A reply that ran into the output cap is usually half a thought, so the
+	// cap is worth naming even when some prose made it out.
+	if res.Reason == "" && truncatedRound > 0 {
+		res.Reason = fmt.Sprintf(
+			"the model hit the %d token output cap in round %d without calling done",
+			maxOutputTokens, truncatedRound,
+		)
+	}
 	if res.Reason == "" {
 		// A prose reply is the model trying to talk. Keep the last thing it
 		// said rather than a mechanical error line.
@@ -276,7 +316,14 @@ func (m *Mutator) MutatePosts(
 		}
 	}
 	if res.Reason == "" {
-		res.Reason = fmt.Sprintf("no done call after %d rounds", m.maxRounds)
+		switch {
+		case proseRound > 0:
+			res.Reason = fmt.Sprintf("no tool call in round %d", proseRound)
+		case emptyRound > 0:
+			res.Reason = fmt.Sprintf("the model returned no choices in round %d", emptyRound)
+		default:
+			res.Reason = fmt.Sprintf("no done call after %d rounds", len(res.Rounds))
+		}
 	}
 	return res, nil
 }
@@ -310,6 +357,16 @@ func (m *Mutator) reportRound(res *Result, stats RoundStats) {
 	if m.OnRoundDone != nil {
 		m.OnRoundDone(stats)
 	}
+}
+
+// MaxRounds is the round budget this Mutator was built with.
+func (m *Mutator) MaxRounds() int { return m.maxRounds }
+
+// outcomeLine is one tool call as a single log line: the name, then what the
+// editor said back, flattened and clipped so the log stays readable.
+func outcomeLine(call ToolCall) string {
+	result := strings.Join(strings.Fields(call.Result), " ")
+	return call.Name + ": " + clip(result, 120)
 }
 
 // cachedTokens reads the prompt cache hits. OpenAI reports them under

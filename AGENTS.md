@@ -202,12 +202,18 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.
 - Each model round logs `Mutation round finished` with its time, prompt,
-  cached and completion tokens, the tools it called and how many were
-  rejected. The same stats are stored on each assistant message in
-  `turns.messages`. `Mutation finished` sums the turn: rounds, the done round,
-  a done-only last round, rejections, the cached ratio, prompt section sizes
-  in runes, compaction time, and for posts the queue wait and the time from
-  post to version.
+  cached and completion tokens, the size of the reply and the reasoning, its
+  `finish_reason`, the tools it called, how many were rejected, one clipped
+  `outcome` line per call, and the `done_deferred` reason when a done was
+  pushed back. The same stats are stored on each assistant message in
+  `turns.messages`. `Mutation finished` sums
+  the turn: rounds, the done round, whether done was called at all, a done-only
+  last round, rejections, truncated rounds, the cached ratio, prompt section
+  sizes in runes, compaction time, and for posts the queue wait and the time
+  from post to version. A turn that runs out of rounds without done logs
+  `Mutation ended without done` with the round budget, the reason and the last
+  round's outcomes. The reason names what actually stopped the loop: the output
+  cap, a round with no tool call, an empty choice list, or the round budget.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
   supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
   usually via `.env` (gitignored, `.env.example` is the template). Real

@@ -239,6 +239,13 @@ func TestMutateRecordsRoundStats(t *testing.T) {
 		strings.Join(first.Tools, ",") != "edit,done" {
 		t.Fatalf("first round stats = %+v", first)
 	}
+	if first.Deferred != doneDeferred {
+		t.Errorf("deferred = %q, want the done reason", first.Deferred)
+	}
+	if len(first.Outcomes) != 2 || !strings.HasPrefix(first.Outcomes[0], "edit: rejected:") ||
+		!strings.HasPrefix(first.Outcomes[1], "done: not finished:") {
+		t.Errorf("outcomes = %q", first.Outcomes)
+	}
 	if res.Messages[3].Stats == nil || res.Messages[3].Stats.Round != 2 {
 		t.Fatalf("second round stats = %+v", res.Messages[3].Stats)
 	}
@@ -314,6 +321,66 @@ func TestMutateRequiresAToolCall(t *testing.T) {
 		if choice != "required" {
 			t.Errorf("round %d tool_choice = %v, want required", i+1, choice)
 		}
+	}
+}
+
+// A model that answers in words with no tool call ends the turn in one round,
+// whatever the budget says. The reason must name that round, not the budget.
+func TestMutateStopsOnAProseReply(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+	m.maxRounds = 16384
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockprose"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(res.Rounds) != 1 || res.Done {
+		t.Fatalf("rounds %d, done %v", len(res.Rounds), res.Done)
+	}
+	if strings.Contains(res.Reason, "16384") {
+		t.Errorf("reason names the budget, not the round: %q", res.Reason)
+	}
+	if res.Reason != "i would restyle this, but i have nothing in hand." {
+		t.Errorf("reason = %q, want the prose", res.Reason)
+	}
+	if res.Rounds[0].FinishReason != "stop" {
+		t.Errorf("finish reason = %q", res.Rounds[0].FinishReason)
+	}
+}
+
+// A reply that stopped at the output cap never got far enough to call a tool.
+// The reason says so instead of blaming the round budget.
+func TestMutateNamesTheOutputCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"cap","object":"chat.completion","model":"m",` +
+			`"choices":[{"index":0,"message":{"role":"assistant","content":""},` +
+			`"finish_reason":"length"}],` +
+			`"usage":{"prompt_tokens":10,"completion_tokens":8000,"total_tokens":8010}}`))
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 5, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "hello"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(res.Rounds) != 1 {
+		t.Fatalf("rounds = %d, want 1", len(res.Rounds))
+	}
+	if !strings.Contains(res.Reason, "output cap in round 1") {
+		t.Errorf("reason = %q, want the cap named", res.Reason)
 	}
 }
 

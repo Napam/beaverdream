@@ -239,8 +239,9 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   cap, a round with no tool call, an empty choice list, or the round budget.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
   supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
-  usually via `.env` (gitignored, `.env.example` is the template). Real
-  environment variables win over `.env`. OpenCode Go also gets a generated
+  usually via `.env` (gitignored, `.env.example` is the template, loaded by the
+  Taskfile). The server reads only the process environment; shell variables win
+  over Taskfile values, which win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
   models take `OPENAI_REASONING_EFFORT`; the dev task uses
   `deepseek-v4.1-flash` with `low`.

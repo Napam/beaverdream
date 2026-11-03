@@ -1,5 +1,9 @@
 version: "3"
 
+# The server reads only the process environment. The Taskfile is the invoker,
+# so it loads .env for every task. Shell variables and Taskfile env win over it.
+dotenv: ['.env']
+
 env:
   HOST: "0.0.0.0"
   PORT: "6930"

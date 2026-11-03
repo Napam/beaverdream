@@ -1,7 +1,6 @@
 package env
 
 import (
-	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -24,7 +23,7 @@ type Env = struct {
 	// 6701 instead.
 	OpenAIBaseURL string
 	// API key for the model provider. Empty means no Authorization header.
-	// Usually supplied by .env.
+	// Usually supplied by the invoking task or shell.
 	OpenAIAPIKey string
 	// Stable session id sent as x-opencode-session. OpenCode Go wants one per
 	// conversation; empty means the server generates one at startup.
@@ -51,10 +50,8 @@ type Env = struct {
 var Vars *Env
 
 func init() {
-	// .env is optional. Variables already in the environment win, so shell
-	// exports and Taskfile env override the file.
-	_ = LoadDotEnv(".env")
-
+	// The process environment is the only input. The Taskfile loads .env
+	// before it runs the server, so a binary started by hand does not read it.
 	migrate, _ := strconv.ParseBool(os.Getenv("DB_MIGRATE_ON_START"))
 	Vars = &Env{
 		DbMigrateOnStart:      migrate,
@@ -76,55 +73,10 @@ func init() {
 	}
 }
 
-// loadAPIKey reads OPENAI_API_KEY, which .env can supply. The key never
-// appears in logs.
+// loadAPIKey reads OPENAI_API_KEY, which the task or shell can supply. The key
+// never appears in logs.
 func loadAPIKey() string {
 	return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-}
-
-// LoadDotEnv applies KEY=value lines from path to the process environment.
-// Variables already set win, so a real environment overrides the file. A
-// missing file is not an error. Blank lines, comments, an optional "export "
-// prefix, and single or double quotes are handled; everything else is left
-// alone.
-func LoadDotEnv(path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		if len(value) >= 2 {
-			first, last := value[0], value[len(value)-1]
-			if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
-				value = value[1 : len(value)-1]
-			}
-		}
-
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-		_ = os.Setenv(key, value)
-	}
-	return nil
 }
 
 func GetEnv(name string, fallback string) string {

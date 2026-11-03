@@ -136,17 +136,26 @@ embedded.
 
 ## Using a real model
 
-Point the server at any OpenAI-compatible chat completions endpoint. Copy the
-example file, fill in the key, and run the binary:
+Point the server at any OpenAI-compatible chat completions endpoint. The
+Taskfile loads `.env` for every task, so copy the example file, fill in the
+key, and start the dev server:
 
 ```sh
 cp .env.example .env
 $EDITOR .env
+task dev.deepseek
+```
+
+The server itself reads only the process environment. If you run the binary
+directly, export the file yourself first:
+
+```sh
+set -a; . ./.env; set +a
 ./bin/app
 ```
 
-`.env` is loaded at startup. Variables already set in the shell win, so you can
-still override any of them on the command line:
+Under `task`, shell variables win over Taskfile values, which win over `.env`,
+so you can still override any of them:
 
 ```sh
 PORT=6940 DB_PATH=./tmp/real.db DB_MIGRATE_ON_START=true ./bin/app
@@ -195,8 +204,10 @@ panel in place over the same Datastar stream.
 
 ## Configuration
 
-`.env` in the working directory is loaded at startup, and real environment
-variables win over it. `.env` is gitignored; `.env.example` is the template.
+The Taskfile loads `.env` into the environment for every task. The server only
+reads the process environment, so `./bin/app` by itself does not load `.env`.
+Under `task`, shell variables win over Taskfile values, which win over `.env`.
+`.env` is gitignored; `.env.example` is the template.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -205,7 +216,7 @@ variables win over it. `.env` is gitignored; `.env.example` is the template.
 | `DB_MIGRATE_ON_START` | `false` | run goose migrations at startup |
 | `OPENAI_BASE_URL` | `http://localhost:6700` | chat completions base URL |
 | `OPENAI_MODEL` | `mock-model` | model id |
-| `OPENAI_API_KEY` | empty | provider key, usually from `.env` |
+| `OPENAI_API_KEY` | empty | provider key, usually from `.env` via the Taskfile |
 | `OPENAI_SESSION_ID` | generated | `x-opencode-session` value for `opencode.ai` |
 | `OPENAI_REASONING_EFFORT` | empty | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |

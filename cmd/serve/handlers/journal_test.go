@@ -354,36 +354,6 @@ func TestGameRequestShipsAWorkingFeed(t *testing.T) {
 	}
 }
 
-// A version whose only change is the journal schema must reload: the page
-// carries the key list and the match numbers, so swapping CSS alone would
-// leave the runtime with a stale config.
-func TestVersionReloadsWhenOnlyTheJournalChanges(t *testing.T) {
-	h, queries := setup(t)
-	ctx := context.Background()
-
-	seed, err := queries.CurrentSite(ctx)
-	if err != nil {
-		t.Fatalf("current site: %v", err)
-	}
-	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:           seed.Css,
-		Note:          seed.Note,
-		Header:        seed.Header,
-		Board:         seed.Board,
-		Footer:        seed.Footer,
-		StateSchema:   seed.StateSchema,
-		JournalSchema: `{"moves":{"max":10,"rules":1}}`,
-		Reason:        "journal only",
-	}); err != nil {
-		t.Fatalf("create version: %v", err)
-	}
-
-	resp := getVersion(t, h, "/version?have=1")
-	if resp.Swap != "reload" {
-		t.Fatalf("swap = %q, want reload", resp.Swap)
-	}
-}
-
 // A tab still running a replaced reducer sends the old rules number. Its write
 // is refused before it can land under rules it does not follow.
 func TestJournalRefusesStaleRules(t *testing.T) {
@@ -562,7 +532,7 @@ func TestHealKeepsTheJournalWhenTheWriteFails(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'no versions'); END`); err != nil {
 		t.Fatalf("create trigger: %v", err)
 	}
-	postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
 	if count, err := queries.CountJournal(ctx); err != nil || count != 1 {
 		t.Fatalf("journal rows after a failed heal = %d (%v), want 1", count, err)
 	}
@@ -573,7 +543,7 @@ func TestHealKeepsTheJournalWhenTheWriteFails(t *testing.T) {
 	if err := h.ExecForTest(ctx, `DROP TRIGGER no_versions`); err != nil {
 		t.Fatalf("drop trigger: %v", err)
 	}
-	postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
 	if count, err := queries.CountJournal(ctx); err != nil || count != 0 {
 		t.Fatalf("journal rows after a heal = %d (%v), want 0", count, err)
 	}

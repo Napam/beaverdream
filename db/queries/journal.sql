@@ -19,6 +19,26 @@ ORDER BY
 LIMIT
   ?;
 
+-- name: ListJournalAfter :many
+-- Rows of every key after a cursor, for the live stream. One cursor covers
+-- every key, because ids are global.
+SELECT
+  *
+FROM
+  journal
+WHERE
+  id > ?
+ORDER BY
+  id ASC
+LIMIT
+  ?;
+
+-- name: MaxJournalID :one
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  journal;
+
 -- name: JournalLatest :one
 SELECT
   CAST(COALESCE(MAX(match), 0) AS INTEGER) AS current_match,

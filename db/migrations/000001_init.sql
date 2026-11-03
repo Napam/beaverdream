@@ -118,7 +118,9 @@ CREATE TABLE journal (
 CREATE INDEX journal_key_id ON journal (key, id);
 
 -- The seed is a plain light board: a title, a simple post form, and an empty
--- thread. The model takes it from here.
+-- thread. The model takes it from here. The form posts through Datastar, so
+-- the page stays put and the post arrives over the live stream; without
+-- Datastar it is still a plain form post.
 INSERT INTO
   site_versions (css, note, header, board, footer)
 VALUES
@@ -127,7 +129,7 @@ VALUES
     'welcome. be nice to each other.',
     '<h1>beaverdream</h1><p class="tagline">a small message board</p>',
     '<main>' ||
-      '<form class="postbox" method="post" action="/posts">' ||
+      '<form class="postbox" method="post" action="/posts" data-on:submit="@post(''/posts'', {contentType: ''form''}); el.reset()">' ||
       '<p class="postbox-title">post a message</p>' ||
       '<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>' ||
       '<div class="postbox-actions"><span>posting as {{name}}</span>' ||

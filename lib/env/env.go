@@ -41,6 +41,11 @@ type Env = struct {
 	MaxMutationsPerDay int
 	// Tool rounds per mutation before the loop gives up.
 	MutationRounds int
+	// TLS certificate and key. With both set the server speaks TLS, so
+	// browsers get HTTP/2 and every live stream shares one connection.
+	// Without them it serves HTTP/1.1 and h2c for a proxy in front.
+	TLSCertFile string
+	TLSKeyFile  string
 }
 
 var Vars *Env
@@ -66,6 +71,8 @@ func init() {
 		AdminToken:            os.Getenv("ADMIN_TOKEN"),
 		MaxMutationsPerDay:    GetEnvInt("MAX_MUTATIONS_PER_DAY", 500),
 		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
+		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
+		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),
 	}
 }
 

@@ -190,9 +190,13 @@ func CleanJournalPayload(raw json.RawMessage) (string, error) {
 const JournalMatchClosed = "that match is not open"
 
 // JournalRuntime is the code-owned client half of the journal: a tiny
-// append-and-fold runtime the model's page script calls. It owns the cursor,
-// the poll, seat identity and error reporting. The model only writes reduce
-// and render.
+// append-and-fold runtime the model's page script calls. It owns the feed,
+// seat identity and error reporting. The model only writes reduce and render.
+//
+// A feed reads its rows once when it starts. After that the page's live
+// stream pushes every new row through bd._rows, so there is no poll. Rows that
+// arrive while a read is out are held and merged when it lands, so a row
+// written between the read and the push is never lost.
 //
 // The rules number in the config is the one the page's code was written for,
 // and it never changes in this tab. Every append carries it. When the server
@@ -211,7 +215,7 @@ const JournalRuntime = `<script>
   }
   var visitor = conf.visitor || ''
   var keys = conf.keys || {}
-  var cache = {}
+  var cache = Object.create(null)
 
   // The version tells the server which page threw. An error from a page that
   // has since been replaced is about code nobody is served any more.
@@ -239,8 +243,8 @@ const JournalRuntime = `<script>
     report('unhandled rejection: ' + (r && r.message ? r.message : r))
   })
 
-  function read(key, since) {
-    return fetch('/j/' + encodeURIComponent(key) + '?since=' + since, { cache: 'no-store' })
+  function read(key) {
+    return fetch('/j/' + encodeURIComponent(key) + '?since=0', { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('journal read ' + r.status)
         return r.json()
@@ -254,11 +258,11 @@ const JournalRuntime = `<script>
     this.rules = def.rules || 1
     this.rows = []
     this.seen = {}
-    this.cursor = 0
     this.reduce = null
     this.render = null
-    this.timer = 0
-    this.busy = false
+    this.started = false
+    // held collects pushed rows while a read is out. null means no read is.
+    this.held = null
     this.stale = false
   }
 
@@ -271,19 +275,14 @@ const JournalRuntime = `<script>
   Journal.prototype.expire = function () {
     if (this.stale) return
     this.stale = true
-    if (this.timer) clearInterval(this.timer)
     document.dispatchEvent(new CustomEvent('beaverdream:stale', { detail: { key: this.key } }))
   }
 
-  // add merges rows without ever repeating one. Only a read advances the
-  // cursor: an append returns a row that may be newer than rows still in
-  // flight from other visitors, and jumping the cursor past them would lose
-  // them for good.
-  Journal.prototype.add = function (rows, advance) {
+  // add merges rows without ever repeating one, and keeps them in id order.
+  Journal.prototype.add = function (rows) {
     var changed = false
     for (var i = 0; i < rows.length; i++) {
       var row = rows[i]
-      if (advance && row.id > this.cursor) this.cursor = row.id
       if (this.seen[row.id]) continue
       this.seen[row.id] = 1
       if (this.same(row)) {
@@ -313,16 +312,41 @@ const JournalRuntime = `<script>
     }
   }
 
-  // load reads the whole feed again. The rules number is not taken from the
-  // reply: a different one expires the page instead. A failed read leaves the
-  // board as it was, so a server hiccup never draws an empty game. busy
-  // stays set until the read settles, so no poll runs beside it.
+  // receive takes rows the stream pushed. Rows under other rules expire the
+  // page; a row from a newer match means someone started the next game, so
+  // the feed reads it whole.
+  Journal.prototype.receive = function (rows) {
+    if (this.stale || !this.started) return
+    if (this.held) {
+      for (var i = 0; i < rows.length; i++) this.held.push(rows[i])
+      return
+    }
+    var fresh = []
+    for (var j = 0; j < rows.length; j++) {
+      if (rows[j].rules !== this.rules) {
+        this.expire()
+        return
+      }
+      if (rows[j].match > this.match) {
+        this.load()
+        return
+      }
+      fresh.push(rows[j])
+    }
+    if (this.add(fresh)) this.draw()
+  }
+
+  // load reads the whole feed. The rules number is not taken from the reply:
+  // a different one expires the page instead. A failed read leaves the board
+  // as it was, so a server hiccup never draws an empty game. Only one read is
+  // out at a time; rows pushed meanwhile wait in held.
   Journal.prototype.load = function () {
     var self = this
-    if (self.stale) return Promise.resolve()
-    self.busy = true
-    return read(self.key, 0).then(function (d) {
-      self.busy = false
+    if (self.stale || self.held) return Promise.resolve()
+    self.held = []
+    return read(self.key).then(function (d) {
+      var held = self.held
+      self.held = null
       if (d.rules !== self.rules) {
         self.expire()
         return
@@ -330,29 +354,14 @@ const JournalRuntime = `<script>
       self.match = d.match || 1
       self.rows = []
       self.seen = {}
-      self.cursor = 0
-      self.add(d.rows || [], true)
+      self.add(d.rows || [])
       self.draw()
-    }, function () { self.busy = false })
-  }
-
-  Journal.prototype.poll = function () {
-    var self = this
-    if (document.hidden || self.busy || self.stale) return Promise.resolve()
-    self.busy = true
-    return read(self.key, self.cursor).then(function (d) {
-      if (d.rules !== self.rules) {
-        self.busy = false
-        self.expire()
-        return
-      }
-      // A new match means the rows this page has are a different game.
-      // Reload from zero, because the rows before this cursor belong to it
-      // too.
-      if (d.match !== self.match) return self.load()
-      self.busy = false
-      if (self.add(d.rows || [], true)) self.draw()
-    }, function () { self.busy = false })
+      if (held.length) self.receive(held)
+    }, function () {
+      var held = self.held
+      self.held = null
+      if (held.length) self.receive(held)
+    })
   }
 
   // append resolves with the stored row, or with null when the server
@@ -386,13 +395,8 @@ const JournalRuntime = `<script>
           if (r.status === 400) report('append(' + self.key + '): ' + (d.error || 'bad event'))
           return null
         }
-        if (d.match !== self.match) {
-          self.load()
-          return d
-        }
-        // Show it now. The next poll returns it again and add() skips it.
-        self.add([d], false)
-        self.draw()
+        // Show it now. The stream pushes it again and add() skips it.
+        self.receive([d])
         return d
       })
     }, function () { return null })
@@ -403,14 +407,10 @@ const JournalRuntime = `<script>
   }
 
   Journal.prototype.start = function (reduce, render) {
-    var self = this
     this.reduce = reduce
     this.render = render
-    document.documentElement.setAttribute('data-bd-live', '1')
-    this.load().then(function () {
-      if (self.timer || self.stale) return
-      self.timer = setInterval(function () { self.poll() }, 800)
-    })
+    this.started = true
+    this.load()
     return this
   }
 
@@ -418,11 +418,28 @@ const JournalRuntime = `<script>
     visitor: visitor,
     keys: keys,
     journal: function (key) {
-      if (!keys[key]) throw new Error('undeclared journal key: ' + key)
+      if (!Object.prototype.hasOwnProperty.call(keys, key)) {
+        throw new Error('undeclared journal key: ' + key)
+      }
       if (!cache[key]) cache[key] = new Journal(key)
       return cache[key]
     },
-    report: report
+    report: report,
+    // _rows and _resync are for the live stream. Rows carry their key; a key
+    // no script opened is skipped.
+    _rows: function (rows) {
+      var byKey = Object.create(null)
+      for (var i = 0; i < rows.length; i++) {
+        var key = rows[i].key
+        if (!cache[key]) continue
+        if (!byKey[key]) byKey[key] = []
+        byKey[key].push(rows[i])
+      }
+      for (var k in byKey) cache[k].receive(byKey[k])
+    },
+    _resync: function () {
+      for (var k in cache) if (cache[k].started) cache[k].load()
+    }
   }
 })()
 </script>`

@@ -195,6 +195,57 @@ func (q *Queries) JournalTail(ctx context.Context, arg JournalTailParams) ([]Jou
 	return items, nil
 }
 
+const listJournalAfter = `-- name: ListJournalAfter :many
+SELECT
+  id, "key", visitor, payload, "match", rules, created_at
+FROM
+  journal
+WHERE
+  id > ?
+ORDER BY
+  id ASC
+LIMIT
+  ?
+`
+
+type ListJournalAfterParams struct {
+	ID    int64
+	Limit int64
+}
+
+// Rows of every key after a cursor, for the live stream. One cursor covers
+// every key, because ids are global.
+func (q *Queries) ListJournalAfter(ctx context.Context, arg ListJournalAfterParams) ([]Journal, error) {
+	rows, err := q.db.QueryContext(ctx, listJournalAfter, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Journal
+	for rows.Next() {
+		var i Journal
+		if err := rows.Scan(
+			&i.ID,
+			&i.Key,
+			&i.Visitor,
+			&i.Payload,
+			&i.Match,
+			&i.Rules,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJournalSince = `-- name: ListJournalSince :many
 SELECT
   id, "key", visitor, payload, "match", rules, created_at
@@ -244,6 +295,20 @@ func (q *Queries) ListJournalSince(ctx context.Context, arg ListJournalSincePara
 		return nil, err
 	}
 	return items, nil
+}
+
+const maxJournalID = `-- name: MaxJournalID :one
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  journal
+`
+
+func (q *Queries) MaxJournalID(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, maxJournalID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const trimJournal = `-- name: TrimJournal :exec

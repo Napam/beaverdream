@@ -30,8 +30,8 @@ func parseStateSchema(raw string) map[string]webmaster.StateKey {
 	return schema
 }
 
-// State returns the declared schema and the current values. The page reads
-// this through the id="bd-state" script tag or by fetching this endpoint.
+// State returns the declared schema and the current values. Open pages get
+// the values pushed as the $shared signal; this is the same read on demand.
 func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
@@ -109,8 +109,10 @@ func stateValueMatches(def webmaster.StateKey, raw string) bool {
 	}
 }
 
-// SetState applies one visitor action to a declared key. A form gets sent
-// back to the board; a fetch gets JSON.
+// SetState applies one visitor action to a declared key. The value comes from
+// the query string or a form field. A Datastar action gets 204, because every
+// open page gets the new value from its live stream. A plain form is sent back
+// to the board; a fetch gets JSON.
 func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	author := identityFromRequest(r)
 	if author == "" {
@@ -175,7 +177,12 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	}
 	h.stateMu.Unlock()
 	h.touchActivity()
+	h.hub.publish(topicState)
 
+	if isDatastar(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if wantsHTML(r) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
@@ -259,7 +266,13 @@ func applyState(
 	return "", fmt.Errorf("unknown state op")
 }
 
+// wantsHTML reports a plain browser form, which gets a redirect. Datastar
+// also accepts text/html, but it would patch the redirected page into the
+// document, so it never counts.
 func wantsHTML(r *http.Request) bool {
+	if isDatastar(r) {
+		return false
+	}
 	return r.FormValue("redirect") != "" ||
 		strings.Contains(r.Header.Get("Accept"), "text/html")
 }

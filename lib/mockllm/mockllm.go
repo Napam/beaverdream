@@ -335,9 +335,10 @@ func pickTheme(prompt string) theme {
 
 // calls renders a theme as the edits the webmaster tools expect. The board
 // keeps the {{posts}} placeholder, so the real posts stay in place.
-const postForm = `<form class="postbox" method="post" action="/posts">` +
+const postForm = `<form class="postbox" method="post" action="/posts" ` +
+	`data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()">` +
 	`<p class="postbox-title">post a message</p>` +
-	`<textarea name="body" required maxlength="2000" rows="3" placeholder="say something"></textarea>` +
+	`<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>` +
 	`<div class="postbox-actions"><span>posting as {{name}}</span>` +
 	`<button type="submit">post</button></div></form>`
 

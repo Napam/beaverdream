@@ -30,46 +30,51 @@ It is a toy. It runs on localhost and calls a local model.
   region becomes the escaped name, so a script or the markup can branch on it.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only code-owned markup is the document shell, the live-update
-  script, the shared-state tag and the small name link. The model writes the
-  post form itself, so it can move it, restyle it, or break it. The system
-  prompt gives it the exact method, action and field names. If it breaks the
-  form, posting stops working until an admin injects a fix.
+  document. The only code-owned markup is the document shell, Datastar and the
+  live stream mount, the post container, the live script, the journal runtime,
+  the shared-state and journal tags, the busy spinner and the small name link. The model writes the post form itself, so it can
+  move it, restyle it, or break it. The system prompt gives it the exact
+  method, action and field names. If it breaks the form, posting stops working
+  until an admin injects a fix.
 - The first visit asks for a display name. It goes into an HttpOnly cookie and
   becomes the author of that visitor's posts. There are no accounts and names
   are not unique. The name page is code-owned and plain; the model never sees
-  it. Visit `/identity`, or the **set name** link at the bottom of the board, to
-  set it again.
+  it. Visit `/identity`, or the **set name** link at the bottom of the board, to  set it again.
 - Post bodies are still escaped. The model is the conduit for sabotage, not raw
   HTML injection through the form.
 - The model can also declare a tiny shared state: counters, lists and choices,
-  through `set_state_schema`. The page reads it from the `bd-state` JSON tag or
-  `GET /x/state`, and visitors change it with `POST /x/state/{key}`. It is the
-  model's backend without giving it arbitrary Go. Restores keep the values;
-  reset and heal clear them.
+  through `set_state_schema`. Every open page receives the values as the
+  `$shared` signal and in the `bd-state` JSON tag, and visitors change them
+  with `POST /x/state/{key}`. It is the model's backend without giving it
+  arbitrary Go. Restores keep the values; reset and heal clear them.
 - The journal is the model's backend for things people do together. It declares
   append-only feeds with `set_journal_schema` (a game's moves, a chat, votes),
   and the page appends small JSON payloads with `POST /j/{key}` and reads them
   back from `GET /j/{key}?since=N`. The server owns order, a per-browser visitor
   id, the match number and the rules number; it never reads a payload. A
-  code-owned runtime (`bd.journal(key)`) owns the cursor, the poll, seats and
-  error reporting, so the model writes only `reduce(rows)` and `render(state)`.
-  The log is public, so the reducer is the referee. A page with a live feed
-  stops auto-reloading on new posts and shows a code-owned "new posts" button
-  instead, so a game is not interrupted mid-match. When a model script throws,
+  code-owned runtime (`bd.journal(key)`) owns the feed, the seats and error
+  reporting, so the model writes only `reduce(rows)` and `render(state)`.
+  A feed reads its rows once; after that the page's live stream pushes every
+  new row as it is written, so nothing polls. A page that runs a reducer under
+  other rules reloads rather than folding rows it does not understand.
+  The log is public, so the reducer is the referee. When a model script throws,
   the page reports it to `POST /x/err` and
   the server records one `alert` turn per message per stretch, which the
   webmaster reads as a `browser:` line and can fix.
 - A new post returns immediately. A single worker coalesces posts that arrive
-  during a rewrite, so a burst becomes one mutation. Open pages poll
-  `/version`, which reports the current version and the newest post id. A new
-  post reloads the page, even when the design stays the same. A new version
-  with only a stylesheet change is swapped in place, and a markup change
-  reloads. Every reload saves the draft and reading position first.
-  A small spinner in the top-left corner shows while a rewrite is queued or
-  running.
+  during a rewrite, so a burst becomes one mutation. Every open page holds one
+  Datastar stream from `GET /live`; a write publishes a topic and each stream
+  pushes only what its page lacks. A new post is prepended in place and never
+  reloads the page. A new version with only a stylesheet change is patched in
+  place, and a markup change reloads, after saving the draft and reading
+  position. Shared state and journal rows arrive on the same stream, so
+  nothing polls. A small spinner in the top-left corner shows while a rewrite
+  is queued or running.
+  HTTP/2 carries every tab's stream over one connection; set `TLS_CERT_FILE`
+  and `TLS_KEY_FILE` so browsers get it, or terminate TLS in a proxy that
+  speaks h2c to the server.
 - After 20 quiet minutes the board copies the seed forward, keeping the posts
-  and clearing shared state. The next visitor gets the
+  and clearing shared state and the journal. The next visitor gets the
   plain board and the reveal again. The admin panel can trigger the same heal
   immediately.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
@@ -94,8 +99,8 @@ It is a toy. It runs on localhost and calls a local model.
 
 **Do not expose this to the open internet.** Model-generated scripts run in
 every visitor's browser with the board's origin. That is the game. The admin
-panel is token-protected and hand-written, but the board itself is hostile by
-design.
+panel is password-protected and hand-written, but the board itself is hostile
+by design.
 
 ## Quickstart
 
@@ -110,12 +115,12 @@ task dev           # terminal 2: server on :6930, live reload proxy on :6931
 
 To use OpenCode Go instead of the mock, copy `.env.example` to `.env`, put the
 key in `OPENAI_API_KEY`, and run `task dev.deepseek`. It points at DeepSeek
-V4.1 Flash with reasoning at `xhigh`.
+V4.1 Flash with reasoning at `low`.
 
 Open `http://localhost:6931`. The dev task binds the app and the live reload
 proxy to all interfaces, so another device on the same network can use
 `http://<your-ip>:6931`. The admin panel is exposed too, still behind its
-token.
+password.
 
 The mock model picks a theme from keywords in your post: `matrix`,
 `pink`/`cute`, `brutalist`/`concrete`, or
@@ -160,7 +165,7 @@ parameter reject the request; leave it empty for those.
 
 The model must support tool calls. If it answers in prose without calling a
 tool, the site does not change. DeepSeek V4.1 Flash on OpenCode Go is a
-reasoning model. `task dev.deepseek` sends `xhigh`; lower
+reasoning model. `task dev.deepseek` sends `low`; lower
 `OPENAI_REASONING_EFFORT` to `none` if you want to trade quality for fewer
 tokens and less latency.
 
@@ -180,11 +185,13 @@ tokens and less latency.
   results, errors, and duration. Older turns keep a summary so the page stays
   small.
 
-Admin is always token-protected. Set `ADMIN_TOKEN` yourself, or let the server
-generate a random one at startup and log the full admin URL. There is no
-cookie on purpose: the model's page runs same-origin scripts, and a cookie
-would hand those scripts the panel. Every admin request carries the token in
-the query string, and the forms carry it as a hidden field.
+Admin is always password-protected. Set `ADMIN_TOKEN` yourself, or let the
+server generate a random one at startup and log it. `/admin` asks for that
+password. There is no session cookie on purpose: the model's page runs
+same-origin scripts, and a cookie would hand those scripts the panel. The
+password stays in the page's hidden form fields and the live stream's request
+headers, never in the URL, and a reload asks again. Admin actions patch the
+panel in place over the same Datastar stream.
 
 ## Configuration
 
@@ -225,7 +232,6 @@ lib/webmaster        mutation loop, tools, validation, site rendering
 lib/mockllm          deterministic model used by tests and task dev.mock-llm
 db/migrations        goose schema
 db/queries           sqlc queries
-lib/webmaster/site   assembles the model-owned page and the fixed controls
 web/pages            templ page for admin
 web/assets           committed static assets
 ```

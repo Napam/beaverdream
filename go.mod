@@ -17,6 +17,7 @@ require (
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/openai/openai-go/v3 v3.91.1
 	github.com/pressly/goose/v3 v3.29.0
+	github.com/starfederation/datastar-go v1.2.2
 	golang.org/x/net v0.62.0
 	modernc.org/sqlite v1.61.1
 )
@@ -28,6 +29,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.10.1 // indirect
+	github.com/CAFxX/httpcompression v0.0.9 // indirect
 	github.com/ClickHouse/ch-go v0.75.0 // indirect
 	github.com/ClickHouse/clickhouse-go/v2 v2.50.0 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
@@ -100,6 +102,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/vertica/vertica-sql-go v1.3.9 // indirect
 	github.com/wasilibs/go-pgquery v0.0.0-20261027025405-3048dd293555 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20250123031827-cd30c44769bb // indirect

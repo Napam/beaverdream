@@ -1,6 +1,7 @@
 package webmaster
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -39,23 +40,72 @@ func stripBusy(doc string) string {
 }
 
 // The busy spinner is the one animation the shell owns. It starts hidden and
-// the live script shows it while a rewrite is queued or running.
+// the live stream patches it while a rewrite is queued or running.
 func TestThePageShowsWhenTheSiteIsRewriting(t *testing.T) {
 	doc := SiteDoc(Site{Board: PostsPlaceholder}, nil)
 	for _, want := range []string{
 		`id="bd-busy"`,
 		`display:none!important`,
 		`bd-busy-spin`,
-		`setBusy(state)`,
-		`state === 'running' || state === 'queued'`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("the page is missing %q", want)
 		}
 	}
+	if !strings.Contains(BusyIndicator(true), `display:block!important`) {
+		t.Error("the busy spinner does not show when busy")
+	}
 	// The spinner must not eat clicks on the page beneath it.
 	if !strings.Contains(doc, `pointer-events:none!important`) {
 		t.Error("the busy spinner can swallow clicks")
+	}
+}
+
+// Every page loads Datastar and opens one live stream, carrying what it
+// already shows so the stream pushes only what it lacks.
+func TestThePageOpensTheLiveStream(t *testing.T) {
+	doc := SiteDoc(Site{
+		Version:       4,
+		Board:         `<main>{{posts}}</main>`,
+		StateSchema:   `{"likes":{"op":"counter"}}`,
+		State:         map[string]json.RawMessage{"likes": json.RawMessage("2")},
+		JournalCursor: 12,
+	}, []Post{{ID: 9, Author: "a", Body: "hi"}})
+	for _, want := range []string{
+		`<script type="module" src="/static/datastar.js"></script>`,
+		`id="bd-live"`,
+		`data-init="@get(&#39;/live&#39;`,
+		`retry: &#39;always&#39;`,
+		`retryMaxCount: Infinity`,
+		`filterSignals: {include: /^_bd\./`,
+		`&#34;_bd&#34;:{&#34;version&#34;:4,&#34;post&#34;:9,&#34;journal&#34;:12}`,
+		`&#34;shared&#34;:{&#34;likes&#34;:2}`,
+		`<main><div id="bd-posts" style="display:contents"><article class="post" id="p9">`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the page is missing %q", want)
+		}
+	}
+	// Nothing polls any more.
+	if strings.Contains(doc, "setInterval") {
+		t.Error("the code-owned page still polls")
+	}
+
+	hashed := SiteDoc(Site{Board: PostsPlaceholder, Datastar: "/static/datastar.abc.js"}, nil)
+	if !strings.Contains(hashed, `src="/static/datastar.abc.js"`) {
+		t.Error("the page ignores the hashed Datastar path")
+	}
+}
+
+// A visitor can name themselves "{{posts}}". The placeholder is split before
+// the name is substituted, so the name cannot mint a second post container.
+func TestANameCannotAddAPostContainer(t *testing.T) {
+	doc := SiteDoc(
+		Site{Name: "{{posts}}", Board: "<main>{{name}}{{posts}}</main>"},
+		[]Post{{ID: 1, Author: "a", Body: "hi"}},
+	)
+	if n := strings.Count(doc, `id="bd-posts"`); n != 1 {
+		t.Errorf("the page has %d post containers, want 1", n)
 	}
 }
 

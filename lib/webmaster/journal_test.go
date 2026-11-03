@@ -129,9 +129,6 @@ func TestJournalRuntimeIsOnEveryPage(t *testing.T) {
 	if !strings.Contains(doc, `"match":2`) {
 		t.Fatal("journal config is missing the current match")
 	}
-	if !strings.Contains(doc, `id="bd-new"`) {
-		t.Fatal("page is missing the code-owned new-posts offer")
-	}
 }
 
 type fakeToolCall struct {

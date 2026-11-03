@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"math/rand/v2"
 	"regexp"
 	"strings"
 	"time"
@@ -43,10 +44,15 @@ type Site struct {
 	// JournalRulesUsed is the highest rules number stored under each key
 	// with rows, declared or not. Only the schema tool reads it.
 	JournalRulesUsed map[string]int
+	// JournalCursor is the newest journal row id when the page was rendered.
+	// The live stream pushes every row after it.
+	JournalCursor    int64
 	Visitor          string
 	Name             string
 	Plain            bool
 	ChangesSinceHeal int
+	// Datastar is the script path the page loads. Empty uses DatastarPath.
+	Datastar string
 }
 
 // Post is one message on the board.
@@ -178,28 +184,112 @@ const busyCSS = `<style>
 }
 </style>`
 
-// liveScript keeps open pages current. A new post always reloads, because the
-// posts are server-rendered markup. A stylesheet-only change is applied in
-// place, so colors can shift under the cursor. A markup change reloads. Every
-// reload saves unsent text and the reading position first, and it waits while
-// someone is typing. The model can break this at runtime; that is part of the game.
+// BusyIndicator is the code-owned spinner. The live stream patches it whole
+// when a rewrite is queued, starts or ends. Every rule is inline and
+// important, so a model stylesheet cannot move or hide it.
+func BusyIndicator(busy bool) string {
+	display := "none"
+	if busy {
+		display = "block"
+	}
+	return `<div id="bd-busy" role="status" aria-label="updating the page" ` +
+		`style="display:` + display + `!important;visibility:visible!important;` +
+		`opacity:1!important;transform:none!important;clip-path:none!important;` +
+		`filter:none!important;clip:auto!important;position:fixed!important;top:10px!important;` +
+		`left:10px!important;width:14px!important;height:14px!important;` +
+		`box-sizing:border-box!important;z-index:2147483647!important;` +
+		`pointer-events:none!important;border-radius:50%!important;` +
+		`border:2px solid rgba(127,127,127,.35)!important;` +
+		`border-top-color:rgba(127,127,127,.9)!important;` +
+		`animation:bd-busy-spin .7s linear infinite!important"></div>`
+}
+
+// PostsContainer wraps the rendered posts in the element the live stream
+// patches. display:contents keeps it out of the model's layout, so the posts
+// lay out as children of whatever holds {{posts}}.
+func PostsContainer(rendered string) string {
+	return `<div id="bd-posts" style="display:contents">` + rendered + `</div>`
+}
+
+// DatastarPath is where the page loads Datastar from when the server does not
+// pass a content-hashed path.
+const DatastarPath = "/static/datastar.js"
+
+// LiveCursor is what an open page has already shown. The page holds it as the
+// _bd signal and sends it whenever its stream opens, so a reconnect resumes
+// from the page, not from the start.
+type LiveCursor struct {
+	Version int64 `json:"version"`
+	Post    int64 `json:"post"`
+	Journal int64 `json:"journal"`
+}
+
+// liveMount is the hidden element that opens the page's one live stream. Its
+// signals carry the cursor and the shared state, which model markup reads as
+// $shared.KEY. Only _bd goes to /live; the leading underscore keeps it out of
+// every @post the model writes.
+func liveMount(site Site, newestPost int64) string {
+	state := site.State
+	if state == nil {
+		state = map[string]json.RawMessage{}
+	}
+	signals, err := json.Marshal(struct {
+		BD     LiveCursor                 `json:"_bd"`
+		Shared map[string]json.RawMessage `json:"shared"`
+	}{
+		BD: LiveCursor{
+			Version: site.Version,
+			Post:    newestPost,
+			Journal: site.JournalCursor,
+		},
+		Shared: state,
+	})
+	if err != nil {
+		signals = []byte(`{"_bd":{},"shared":{}}`)
+	}
+	// retry always: a clean close (a deploy) reconnects too. The jitter keeps
+	// every tab from reconnecting in the same instant.
+	retry := 1000 + rand.IntN(2000)
+	init := fmt.Sprintf(
+		`@get('/live', {retry: 'always', retryMaxCount: Infinity, retryInterval: %d, `+
+			`filterSignals: {include: /^_bd\./, exclude: /^$/}})`,
+		retry,
+	)
+	return `<div id="bd-live" hidden data-signals="` + html.EscapeString(string(signals)) +
+		`" data-init="` + html.EscapeString(init) + `"></div>`
+}
+
+// liveScript is the code-owned half of the live page that Datastar does not
+// cover. The stream calls it: reload for a markup change, css after a
+// stylesheet was patched in place, posts after new posts landed, state after
+// shared values moved. Every reload saves unsent text and the reading
+// position first, and it waits while someone is typing. The model can break
+// this at runtime; that is part of the game.
 const liveScript = `<script>
 (function () {
-  var fetchPage = window.fetch.bind(window)
   var replacePage = location.replace.bind(location)
-  var version = document.documentElement.getAttribute('data-version') || '0'
-  var post = document.documentElement.getAttribute('data-post') || '0'
+  var html = document.documentElement
   var typingAt = 0
   var waitingSince = 0
   var reloading = false
+  var restored = false
 
   document.addEventListener('input', function () { typingAt = Date.now() }, true)
   // The journal runtime sends this when the server has journal rules this
   // page's code was not written for. Only a fresh page has the right code.
-  document.addEventListener('beaverdream:stale', function () { maybeReload(version) })
+  document.addEventListener('beaverdream:stale', function () {
+    maybeReload(html.getAttribute('data-version') || '0')
+  })
 
-  function saveState(next) {
+  function emit(name, detail) {
+    document.dispatchEvent(new CustomEvent(name, { detail: detail }))
+  }
+
+  function saveState() {
     try {
+      // Before the draft has been restored, the box is still empty. Saving
+      // now would overwrite the draft this page is about to bring back.
+      if (!restored) return
       var area = document.querySelector('form[action="/posts"] textarea[name=body]')
       if (area) {
         sessionStorage.setItem('bd:draft', area.value)
@@ -230,6 +320,8 @@ const liveScript = `<script>
       var area = document.querySelector('form[action="/posts"] textarea[name=body]')
       if (draft !== null && area) {
         area.value = draft
+        // Datastar's data-bind listens for input, not for a scripted value.
+        area.dispatchEvent(new Event('input', { bubbles: true }))
         if (sessionStorage.getItem('bd:focused') === '1') {
           area.focus()
           area.setSelectionRange(area.value.length, area.value.length)
@@ -248,112 +340,61 @@ const liveScript = `<script>
       }
       sessionStorage.removeItem('bd:scroll')
     } catch (e) {}
+    restored = true
   }
 
-  // The post stamp is in the URL too, so each reload is a real navigation.
+  // The version is in the URL, so each reload is a real navigation.
   // restoreState strips the query again.
-  function reload(next, nextPost) {
-    var url = '/?v=' + next
-    if (nextPost !== undefined) url += '&p=' + nextPost
-    replacePage(url)
-  }
-
-  function applyCSS(next) {
-    return fetchPage('/version/' + next + '/css', { cache: 'no-store' })
-      .then(function (r) { return r.json() })
-      .then(function (d) {
-        var style = document.getElementById('bd-css')
-        if (!style) return false
-        style.textContent = d.css || ''
-        version = String(next)
-        document.documentElement.setAttribute('data-version', version)
-        document.dispatchEvent(new CustomEvent('beaverdream:update', { detail: d }))
-        return true
-      })
-  }
-
-  function maybeReload(next, nextPost) {
+  function maybeReload(next) {
     if (reloading) return
     var now = Date.now()
     if (!waitingSince) waitingSince = now
     if (now - typingAt < 1500 && now - waitingSince < 15000) {
-      setTimeout(function () { maybeReload(next, nextPost) }, 500)
+      setTimeout(function () { maybeReload(next) }, 500)
       return
     }
     reloading = true
-    saveState(next)
-    reload(next, nextPost)
+    saveState()
+    replacePage('/?v=' + next)
   }
 
-  // showNew offers the reload a page with a live feed would otherwise skip.
-  // A game keeps its state; the visitor decides when to pull in new posts.
-  function showNew(next, nextPost) {
-    var box = document.getElementById('bd-new')
-    var btn = document.getElementById('bd-new-btn')
-    if (!box || !btn) return
-    box.style.setProperty('display', 'block', 'important')
-    btn.onclick = function () {
-      box.style.setProperty('display', 'none', 'important')
-      maybeReload(next, nextPost)
+  window.bdLive = {
+    reload: maybeReload,
+    css: function (version) {
+      html.setAttribute('data-version', String(version))
+      emit('beaverdream:update', { version: version })
+    },
+    posts: function (newest) {
+      // A stream can die after the post patch and before the cursor patch, so
+      // a reconnect may prepend the same rows again. The ids are the truth.
+      var box = document.getElementById('bd-posts')
+      if (box) {
+        var seen = {}
+        for (var i = 0; i < box.children.length;) {
+          var el = box.children[i]
+          if (el.id && seen[el.id]) {
+            box.removeChild(el)
+          } else {
+            if (el.id) seen[el.id] = true
+            i++
+          }
+        }
+      }
+      html.setAttribute('data-post', String(newest))
+      emit('beaverdream:post', { post: newest })
+    },
+    state: function (values) {
+      var tag = document.getElementById('bd-state')
+      if (tag) tag.textContent = JSON.stringify(values)
+      emit('beaverdream:state', { state: values })
     }
   }
 
-  // setBusy shows the code-owned spinner while a mutation is queued or
-  // running. The display value is set important so a model stylesheet cannot
-  // hide it.
-  function setBusy(state) {
-    var el = document.getElementById('bd-busy')
-    if (!el) return
-    var busy = state === 'running' || state === 'queued'
-    el.style.setProperty('display', busy ? 'block' : 'none', 'important')
-  }
-
-  function tick() {
-    if (document.hidden || reloading || waitingSince) return
-    fetchPage('/version?have=' + version, { cache: 'no-store' })
-      .then(function (r) { return r.json() })
-      .then(function (d) {
-        var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : 'idle')
-        setBusy(state)
-        document.documentElement.setAttribute('data-bd-state', state)
-        document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
-        // Reset rewinds post ids, so any difference counts, not only a
-        // larger id.
-        if (String(d.post) !== post) {
-          if (document.documentElement.getAttribute('data-bd-live') === '1') {
-            // A page driving a live journal keeps its state: reloading here
-            // would look like a disconnect mid-game. Offer the posts instead.
-            post = String(d.post)
-            showNew(d.version, d.post)
-            document.dispatchEvent(new CustomEvent('beaverdream:post', { detail: d }))
-            return
-          }
-          maybeReload(d.version, d.post)
-          return
-        }
-        if (String(d.version) === version) return
-        if (d.swap === 'css') {
-          applyCSS(d.version).then(function (ok) {
-            if (!ok) maybeReload(d.version)
-          }).catch(function () { maybeReload(d.version) })
-          return
-        }
-        maybeReload(d.version)
-      })
-      .catch(function () {})
-  }
-
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-      restoreState()
-      // The spinner lives in the body, so the first check waits for it.
-      tick()
-    })
+    document.addEventListener('DOMContentLoaded', restoreState)
   } else {
     restoreState()
-    tick()
   }
-  setInterval(tick, 500)
 })()
 </script>`
 
@@ -411,33 +452,40 @@ func journalConfig(site Site) []byte {
 
 // SiteDoc builds the page served to visitors. There is no sandbox: the
 // model's regions, CSS and scripts are the page. The only code-owned parts are
-// the document shell, the live reload script, the busy spinner, and the small
-// name link. The post form is model markup, so it can move it, restyle it, or
-// break it.
+// the document shell, Datastar and the live stream mount, the live script, the
+// post container, the busy spinner, and the small name link. The post form is
+// model markup, so it can move it, restyle it, or break it.
 func SiteDoc(site Site, posts []Post) string {
 	name := site.Name
 	if name == "" {
 		name = "Anonymous"
 	}
 	escapedName := html.EscapeString(name)
-	board := strings.ReplaceAll(site.Board, "{{name}}", escapedName)
-	header := strings.ReplaceAll(site.Header, "{{name}}", escapedName)
-	footer := strings.ReplaceAll(site.Footer, "{{name}}", escapedName)
-
-	rendered := RenderPosts(posts)
-	if strings.Contains(board, PostsPlaceholder) {
-		board = strings.ReplaceAll(board, PostsPlaceholder, rendered)
-	} else {
+	// Split on the posts placeholder before replacing {{name}}: a visitor
+	// named "{{posts}}" must not become a second post container.
+	parts := strings.Split(site.Board, PostsPlaceholder)
+	for i := range parts {
+		parts[i] = strings.ReplaceAll(parts[i], "{{name}}", escapedName)
+	}
+	rendered := PostsContainer(RenderPosts(posts))
+	board := strings.Join(parts, rendered)
+	if len(parts) == 1 {
 		// The model dropped the placeholder. Showing the posts beats hiding
 		// them until someone notices.
 		board += rendered
 	}
+	header := strings.ReplaceAll(site.Header, "{{name}}", escapedName)
+	footer := strings.ReplaceAll(site.Footer, "{{name}}", escapedName)
 
-	// data-post is the newest post on the page. The live script reloads when
-	// the server reports a different one.
+	// data-post is the newest post on the page. The stream starts from it.
 	var newest int64
 	for _, p := range posts {
 		newest = max(newest, p.ID)
+	}
+
+	datastar := site.Datastar
+	if datastar == "" {
+		datastar = DatastarPath
 	}
 
 	var b strings.Builder
@@ -453,6 +501,9 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" href="data:,">`)
 	b.WriteString(`<title>beaverdream</title>`)
+	// A module script is deferred, so Datastar starts after the whole page,
+	// model scripts included, has parsed.
+	b.WriteString(`<script type="module" src="` + html.EscapeString(datastar) + `"></script>`)
 	// The journal config and runtime are code-owned and come before any model
 	// markup, so a page script can call bd.journal() while the page parses.
 	b.WriteString(`<script type="application/json" id="bd-journal">`)
@@ -468,27 +519,10 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(`</style><style id="bd-css">`)
 	b.WriteString(site.CSS)
 	b.WriteString(`</style></head><body>`)
-	// The busy spinner is code-owned and inline-styled, so a model stylesheet
-	// cannot move or hide it. The live script toggles display while a rewrite
-	// is queued or running.
-	b.WriteString(`<div id="bd-busy" role="status" aria-label="updating the page" ` +
-		`style="display:none!important;position:fixed!important;top:10px!important;` +
-		`left:10px!important;width:14px!important;height:14px!important;` +
-		`box-sizing:border-box!important;z-index:2147483647!important;` +
-		`pointer-events:none!important;border-radius:50%!important;` +
-		`border:2px solid rgba(127,127,127,.35)!important;` +
-		`border-top-color:rgba(127,127,127,.9)!important;` +
-		`animation:bd-busy-spin .7s linear infinite!important"></div>`)
-	// A page with a live feed does not reload on new posts, so this offers it.
-	// Inline styles keep a model stylesheet from hiding the only way to see
-	// what someone just wrote.
-	b.WriteString(`<div id="bd-new" style="display:none!important;position:fixed!important;` +
-		`bottom:16px!important;left:50%!important;transform:translateX(-50%)!important;` +
-		`z-index:2147483647!important"><button id="bd-new-btn" type="button" ` +
-		`style="font:inherit!important;font-size:14px!important;font-weight:700!important;` +
-		`padding:.5em 1em!important;border:0!important;border-radius:999px!important;` +
-		`background:#1f1f1f!important;color:#fff!important;cursor:pointer!important;` +
-		`box-shadow:0 2px 10px rgba(0,0,0,.25)!important">new posts</button></div>`)
+	// The stream mount and the spinner come before the model's markup for
+	// the same reason as the live script.
+	b.WriteString(liveMount(site, newest))
+	b.WriteString(BusyIndicator(false))
 	if site.StateSchema != "" || len(site.State) > 0 {
 		state := site.State
 		if state == nil {

@@ -1,7 +1,6 @@
 # The journal
 
-Status: built on the `journal` branch. This note is the design record; the
-code is the truth.
+Status: built on `main`. This note is the design record; the code is the truth.
 
 ## What it is
 
@@ -33,14 +32,18 @@ channel, not a feature per request.
 - `GET /j/{key}?since=N` returns rows after a cursor plus the newest match and
   the declared rules number.
 - `bd.journal(key)` client runtime: `start(reduce, render)`, `append`,
-  `newMatch`, a cursor, an 800ms poll, and `bd.visitor`. It is code-owned, so
+  `newMatch`, `bd.visitor`. It is code-owned, so
   the model writes about 40 lines of rules instead of a whole client.
+  - A feed reads its rows once when it starts. After that the page's live
+    stream pushes every new row through `bd._rows`, so there is no poll. Rows
+    that arrive while a read is out are held and merged when it lands, so a
+    row written between the read and the push is never lost.
   - The rules number comes from the page config and never changes in the tab.
-    When a read or an append reports other rules, the feed stops and sends
-    `beaverdream:stale`; the live script reloads the page. A new match only
-    reloads the feed.
-  - A failed read leaves the board as drawn. A poll stays busy until the load
-    it started settles.
+    When a push or an append reports other rules, the feed stops and sends
+    `beaverdream:stale`; the live script reloads the page. A new match reloads
+    just the feed.
+  - A failed read leaves the board as drawn. Rows pushed during it land after
+    it fails, so a server hiccup never drops an event.
   - `append` resolves with the row, or with null when the server refused it
     for a reason that is not the page's bug: a closed match reloads the feed,
     409 reloads the page, 429 and 401 drop the write. A payload the server
@@ -65,8 +68,11 @@ channel, not a feature per request.
   rows of the current match under the current rules, with id and visitor.
 - Heal clears the shared state and the journal in the same transaction as the
   seed version it writes.
-- A page with a live feed sets `data-bd-live`; the live script stops reloading
-  on new posts and dispatches `beaverdream:post` instead.
+- The read side is one Datastar stream per open page. The page holds a cursor
+  (`_bd.journal`) and the stream pushes rows written after it through
+  `bd._rows`; a rewind or a full 500-row batch calls `bd._resync`, which reads
+  every started feed again. A page with a live feed never reloads
+  on new posts; posts are patched into the board instead.
 
 ## Where it stops
 
@@ -98,6 +104,6 @@ illegal rows are ignored by every client, not rejected by the server.
   vandal can spend it and hide real errors for that stretch. The version
   check only drops errors from replaced pages; a vandal can still claim the
   current one.
-- `bd-state` is a snapshot from page load. A live page does not reload on
-  posts, so the prompt tells the model to refetch `/x/state` on
-  `beaverdream:post`.
+- The live stream pushes shared state and journal rows, but a feed that was
+  never opened in the page is not started by a push; only a reload picks up
+  new code, which is the design.

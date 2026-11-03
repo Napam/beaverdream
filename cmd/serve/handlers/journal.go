@@ -45,6 +45,7 @@ type journalBucket struct {
 // server never interprets it.
 type journalRow struct {
 	ID      int64           `json:"id"`
+	Key     string          `json:"key"`
 	Visitor string          `json:"visitor"`
 	Payload json.RawMessage `json:"payload"`
 	Match   int64           `json:"match"`
@@ -68,6 +69,7 @@ func journalRowFrom(row sqlc.Journal) journalRow {
 	}
 	return journalRow{
 		ID:      row.ID,
+		Key:     row.Key,
 		Visitor: row.Visitor,
 		Payload: payload,
 		Match:   row.Match,
@@ -206,19 +208,25 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 		Match:   match,
 		Rules:   rules,
 	})
-	if err == nil {
+	appended := err == nil
+	if appended {
 		err = h.queries.TrimJournal(r.Context(), sqlc.TrimJournalParams{
 			Key:    key,
 			Offset: int64(def.Max),
 		})
 	}
 	h.stateMu.Unlock()
+	if appended {
+		// The row is committed even if the trim failed, so the page still has
+		// to hear about it.
+		h.touchActivity()
+		h.hub.publish(topicJournal)
+	}
 	if err != nil {
-		h.logger.Error("Failed to append to the journal", slog.Any("error", err))
+		h.logger.Error("Failed to write the journal", slog.Any("error", err))
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
 	}
-	h.touchActivity()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

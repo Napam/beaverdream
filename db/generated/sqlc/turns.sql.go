@@ -298,6 +298,54 @@ func (q *Queries) ListPosts(ctx context.Context) ([]Post, error) {
 	return items, nil
 }
 
+const listPostsAfter = `-- name: ListPostsAfter :many
+SELECT
+  id, author, body, created_at
+FROM
+  posts
+WHERE
+  id > ?
+ORDER BY
+  id DESC
+LIMIT
+  ?
+`
+
+type ListPostsAfterParams struct {
+	ID    int64
+	Limit int64
+}
+
+// The posts an open page has not shown yet, newest first, the order the board
+// reads.
+func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) ([]Post, error) {
+	rows, err := q.db.QueryContext(ctx, listPostsAfter, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Post
+	for rows.Next() {
+		var i Post
+		if err := rows.Scan(
+			&i.ID,
+			&i.Author,
+			&i.Body,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentPosts = `-- name: ListRecentPosts :many
 SELECT
   id, author, body, created_at

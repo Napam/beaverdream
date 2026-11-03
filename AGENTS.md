@@ -35,9 +35,12 @@ prefer simple, readable code over production hardening.
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
   (the loop, prompts, tool schemas).
-- `cmd/serve/handlers` owns HTTP: `pages.go` (board, post, version),
+- `cmd/serve/handlers` owns HTTP: `live.go` (the stream and its projection),
+  `hub.go` (topics and subscribers), `pages.go` (board, post, version),
   `versions.go` (version writes, carry forward), `admin.go` (auth, inject,
-  restore), `handlers.go` (mutation wrapper, room log, cap, config).
+  restore), `admin_live.go` (the admin stream), `state.go` (shared state),
+  `journal.go` (feeds), `handlers.go` (mutation wrapper, room log, cap,
+  config).
 - GET requests never call the model. Only a post or an admin instruction
   mutates the site.
 
@@ -103,9 +106,10 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the document shell, the live script, the `bd-state`
-  JSON tag, the small `set name` link, and the busy spinner. The spinner is
-  inline-styled and shown by the live script while a rewrite is queued or
+- The only fixed markup is the document shell, Datastar and the live stream
+  mount, the live script, the `bd-posts` container, the `bd-state` JSON tag,
+  the small `set name` link, and the busy spinner. The spinner is
+  inline-styled and patched by the stream while a rewrite is queued or
   running, so a model stylesheet cannot move or hide it. The server also
   replaces `{{name}}`
   in the model's regions with the escaped cookie name, and puts the same name
@@ -113,15 +117,32 @@ prefer simple, readable code over production hardening.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
   form is a valid outcome.
-- Open pages poll `/version`, which carries two stamps: the current
-  `site_versions` id and the newest post id. The page holds the same two as
-  `data-version` and `data-post` on `<html>`. A different post id always
-  reloads, because posts are server-rendered markup. A different version uses
-  `swap`: css-only changes apply in place, anything else reloads. Post ids
-  rewind on reset, so the script compares with `!==`, never `>`. A post that
-  starts a rewrite can reload a tab twice, once for the post and once for the
-  design; that is expected. A failed post id read is a 500, never a 0, because
-  a wrong stamp reloads forever.
+- The read side is one Datastar stream per open page, `GET /live`. Commands
+  (`POST /posts`, `/x/state/{key}`, `/j/{key}`, every admin action, the
+  worker) write the database and then publish a topic. Topics are a bitmask:
+  posts, site, busy, state, journal. Every stream re-reads the parts its page
+  is missing and pushes them; a subscriber coalesces a burst into one sync, so
+  the hub never blocks and never drops. The page holds its cursor as the `_bd`
+  signal (`version`, `post`, `journal`) and the stream patches it as it
+  pushes, so a reconnect resumes from what the page already shows and gets
+  nothing twice.
+- New posts are patched into `#bd-posts`: a prepend, or an inner replace when
+  the page is more than one batch behind or a reset rewound the ids. A new
+  post never reloads the page. The client drops a post id the board already
+  shows, so a reconnect cannot double a prepend. A stylesheet-only change
+  patches `<style id="bd-css">` and calls `bdLive.css`; anything else calls
+  `bdLive.reload`, which waits for the visitor to stop typing and saves the
+  draft and reading position first. Shared state arrives as the `$shared`
+  signal, journal rows through `bd._rows`, the spinner through `#bd-busy`, and
+  the cursor is patched last. A markup reload leaves the version cursor old
+  until the page navigates, so a stream that dies during the typing wait asks
+  for the reload again.
+- A cursor version of 0 adopts the current version instead of reloading, or a
+  page that connected without one would reload forever. A stream without a
+  name answers 204, which tells Datastar to stop retrying. Datastar commands
+  answer 204 and never a redirect, because Datastar follows a redirect and
+  would patch the board into the document. A plain form post still gets 303.
+  `/version` stays as a plain JSON read for tools and tests; nothing polls it.
 - Everyone sees the same page. Personalization happens in the browser: the
   server fills `{{name}}` and `<html data-name>` from the cookie, and the
   prompt tells the model to branch on `document.documentElement.dataset.name`
@@ -143,11 +164,9 @@ prefer simple, readable code over production hardening.
   its code was written for and sends them with every append, the server
   refuses a mismatch with 409, and a mismatch anywhere reloads the page, never
   just the feed. A rules bump in `set_journal_schema` skips past every number
-  stored rows carry, declared key or not. A page that
-  starts a feed sets `data-bd-live` and stops reloading on new posts; the
-  code-owned `bd-new` button offers that reload instead, so posts are never
-  unreachable. The client runtime is code-owned; the model writes `reduce` and
-  `render` only.
+  stored rows carry, declared key or not. A feed loads its rows once and the
+  stream pushes every new row after that, so nothing polls. The client runtime
+  is code-owned; the model writes `reduce` and `render` only.
   The log is public, so the reducer, not the server, rejects illegal rows.
 - A browser error is a turn, not a console line. `/x/err` records one `alert`
   turn per message per stretch, labelled as visitor-reported, and never
@@ -164,10 +183,14 @@ prefer simple, readable code over production hardening.
   form prefilled so a visitor can set their display name again. Posts use the
   cookie value as the author. Names are not unique and there are no accounts.
   The server ignores any author field in model markup.
-- Admin is always token-protected. The token travels in the query string or a
-  hidden form field, never a cookie: model scripts are same-origin and must not
-  inherit admin access. When `ADMIN_TOKEN` is empty the server generates one
-  and logs the URL.
+- Admin is always password-protected. `GET /admin` without the token renders
+  the password form; the form POSTs the token and gets the panel, which carries
+  it in hidden fields and sends it as `X-Admin-Token` on the live stream. Never
+  a cookie, and never a query parameter: model scripts are same-origin and must
+  not inherit admin access, and the token must not land in URLs or history.
+  Admin actions answer Datastar with the panel patched in place (a plain POST
+  renders the whole page), so no redirect needs the token. When `ADMIN_TOKEN`
+  is empty the server generates one and logs the password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining
@@ -220,6 +243,6 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   environment variables win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
   models take `OPENAI_REASONING_EFFORT`; the dev task uses
-  `deepseek-v4.1-flash` with `xhigh`.
+  `deepseek-v4.1-flash` with `low`.
 - The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy
   `6931`.

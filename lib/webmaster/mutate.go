@@ -632,12 +632,17 @@ break the page, that is a valid outcome.
 Every version must contain a working post form, in any region. Start from this
 markup, because the server only listens on these names:
 
-<form class="postbox" method="post" action="/posts">
+<form class="postbox" method="post" action="/posts" data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()">
   <p class="postbox-title">post a message</p>
-  <textarea name="body" required maxlength="2000" rows="3" placeholder="say something"></textarea>
+  <textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>
   <div class="postbox-actions"><span>posting as {{name}}</span>
   <button type="submit">post</button></div>
 </form>
+
+The data-on:submit attribute sends the post without leaving the page and
+clears the box; the post then arrives at the top of the board for everyone
+over the live stream. Keep it. Without it the form still works as a plain form
+post, which reloads the page.
 
 The server records the visitor's cookie name as the post author. Do not add a
 name field: the server ignores it. The page can use {{name}} to show the
@@ -646,13 +651,56 @@ visitor's name; the server replaces it with the escaped cookie name. The
 it, make it strange. Keep the method, action and field names working unless the
 post asks you to break posting.
 
+The live page:
+- The page is live. It holds one stream from the server, and the server pushes
+  changes as they happen. Nothing on the page polls. New posts appear at the
+  top of the board without a reload. A change to only your stylesheet is
+  applied in place. A change to the markup reloads every open tab once the
+  visitor stops typing, with their draft and scroll position kept.
+- Datastar v1 is loaded on every page, so data-* attributes in your markup are
+  live. Reach for them before a script for anything interactive:
+    data-signals="{open: false}"           declare signals
+    data-on:click="$open = !$open"         run an expression on an event
+    data-show="$open"                      show or hide
+    data-text="$count + ' taps'"           set the text
+    data-class:lit="$open"                 toggle a class
+    data-attr:disabled="!$draft"           set an attribute
+    data-bind:draft                        two-way bind an input to $draft
+    data-computed:total="$a + $b"          a derived signal
+    data-on-interval__duration.1s="$t++"   a timer
+    data-init="..."                        run once when the element appears
+  Expressions are JavaScript: $name reads or writes a signal, el is the
+  element, evt the event. Signals live in one tab and reset on reload; shared
+  values go through state or the journal. These attribute names belong to
+  Datastar, so do not use a Datastar name for your own data; data-cell and
+  data-label are safe.
+- Use @post only for /posts and /x/state/KEY. They answer with nothing; the
+  new data comes back over the stream to every page at once. Never @get or
+  @post a page like /: the reply would be patched into the document.
+- These ids belong to the page and the live stream. Do not reuse them:
+  bd-live, bd-posts, bd-css, bd-busy, bd-state, bd-journal. Do not name your
+  own signals shared, or anything that starts with _bd.
+- Page scripts can listen on document for beaverdream:post (new posts just
+  landed), beaverdream:state (shared values changed) and beaverdream:update
+  (the stylesheet changed in place). New posts are fresh markup, so a script
+  that decorates posts must run again on beaverdream:post. CSS reaches new
+  posts by itself, so prefer it for anything about how posts look.
+
 Shared state:
-- The current values arrive in the prompt, and the page gets them in a JSON
-  script tag with id="bd-state". The tag is a snapshot from page load. A page
-  with a journal feed does not reload on new posts, so if it shows state,
-  refetch GET /x/state on the beaverdream:post event.
-- GET /x/state returns {"schema": ..., "state": ...}. POST /x/state/KEY with a
-  value=... form field applies that key's op for the current visitor.
+- The current values arrive in the prompt. Every open page gets them pushed
+  live as the $shared signal, so markup bound to $shared.KEY updates for
+  everyone the moment anyone writes. Scripts get the beaverdream:state event
+  with the values in detail.state; the JSON script tag id="bd-state" is kept
+  current too.
+- POST /x/state/KEY applies that key's op for the current visitor. The value
+  comes from a value=... query parameter or form field:
+    <button type="button" data-on:click="@post('/x/state/likes')">like</button>
+    <span data-text="$shared.likes"></span>
+    <button type="button" data-on:click="@post('/x/state/poll?value=yes')">yes</button>
+    <span data-text="$shared.poll.yes || 0"></span>
+  A list holds {author, value, at} entries. Add to it with a form that has an
+  input named value and data-on:submit="@post('/x/state/wall', {contentType:
+  'form'}); el.reset()". GET /x/state returns {"schema": ..., "state": ...}.
 - Use state only when a post asks for something people can click, vote on or
   leave behind. Do not add widgets just because you can. State survives
   restores; reset clears it. Do not store HTML in it.
@@ -706,16 +754,15 @@ document.getElementById("tap").onclick = function () { feed.append({ n: 1 }) }
 </script>
 
 - bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
-  once, then polls. reduce(rows) returns any state you like and render(state,
+  once; after that the server pushes every new row as it is written, so each
+  open page redraws within a moment. reduce(rows) returns any state you like and render(state,
   feed) draws it. feed.append(payload) writes one row; feed.newMatch(payload)
   opens the next match. Both resolve with the stored row, or with null when
   the server refused it (someone opened the next match first, or the visitor
   clicks too fast). They never throw for that, so no catch is needed. A row
-  is {id, visitor, payload, match, rules, at}. The payload must be a JSON
+  is {id, key, visitor, payload, match, rules, at}. The payload must be a JSON
   object of at most 600 bytes.
   bd.visitor is the viewer's opaque id: use it for seats and for "your turn".
-- A page that starts a feed stops auto-reloading when new posts arrive; it gets
-  a beaverdream:post event instead, so show new posts yourself if you want.
 - When your script throws, a reduce fails or the server rejects a payload, the
   server writes you a log line from the page's browser with the message. Only
   the current page reports; errors from replaced pages are dropped. Fix what
@@ -754,8 +801,10 @@ win at equal specificity:
 BASE STYLESHEET:
 ` + strings.TrimSpace(BaseCSS) + `
 
-{{posts}} becomes one article per post, newest first. A post with a quote and
-a reply renders as:
+{{posts}} becomes one article per post, newest first, inside
+<div id="bd-posts" style="display:contents">. The server adds new posts to
+that div while the page is open. The div lays out nothing itself, so the posts
+sit in whatever holds {{posts}}. A post with a quote and a reply renders as:
 
 ` + RenderPosts([]Post{{
 	ID:     12,

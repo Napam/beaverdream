@@ -178,6 +178,20 @@ function exposeFiles() {
   }
 }
 
+/**
+ * Vendored scripts are served as-is under a fixed name, so the Go side can
+ * point at static/datastar.js without knowing the version.
+ */
+const vendored = [{ src: 'vendor/datastar-v1.0.4.js', dest: `${outdir}/datastar.js` }]
+
+function exposeVendored() {
+  let linked = 0
+  for (const { src, dest } of vendored) {
+    if (ensureHardlink(src, dest)) linked++
+  }
+  return linked
+}
+
 // ── ANSI helpers ──
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[22m`
@@ -229,6 +243,7 @@ console.log(`${cyan('build')} Starting JS build${isProdBuild ? green(' [producti
 const libBundleRes = await bundleLib()
 const pageBundleRes = await bundlePageFiles()
 const exposeRes = exposeFiles()
+const vendoredLinked = exposeVendored()
 
 // ── Summary ──
 
@@ -252,6 +267,11 @@ if (pageBundleRes) {
 
 console.log(`${cyan('build')} Hardlinked ${exposeRes.linked} files ${dim(`${exposeRes.spent}ms`)}`)
 for (const { src, dest } of exposeRes.hardlinkedFiles) {
+  console.log(`${dim('│')} ${src} ${dim('→')} ${dest} ${dim(fileSize(dest))}`)
+}
+
+console.log(`${cyan('build')} Hardlinked ${vendoredLinked} vendored files`)
+for (const { src, dest } of vendored) {
   console.log(`${dim('│')} ${src} ${dim('→')} ${dest} ${dim(fileSize(dest))}`)
 }
 

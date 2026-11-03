@@ -138,7 +138,7 @@ tasks:
       # from a calling task into a called one. dev.deepseek passes PROVIDER=deepseek.
       OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "deepseek"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
       OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "deepseek"}}deepseek-v4.1-flash{{else}}mock-model{{end}}'
-      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}xhigh{{end}}'
+      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}low{{end}}'
       MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "deepseek"}}16384{{else}}3{{end}}'
     cmds:
       - |

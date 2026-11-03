@@ -34,6 +34,18 @@ type StateView struct {
 	Value string
 }
 
+// LiveView is the admin card's snapshot of the worker right now. It is built
+// on the server and patched into the page as the topics change.
+type LiveView struct {
+	State   string
+	Version int64
+	Pending int
+	Today   int64
+	Cap     int
+	Detail  string
+	Error   string
+}
+
 const (
 	adminCard  = "rounded-sm border border-gray-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
 	adminLabel = "mb-2 text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-neutral-500"
@@ -84,9 +96,35 @@ func stateText(states []StateView) string {
 	return strings.Join(lines, "\n")
 }
 
-// AdminPage shows the current render, the full conversation behind every
-// mutation, and a box for talking to the model directly.
-templ AdminPage(site sqlc.SiteVersion, feeds []FeedView, states []StateView, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
+// todayText is the mutation count against the daily cap, or just the count
+// when no cap is set.
+func todayText(live LiveView) string {
+	if live.Cap > 0 {
+		return strconv.FormatInt(live.Today, 10) + " / " + strconv.Itoa(live.Cap)
+	}
+	return strconv.FormatInt(live.Today, 10)
+}
+
+// AdminView is everything the panel shows. The page and the in-place patch
+// after an action render from the same value, so an action never redirects and
+// never puts the token in a URL.
+type AdminView struct {
+	Site           sqlc.SiteVersion
+	Live           LiveView
+	Feeds          []FeedView
+	States         []StateView
+	Runs           []RunView
+	Versions       []sqlc.SiteVersion
+	Summary        string
+	SummaryThrough int64
+	Flash          string
+	Token          string
+}
+
+// AdminLogin is the only thing an unauthenticated visitor sees: a password
+// box. There is no session cookie on purpose, because the board runs
+// model-written JavaScript on the same origin. A reload asks again.
+templ AdminLogin(failed bool) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -96,233 +134,284 @@ templ AdminPage(site sqlc.SiteVersion, feeds []FeedView, states []StateView, run
 			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
 		</head>
 		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
+			<main class="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4">
+				<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
+				<form method="post" action="/admin" class="flex flex-col gap-2">
+					<label class="text-xs text-gray-500 dark:text-neutral-400" for="password">password</label>
+					<input
+						id="password"
+						type="password"
+						name="password"
+						autocomplete="current-password"
+						autofocus
+						required
+						class={ adminInput }
+					/>
+					if failed {
+						<p class="text-sm text-red-600 dark:text-red-400">wrong password</p>
+					}
+					<button
+						type="submit"
+						class="cursor-pointer rounded-sm bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+					>enter</button>
+				</form>
+			</main>
+		</body>
+	</html>
+}
+
+// AdminPage is the shell. The stream mount sits outside AdminBody, so patching
+// the body after an action does not open a second stream.
+templ AdminPage(view AdminView, datastar string, streamInit string) {
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>beaverdream admin</title>
+			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
+			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
+			<script type="module" src={ datastar }></script>
+		</head>
+		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
 			<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-8">
-				<header class="flex items-baseline justify-between gap-4">
-					<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-					<nav class="flex gap-4 text-xs text-gray-400 dark:text-neutral-600">
-						<a class="hover:text-gray-600 dark:hover:text-neutral-400" href="/">board</a>
-					</nav>
-				</header>
-				if flash != "" {
-					<p class="rounded-sm border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{ flash }</p>
-				}
-				<section class={ adminCard } data-admin-status="1" data-token={ token }>
-					<p class={ adminLabel }>live</p>
-					<div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 dark:text-neutral-400">
-						<span>state <span data-live-state class="font-mono text-gray-900 dark:text-neutral-100">idle</span></span>
-						<span>version <span data-live-version class="font-mono text-gray-900 dark:text-neutral-100">v{ strconv.FormatInt(site.ID, 10) }</span></span>
-						<span>queued <span data-live-pending class="font-mono text-gray-900 dark:text-neutral-100">0</span></span>
-						<span>today <span data-live-today class="font-mono text-gray-900 dark:text-neutral-100">…</span></span>
-					</div>
-					<p data-live-detail class="mt-1 text-xs text-gray-500 dark:text-neutral-400">waiting for a post</p>
-					<p data-live-error class="mt-1 text-xs text-red-600 dark:text-red-400"></p>
-					<script>
-						(function () {
-							var card = document.querySelector("[data-admin-status]");
-							if (!card) return;
-							var token = card.getAttribute("data-token");
-							var state = card.querySelector("[data-live-state]");
-							var version = card.querySelector("[data-live-version]");
-							var pending = card.querySelector("[data-live-pending]");
-							var today = card.querySelector("[data-live-today]");
-							var detail = card.querySelector("[data-live-detail]");
-							var error = card.querySelector("[data-live-error]");
-							function tick() {
-								if (document.hidden) return;
-								fetch("/admin/status?token=" + encodeURIComponent(token), {
-									cache: "no-store",
-								})
-									.then(function (r) {
-										return r.json();
-									})
-									.then(function (d) {
-										state.textContent = d.running
-											? "running"
-											: d.pending > 0
-												? "queued"
-												: "idle";
-										version.textContent = "v" + d.version;
-										pending.textContent = String(d.pending || 0);
-										today.textContent =
-											String(d.today) + (d.cap > 0 ? " / " + d.cap : "");
-										if (d.running) {
-											detail.textContent =
-												d.running.kind +
-												" by " +
-												(d.running.authors || []).join(", ") +
-												" (round " +
-												d.running.round +
-												")";
-										} else {
-											detail.textContent = "waiting for a post";
-										}
-										error.textContent = d.error || "";
-									})
-									.catch(function () {});
-							}
-							setInterval(tick, 2000);
-							tick();
-						})();
-					</script>
-				</section>
-				<section class={ adminCard }>
-					<p class={ adminLabel }>compacted memory</p>
-					if summary == "" {
-						<p class="text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
-					} else {
-						<p class="mb-2 text-xs text-gray-400 dark:text-neutral-600">
-							one message standing in for turns through #{ strconv.FormatInt(summaryThrough, 10) }
-						</p>
-						<pre class={ adminPre }>{ summary }</pre>
-					}
-				</section>
-				<section class={ adminCard }>
-					<p class={ adminLabel }>current version</p>
-					<p class="text-sm">
-						<span class="font-mono">v{ strconv.FormatInt(site.ID, 10) }</span>
-						<span class="text-gray-400 dark:text-neutral-600">· { site.CreatedAt }</span>
-					</p>
-					<p class="mt-1 text-sm text-gray-500 dark:text-neutral-400">{ dash(site.Reason) }</p>
-					<details class="mt-3">
-						<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
-						<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nSTATE SCHEMA:\n" + site.StateSchema + "\n\nJOURNAL SCHEMA:\n" + site.JournalSchema }</pre>
-					</details>
-					<div class="mt-3 flex flex-wrap gap-2">
-						<form method="post" action="/admin/undo">
-							<input type="hidden" name="token" value={ token }/>
-							<button
-								type="submit"
-								class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-							>undo last change</button>
-						</form>
-						<form method="post" action="/admin/heal">
-							<input type="hidden" name="token" value={ token }/>
-							<button
-								type="submit"
-								class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-							>heal now</button>
-						</form>
-					</div>
-					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-						heal clears the journal and shared state with the page, so a game in progress ends.
-					</p>
-				</section>
-				<section class={ adminCard }>
-					<p class={ adminLabel }>journal and shared state</p>
-					if len(feeds) == 0 && len(states) == 0 {
-						<p class="text-sm text-gray-400 dark:text-neutral-600">nothing declared</p>
-					}
-					for _, feed := range feeds {
-						<div class="mb-3 last:mb-0">
-							<p class="text-sm">
-								<span class="font-mono">{ feed.Key }</span>
-								<span class="text-gray-400 dark:text-neutral-600">· { rowCount(feed.Rows) } · match { strconv.Itoa(feed.Match) } · rules { strconv.Itoa(feed.Rules) }</span>
-							</p>
-							if len(feed.Last) == 0 {
-								<p class="text-xs text-gray-400 dark:text-neutral-600">no rows in this match yet</p>
-							} else {
-								<pre class={ adminPre + " mt-1" }>{ feedText(feed.Last) }</pre>
-							}
-						</div>
-					}
-					if len(states) > 0 {
-						<p class="mt-3 mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
-						<pre class={ adminPre }>{ stateText(states) }</pre>
-					}
-				</section>
-				<section class={ adminCard }>
-					<p class={ adminLabel }>talk to the webmaster</p>
-					<form method="post" action="/admin/mutate" class="flex flex-col gap-2">
-						<input type="hidden" name="token" value={ token }/>
-						<textarea
-							name="instruction"
-							rows="3"
-							required
-							maxlength="2000"
-							placeholder="make it look like a 1998 guestbook"
-							class={ adminInput }
-						></textarea>
-						<div class="flex items-center justify-between gap-4">
-							<label class="flex items-center gap-2 text-xs text-gray-500 dark:text-neutral-400">
-								<input type="checkbox" name="also_post" value="1"/>
-								also store as a post
-							</label>
-							<button
-								type="submit"
-								class="cursor-pointer rounded-sm bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
-							>send to model</button>
-						</div>
-					</form>
-				</section>
-				<section>
-					<p class={ adminLabel }>versions</p>
-					<table class="w-full text-sm">
-						<thead>
-							<tr class="text-left text-xs text-gray-400 dark:text-neutral-600">
-								<th class="pb-1 font-normal">id</th>
-								<th class="pb-1 font-normal">when</th>
-								<th class="pb-1 font-normal">reason</th>
-								<th class="pb-1"></th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, version := range versions {
-								<tr class="border-t border-gray-200 dark:border-neutral-800">
-									<td class="py-1 font-mono text-xs">v{ strconv.FormatInt(version.ID, 10) }</td>
-									<td class="py-1 font-mono text-xs text-gray-400 dark:text-neutral-600">{ version.CreatedAt }</td>
-									<td class="py-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(version.Reason) }</td>
-									<td class="py-1 text-right">
-										if version.ID != site.ID {
-											<form method="post" action={ "/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore" }>
-												<input type="hidden" name="token" value={ token }/>
-												<button
-													type="submit"
-													title="restores this version's page and journal schema; newer feed rows stay but become invisible"
-													class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline dark:text-neutral-500"
-												>restore</button>
-											</form>
-										} else {
-											<span class="text-xs text-gray-300 dark:text-neutral-700">current</span>
-										}
-									</td>
-								</tr>
-							}
-						</tbody>
-					</table>
-				</section>
-				<section>
-					<p class={ adminLabel }>mutation history</p>
-					if len(runs) == 0 {
-						<p class="text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
-					}
-					for _, view := range runs {
-						@runCard(view)
-					}
-				</section>
-				<section class={ adminCard + " border-red-500/30" }>
-					<p class={ adminLabel }>reset</p>
-					<form
-						method="post"
-						action="/admin/reset"
-						onsubmit="return confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
-					>
-						<input type="hidden" name="token" value={ token }/>
-						<button
-							type="submit"
-							class="cursor-pointer rounded-sm border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
-						>reset the board</button>
-					</form>
-					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-						Deletes every post, feed row, shared value and later version, and clears the mutation history. The original version stays.
-					</p>
-				</section>
+				<div id="admin-stream" hidden data-init={ streamInit }></div>
+				@AdminBody(view)
 			</div>
 		</body>
 	</html>
 }
 
+// AdminBody is the panel without the shell. An action patches this whole
+// element, so the flash and every panel update in one frame.
+templ AdminBody(view AdminView) {
+	<div id="admin-body" class="contents">
+		<header class="flex items-baseline justify-between gap-4">
+			<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
+			<nav class="flex gap-4 text-xs text-gray-400 dark:text-neutral-600">
+				<a class="hover:text-gray-600 dark:hover:text-neutral-400" href="/">board</a>
+			</nav>
+		</header>
+		<div id="admin-flash">
+			if view.Flash != "" {
+				<p class="rounded-sm border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{ view.Flash }</p>
+			}
+		</div>
+		@AdminLiveCard(view.Live)
+		@AdminMemory(view.Summary, view.SummaryThrough)
+		@AdminVersion(view.Site, view.Token)
+		@AdminFeeds(view.Feeds, view.States)
+		<section class={ adminCard }>
+			<p class={ adminLabel }>talk to the webmaster</p>
+			<form method="post" action="/admin/mutate" class="flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'})" data-indicator:_sending>
+				<input type="hidden" name="token" value={ view.Token }/>
+				<textarea
+					name="instruction"
+					rows="3"
+					required
+					maxlength="2000"
+					placeholder="make it look like a 1998 guestbook"
+					class={ adminInput }
+				></textarea>
+				<div class="flex items-center justify-between gap-4">
+					<label class="flex items-center gap-2 text-xs text-gray-500 dark:text-neutral-400">
+						<input type="checkbox" name="also_post" value="1"/>
+						also store as a post
+					</label>
+					<button
+						type="submit"
+						data-attr:disabled="$_sending"
+						class="cursor-pointer rounded-sm bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black disabled:cursor-default disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+					>send to model</button>
+				</div>
+			</form>
+		</section>
+		@AdminVersions(view.Versions, view.Site.ID, view.Token)
+		@AdminHistory(view.Runs)
+		<section class={ adminCard + " border-red-500/30" }>
+			<p class={ adminLabel }>reset</p>
+			<form
+				method="post"
+				action="/admin/reset"
+				onsubmit="return confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
+			>
+				<input type="hidden" name="token" value={ view.Token }/>
+				<button
+					type="submit"
+					data-indicator:_resetting
+					data-attr:disabled="$_resetting"
+					data-on:click="if (confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')) { evt.preventDefault(); @post('/admin/reset', {contentType: 'form'}) } else evt.preventDefault()"
+					class="cursor-pointer rounded-sm border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 disabled:cursor-default disabled:opacity-50"
+				>reset the board</button>
+			</form>
+			<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
+				Deletes every post, feed row, shared value and later version, and clears the mutation history. The original version stays.
+			</p>
+		</section>
+	</div>
+}
+
+// AdminMemory is the compacted history. The stream patches it when a version
+// lands, so a summary written during compaction shows without a reload.
+templ AdminMemory(summary string, through int64) {
+	<section id="admin-memory" class={ adminCard }>
+		<p class={ adminLabel }>compacted memory</p>
+		if summary == "" {
+			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
+		} else {
+			<p class="mb-2 text-xs text-gray-400 dark:text-neutral-600">
+				one message standing in for turns through #{ strconv.FormatInt(through, 10) }
+			</p>
+			<pre class={ adminPre }>{ summary }</pre>
+		}
+	</section>
+}
+
+// AdminHistory is the newest turns with their conversations. The stream
+// patches it when a version lands, so a rewrite appears without a reload.
+templ AdminHistory(runs []RunView) {
+	<section id="admin-history">
+		<p class={ adminLabel }>mutation history</p>
+		if len(runs) == 0 {
+			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
+		}
+		for _, run := range runs {
+			@runCard(run)
+		}
+	</section>
+}
+
+// AdminLiveCard is the worker's state right now. The stream patches the whole
+// section, so every value is server-rendered and the page needs no script.
+templ AdminLiveCard(live LiveView) {
+	<section id="admin-live" class={ adminCard }>
+		<p class={ adminLabel }>live</p>
+		<div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 dark:text-neutral-400">
+			<span>state <span class="font-mono text-gray-900 dark:text-neutral-100">{ live.State }</span></span>
+			<span>version <span class="font-mono text-gray-900 dark:text-neutral-100">v{ strconv.FormatInt(live.Version, 10) }</span></span>
+			<span>queued <span class="font-mono text-gray-900 dark:text-neutral-100">{ strconv.Itoa(live.Pending) }</span></span>
+			<span>today <span class="font-mono text-gray-900 dark:text-neutral-100">{ todayText(live) }</span></span>
+		</div>
+		<p class="mt-1 text-xs text-gray-500 dark:text-neutral-400">{ live.Detail }</p>
+		if live.Error != "" {
+			<p class="mt-1 text-xs text-red-600 dark:text-red-400">{ live.Error }</p>
+		}
+	</section>
+}
+
+// AdminVersion is the current render and the two one-click repairs.
+templ AdminVersion(site sqlc.SiteVersion, token string) {
+	<section id="admin-version" class={ adminCard }>
+		<p class={ adminLabel }>current version</p>
+		<p class="text-sm">
+			<span class="font-mono">v{ strconv.FormatInt(site.ID, 10) }</span>
+			<span class="text-gray-400 dark:text-neutral-600">· { site.CreatedAt }</span>
+		</p>
+		<p class="mt-1 text-sm text-gray-500 dark:text-neutral-400">{ dash(site.Reason) }</p>
+		<details class="mt-3" data-preserve-attr="open">
+			<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
+			<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nSTATE SCHEMA:\n" + site.StateSchema + "\n\nJOURNAL SCHEMA:\n" + site.JournalSchema }</pre>
+		</details>
+		<div class="mt-3 flex flex-wrap gap-2">
+			<form method="post" action="/admin/undo" data-on:submit="@post('/admin/undo', {contentType: 'form'})" data-indicator:_undoing>
+				<input type="hidden" name="token" value={ token }/>
+				<button
+					type="submit"
+					data-attr:disabled="$_undoing"
+					class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+				>undo last change</button>
+			</form>
+			<form method="post" action="/admin/heal" data-on:submit="@post('/admin/heal', {contentType: 'form'})" data-indicator:_healing>
+				<input type="hidden" name="token" value={ token }/>
+				<button
+					type="submit"
+					data-attr:disabled="$_healing"
+					class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+				>heal now</button>
+			</form>
+		</div>
+		<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
+			heal clears the journal and shared state with the page, so a game in progress ends.
+		</p>
+	</section>
+}
+
+// AdminFeeds shows the journal and shared state the page and the prompt see,
+// so a stuck feed can be read without opening sqlite.
+templ AdminFeeds(feeds []FeedView, states []StateView) {
+	<section id="admin-feeds" class={ adminCard }>
+		<p class={ adminLabel }>journal and shared state</p>
+		if len(feeds) == 0 && len(states) == 0 {
+			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing declared</p>
+		}
+		for _, feed := range feeds {
+			<div class="mb-3 last:mb-0">
+				<p class="text-sm">
+					<span class="font-mono">{ feed.Key }</span>
+					<span class="text-gray-400 dark:text-neutral-600">· { rowCount(feed.Rows) } · match { strconv.Itoa(feed.Match) } · rules { strconv.Itoa(feed.Rules) }</span>
+				</p>
+				if len(feed.Last) == 0 {
+					<p class="text-xs text-gray-400 dark:text-neutral-600">no rows in this match yet</p>
+				} else {
+					<pre class={ adminPre + " mt-1" }>{ feedText(feed.Last) }</pre>
+				}
+			</div>
+		}
+		if len(states) > 0 {
+			<p class="mt-3 mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
+			<pre class={ adminPre }>{ stateText(states) }</pre>
+		}
+	</section>
+}
+
+// AdminVersions lists the newest versions, with a restore button for every
+// version except the current one.
+templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, token string) {
+	<section id="admin-versions">
+		<p class={ adminLabel }>versions</p>
+		<table class="w-full text-sm">
+			<thead>
+				<tr class="text-left text-xs text-gray-400 dark:text-neutral-600">
+					<th class="pb-1 font-normal">id</th>
+					<th class="pb-1 font-normal">when</th>
+					<th class="pb-1 font-normal">reason</th>
+					<th class="pb-1"></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, version := range versions {
+					<tr class="border-t border-gray-200 dark:border-neutral-800">
+						<td class="py-1 font-mono text-xs">v{ strconv.FormatInt(version.ID, 10) }</td>
+						<td class="py-1 font-mono text-xs text-gray-400 dark:text-neutral-600">{ version.CreatedAt }</td>
+						<td class="py-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(version.Reason) }</td>
+						<td class="py-1 text-right">
+							if version.ID != currentID {
+								<form
+									method="post"
+									action={ "/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore" }
+									data-on:submit={ "@post('/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore', {contentType: 'form'})" }
+									data-indicator:_restoring
+								>
+									<input type="hidden" name="token" value={ token }/>
+									<button
+										type="submit"
+										data-attr:disabled="$_restoring"
+										title="restores this version's page and journal schema; newer feed rows stay but become invisible"
+										class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline disabled:cursor-default disabled:opacity-50 dark:text-neutral-500"
+									>restore</button>
+								</form>
+							} else {
+								<span class="text-xs text-gray-300 dark:text-neutral-700">current</span>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</section>
+}
+
 templ runCard(view RunView) {
-	<details class={ adminCard + " mb-2" }>
+	<details class={ adminCard + " mb-2" } data-preserve-attr="open">
 		<summary class="cursor-pointer list-none">
 			<div class="flex flex-wrap items-baseline gap-2 text-sm">
 				<span class="font-mono text-xs text-gray-400 dark:text-neutral-600">#{ strconv.FormatInt(view.Run.ID, 10) }</span>
@@ -363,7 +452,7 @@ templ messageBlock(message webmaster.Message) {
 			}
 		</div>
 		if message.Reasoning != "" {
-			<details class="mt-1">
+			<details class="mt-1" data-preserve-attr="open">
 				<summary class="cursor-pointer text-xs text-gray-400 dark:text-neutral-600">reasoning</summary>
 				<pre class={ adminPre + " mt-1" }>{ message.Reasoning }</pre>
 			</details>

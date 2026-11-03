@@ -114,6 +114,33 @@ func postForm(
 	return postFormAs(t, h, path, form, "dave")
 }
 
+// postAdmin sends an admin form with the token in the header, the way the
+// panel does when Datastar drives it.
+func postAdmin(
+	t *testing.T,
+	h http.HandlerFunc,
+	path string,
+	form url.Values,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Admin-Token", testAdminToken)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
+// getAdmin is a GET with the token in the header.
+func getAdmin(t *testing.T, h http.HandlerFunc, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-Admin-Token", testAdminToken)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
 func postFormAs(
 	t *testing.T,
 	h http.HandlerFunc,
@@ -276,11 +303,11 @@ func TestAdminMutateDoesNotCreatePost(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
 	posts, err := queries.ListPosts(ctx)
@@ -503,109 +530,9 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	}
 }
 
-func TestVersionReportsCSSHotSwap(t *testing.T) {
-	h, queries := setup(t)
-	ctx := context.Background()
-
-	seed, err := queries.CurrentSite(ctx)
-	if err != nil {
-		t.Fatalf("current site: %v", err)
-	}
-	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:         "body{background:#000}",
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
-		StateSchema: seed.StateSchema,
-		Reason:      "css only",
-	})
-	if err != nil {
-		t.Fatalf("create version: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"version":`+strconv.FormatInt(next.ID, 10)) {
-		t.Errorf("version response is stale: %s", body)
-	}
-	if !strings.Contains(body, `"swap":"css"`) {
-		t.Errorf("swap = %s, want css", body)
-	}
-
-	css := httptest.NewRecorder()
-	h.VersionCSS(css, withURLParam(
-		httptest.NewRequest(http.MethodGet, "/version/2/css", nil),
-		"id", "2",
-	))
-	if css.Code != http.StatusOK {
-		t.Fatalf("css status = %d", css.Code)
-	}
-	if !strings.Contains(css.Body.String(), `"css":"body{background:#000}"`) {
-		t.Errorf("css response = %s", css.Body.String())
-	}
-}
-
-func TestVersionReportsReloadForMarkupChange(t *testing.T) {
-	h, queries := setup(t)
-	ctx := context.Background()
-
-	seed, err := queries.CurrentSite(ctx)
-	if err != nil {
-		t.Fatalf("current site: %v", err)
-	}
-	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:    seed.Css,
-		Note:   seed.Note,
-		Header: seed.Header,
-		Board:  seed.Board + "<p>extra</p>",
-		Footer: seed.Footer,
-		Reason: "markup change",
-	}); err != nil {
-		t.Fatalf("create version: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
-	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
-		t.Errorf("swap = %s, want reload", rec.Body.String())
-	}
-}
-
-func TestVersionReportsReloadForStyleBreakout(t *testing.T) {
-	h, queries := setup(t)
-	ctx := context.Background()
-
-	seed, err := queries.CurrentSite(ctx)
-	if err != nil {
-		t.Fatalf("current site: %v", err)
-	}
-	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:    `body{color:red}</style><script>alert(1)</script>`,
-		Note:   seed.Note,
-		Header: seed.Header,
-		Board:  seed.Board,
-		Footer: seed.Footer,
-		Reason: "css breakout",
-	}); err != nil {
-		t.Fatalf("create version: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	h.Version(rec, httptest.NewRequest(http.MethodGet, "/version?have=1", nil))
-	if !strings.Contains(rec.Body.String(), `"swap":"reload"`) {
-		t.Errorf("swap = %s, want reload", rec.Body.String())
-	}
-}
-
 type versionResponse struct {
-	Version int64  `json:"version"`
-	Post    int64  `json:"post"`
-	Swap    string `json:"swap"`
+	Version int64 `json:"version"`
+	Post    int64 `json:"post"`
 }
 
 func getVersion(t *testing.T, h *handlers.Handlers, target string) versionResponse {
@@ -653,30 +580,6 @@ func TestVersionReportsTheNewestPost(t *testing.T) {
 	}
 }
 
-// The client compares the post id itself. A matching version with a new post
-// reports the post and no swap.
-func TestVersionReportsANewPostWhenTheVersionMatches(t *testing.T) {
-	h, queries := setup(t)
-	ctx := context.Background()
-
-	start := getVersion(t, h, "/version")
-	post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "dave", Body: "hi"})
-	if err != nil {
-		t.Fatalf("create post: %v", err)
-	}
-
-	resp := getVersion(t, h, "/version?have="+strconv.FormatInt(start.Version, 10))
-	if resp.Post != post.ID {
-		t.Errorf("post = %d, want %d", resp.Post, post.ID)
-	}
-	if resp.Version != start.Version {
-		t.Errorf("version = %d, want %d", resp.Version, start.Version)
-	}
-	if resp.Swap != "" {
-		t.Errorf("swap = %q, want none", resp.Swap)
-	}
-}
-
 func TestIndexCarriesTheNewestPostID(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -709,22 +612,34 @@ func TestIndexCarriesTheNewestPostID(t *testing.T) {
 func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	h, _ := setupWithConfig(t, handlers.Config{AdminToken: "secret"})
 
+	// A browser GET cannot send a header, so it gets the password form and
+	// none of the panel.
 	open := httptest.NewRecorder()
 	h.Admin(open, httptest.NewRequest(http.MethodGet, "/admin", nil))
-	if open.Code != http.StatusNotFound {
-		t.Fatalf("without token: status = %d, want 404", open.Code)
+	if open.Code != http.StatusOK {
+		t.Fatalf("without token: status = %d, want the login page", open.Code)
+	}
+	if !strings.Contains(open.Body.String(), `name="password"`) {
+		t.Fatal("the page without a token is not the password form")
+	}
+	if strings.Contains(open.Body.String(), "journal and shared state") {
+		t.Fatal("the page without a token carries admin data")
 	}
 
-	wrong := httptest.NewRecorder()
-	h.Admin(wrong, httptest.NewRequest(http.MethodGet, "/admin?token=nope", nil))
-	if wrong.Code != http.StatusNotFound {
-		t.Fatalf("wrong token: status = %d, want 404", wrong.Code)
+	// A wrong password shows the form again and does not claim success.
+	wrong := postForm(t, h.Admin, "/admin", url.Values{"password": {"nope"}})
+	if wrong.Code != http.StatusUnauthorized ||
+		!strings.Contains(wrong.Body.String(), "wrong password") {
+		t.Fatalf("wrong password: status = %d, want 401 with the form", wrong.Code)
 	}
 
-	authed := httptest.NewRecorder()
-	h.Admin(authed, httptest.NewRequest(http.MethodGet, "/admin?token=secret", nil))
+	// The password is the token.
+	authed := postForm(t, h.Admin, "/admin", url.Values{"password": {"secret"}})
 	if authed.Code != http.StatusOK {
-		t.Fatalf("with token: status = %d, want 200", authed.Code)
+		t.Fatalf("with password: status = %d, want 200", authed.Code)
+	}
+	if !strings.Contains(authed.Body.String(), "journal and shared state") {
+		t.Fatal("the authenticated page is missing the panel")
 	}
 	if got := authed.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("Referrer-Policy = %q", got)
@@ -734,6 +649,27 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	}
 	if cookies := authed.Result().Cookies(); len(cookies) != 0 {
 		t.Errorf("admin set %d cookies, want none", len(cookies))
+	}
+
+	// A fetch can send the token as a header instead.
+	header := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.Header.Set("X-Admin-Token", "secret")
+	h.Admin(header, req)
+	if header.Code != http.StatusOK ||
+		!strings.Contains(header.Body.String(), "journal and shared state") {
+		t.Fatalf("header token: status = %d, want the panel", header.Code)
+	}
+
+	// The token is not accepted in the query string any more.
+	query := httptest.NewRecorder()
+	h.Admin(query, httptest.NewRequest(http.MethodGet, "/admin?token=secret", nil))
+	if strings.Contains(query.Body.String(), "journal and shared state") {
+		t.Fatal("a query token still opens the panel")
+	}
+	action := postForm(t, h.HealBoard, "/admin/heal?token=secret", url.Values{})
+	if action.Code != http.StatusNotFound {
+		t.Fatalf("query token action: status = %d, want 404", action.Code)
 	}
 }
 
@@ -837,8 +773,8 @@ func TestResetClearsSharedState(t *testing.T) {
 		t.Fatalf("vote status = %d", rec.Code)
 	}
 
-	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
-	if reset.Code != http.StatusSeeOther {
+	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
 	rows, err := queries.ListSiteState(ctx)
@@ -847,31 +783,6 @@ func TestResetClearsSharedState(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("state survived the reset: %+v", rows)
-	}
-}
-
-func TestAdminStatusReportsLiveState(t *testing.T) {
-	h, _ := setup(t)
-
-	rec := httptest.NewRecorder()
-	h.AdminStatus(
-		rec,
-		httptest.NewRequest(http.MethodGet, "/admin/status?token="+testAdminToken, nil),
-	)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{`"version":1`, `"pending":0`, `"today":0`, `"cap":0`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("status response is missing %q: %s", want, body)
-		}
-	}
-
-	open := httptest.NewRecorder()
-	h.AdminStatus(open, httptest.NewRequest(http.MethodGet, "/admin/status", nil))
-	if open.Code != http.StatusNotFound {
-		t.Errorf("unauthenticated status = %d, want 404", open.Code)
 	}
 }
 
@@ -884,10 +795,10 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("mutate status = %d", rec.Code)
 	}
 	changed, err := queries.CurrentSite(ctx)
@@ -898,8 +809,8 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 		t.Fatalf("mutation did not create a version: %d", changed.ID)
 	}
 
-	undo := postForm(t, h.UndoLast, "/admin/undo?token="+testAdminToken, url.Values{})
-	if undo.Code != http.StatusSeeOther {
+	undo := postAdmin(t, h.UndoLast, "/admin/undo", url.Values{})
+	if undo.Code != http.StatusOK {
 		t.Fatalf("undo status = %d", undo.Code)
 	}
 	restored, err := queries.CurrentSite(ctx)
@@ -922,10 +833,10 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("mutate status = %d", rec.Code)
 	}
 	changed, err := queries.CurrentSite(ctx)
@@ -943,8 +854,8 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 		t.Fatalf("upsert state: %v", err)
 	}
 
-	heal := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
-	if heal.Code != http.StatusSeeOther {
+	heal := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	if heal.Code != http.StatusOK {
 		t.Fatalf("heal status = %d", heal.Code)
 	}
 	healed, err := queries.CurrentSite(ctx)
@@ -972,8 +883,8 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 		t.Errorf("heal kept stale shared state: %+v", state)
 	}
 
-	again := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
-	if again.Code != http.StatusSeeOther {
+	again := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	if again.Code != http.StatusOK {
 		t.Fatalf("second heal status = %d", again.Code)
 	}
 	after, err := queries.CurrentSite(ctx)
@@ -993,8 +904,8 @@ func TestUndoLastAtTheSeedDoesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
-	rec := postForm(t, h.UndoLast, "/admin/undo?token="+testAdminToken, url.Values{})
-	if rec.Code != http.StatusSeeOther {
+	rec := postAdmin(t, h.UndoLast, "/admin/undo", url.Values{})
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	after, err := queries.CurrentSite(ctx)
@@ -1022,9 +933,9 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 		return err == nil && site.ID > 1
 	})
 
-	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
-	if reset.Code != http.StatusSeeOther {
-		t.Fatalf("reset status = %d, want 303", reset.Code)
+	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset status = %d, want 200", reset.Code)
 	}
 
 	posts, err := queries.ListPosts(ctx)
@@ -1220,11 +1131,11 @@ func TestHealRecordsATurn(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	rec := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
-	if rec.Code != http.StatusSeeOther {
+	rec := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	if rec.Code != http.StatusOK {
 		t.Fatalf("heal status = %d", rec.Code)
 	}
 
@@ -1295,10 +1206,10 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		}
 	}
 
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("admin mutate status = %d", rec.Code)
 	}
 
@@ -1313,7 +1224,7 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		t.Error("summary is empty")
 	}
 
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"mocknoop"},
 	})
 	turns, err := queries.ListWebmasterTurns(ctx, 10)
@@ -1360,7 +1271,7 @@ func TestCompactionLeavesQueuedPostsOut(t *testing.T) {
 	}
 	h.HoldPost(createdPostRow(queued))
 
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
 	summary, err := queries.GetLatestSummary(ctx)
@@ -1416,7 +1327,7 @@ func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
 
@@ -1492,10 +1403,10 @@ func TestCompactionTriggersOnTokenEstimate(t *testing.T) {
 		}
 	}
 
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("admin mutate status = %d", rec.Code)
 	}
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
@@ -1515,15 +1426,15 @@ func TestResetClearsCompactedMemory(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
 		t.Fatalf("no summary before reset: %v", err)
 	}
 
-	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
-	if reset.Code != http.StatusSeeOther {
+	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
 	if summary, err := queries.GetLatestSummary(ctx); err == nil {
@@ -1547,10 +1458,10 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 		}
 	}
 
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("admin mutate status = %d", rec.Code)
 	}
 
@@ -1582,7 +1493,7 @@ func TestRoomLogKeepsEveryTurnBelowTheBackstop(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"mocknoop"},
 	})
 
@@ -1660,8 +1571,8 @@ func TestResetDropsAQueuedPostThatReusedItsID(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 
-	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
-	if reset.Code != http.StatusSeeOther {
+	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
 
@@ -1727,10 +1638,10 @@ func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
 		"instruction": {"make it pink"},
 	})
-	if rec.Code != http.StatusSeeOther {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("admin mutate status = %d", rec.Code)
 	}
 	if summary, err := queries.GetLatestSummary(ctx); err == nil {
@@ -1768,8 +1679,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 		t.Fatalf("upsert state: %v", err)
 	}
 
-	rec := httptest.NewRecorder()
-	h.Admin(rec, httptest.NewRequest(http.MethodGet, "/admin?token="+testAdminToken, nil))
+	rec := getAdmin(t, h.Admin, "/admin")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -43,6 +44,9 @@ func main() {
 func run(logger *slog.Logger) error {
 	if cwd, err := os.Getwd(); err == nil {
 		logger.Info("Initializing beaverdream", slog.String("cwd", cwd))
+	}
+	if (env.Vars.TLSCertFile == "") != (env.Vars.TLSKeyFile == "") {
+		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
 	}
 
 	dbConn, err := openSQLite(env.Vars.DBPath)
@@ -95,6 +99,7 @@ func run(logger *slog.Logger) error {
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
 		AdminToken:         adminToken,
 		MaxMutationsPerDay: env.Vars.MaxMutationsPerDay,
+		DatastarSrc:        beaverdream.StaticRootPath("static/datastar.js"),
 	})
 	defer h.Close()
 
@@ -107,6 +112,7 @@ func run(logger *slog.Logger) error {
 		slog.String("openai_model", env.Vars.OpenAIModel),
 		slog.Bool("openai_api_key_set", env.Vars.OpenAIAPIKey != ""),
 		slog.String("openai_reasoning_effort", env.Vars.OpenAIReasoningEffort),
+		slog.Bool("tls", env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != ""),
 	}
 	if env.Vars.LiveReloadHost != "" && env.Vars.LiveReloadPort != "" {
 		logAttrs = append(logAttrs, slog.String(
@@ -116,10 +122,26 @@ func run(logger *slog.Logger) error {
 	}
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "Server running", logAttrs...)
 
+	// Every open tab holds one live stream. Over HTTP/1.1 a browser opens at
+	// most six connections per host, so the seventh tab would stall; HTTP/2
+	// multiplexes them over one. Browsers only speak HTTP/2 over TLS, so
+	// plain mode also accepts h2c from a proxy that terminates TLS. There is
+	// no write timeout: a stream stays open for as long as the tab does.
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
+	protocols.SetUnencryptedHTTP2(true)
 	srv := &http.Server{
 		Addr:              env.Vars.Host + ":" + env.Vars.Port,
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
+		Protocols:         &protocols,
+	}
+	if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
+		if err := srv.ListenAndServeTLS(env.Vars.TLSCertFile, env.Vars.TLSKeyFile); err != nil {
+			return fmt.Errorf("listen and serve tls: %w", err)
+		}
+		return nil
 	}
 	if err := srv.ListenAndServe(); err != nil {
 		return fmt.Errorf("listen and serve: %w", err)
@@ -139,12 +161,18 @@ func resolveAdminToken(logger *slog.Logger, configured string) (string, error) {
 		return "", fmt.Errorf("generate admin token: %w", err)
 	}
 	host := env.Vars.Host
-	if host == "0.0.0.0" || host == "" {
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
 		host = "localhost"
+	}
+	scheme := "http"
+	if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
+		scheme = "https"
 	}
 	logger.Warn(
 		"ADMIN_TOKEN is not set, generated one for this run",
-		slog.String("admin_url", "http://"+host+":"+env.Vars.Port+"/admin?token="+token),
+		slog.String("admin_url", scheme+"://"+net.JoinHostPort(host, env.Vars.Port)+"/admin"),
+		slog.String("admin_password", token),
 	)
 	return token, nil
 }
@@ -173,8 +201,8 @@ func randomHex(size int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// SetupRouter registers every route. The board is three handlers; the admin
-// panel is the fourth.
+// SetupRouter registers every route. Writes are commands that answer with a
+// redirect or 204; /live is the one stream an open page reads from.
 func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
@@ -185,8 +213,8 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Get("/identity", h.Identity)
 	router.Post("/identity", h.SetIdentity)
 	router.Post("/posts", h.CreatePost)
+	router.Get("/live", h.Live)
 	router.Get("/version", h.Version)
-	router.Get("/version/{id}/css", h.VersionCSS)
 	router.Get("/x/state", h.State)
 	router.Post("/x/state/{key}", h.SetState)
 	router.Get("/j/{key}", h.JournalRead)
@@ -194,8 +222,9 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Post("/x/err", h.ClientError)
 
 	router.Get("/admin", h.Admin)
+	router.Post("/admin", h.Admin)
 	router.Get("/admin/", h.Admin)
-	router.Get("/admin/status", h.AdminStatus)
+	router.Get("/admin/live", h.AdminLive)
 	router.Post("/admin/mutate", h.AdminMutate)
 	router.Post("/admin/undo", h.UndoLast)
 	router.Post("/admin/heal", h.HealBoard)

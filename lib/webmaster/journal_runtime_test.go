@@ -2,17 +2,14 @@ package webmaster
 
 import (
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 // runtimeHarness runs the real client runtime against a scripted server. Each
-// scenario names a server and the steps a page takes; the harness reports the
-// feed, what the server was asked, the beacons sent, the events dispatched
-// and what each append resolved to.
+// scenario names the steps a page takes and the rows the live stream pushes;
+// the harness reports the feed, what the server was asked, the beacons sent,
+// the events dispatched and what each append resolved to.
 const runtimeHarness = `
 const fs = require('fs')
 const src = fs.readFileSync(process.argv[2], 'utf8')
@@ -59,47 +56,37 @@ Object.defineProperty(global, 'navigator', {
 })
 global.Blob = function (parts) { this.body = JSON.parse(parts[0]) }
 global.CustomEvent = function (name, init) { this.name = name; this.detail = init && init.detail }
-global.setInterval = (fn) => { global.__tick = fn; return 1 }
-global.clearInterval = () => {}
+global.setInterval = () => { throw new Error('the runtime must not poll') }
 process.on('unhandledRejection', () => { unhandled++ })
 
 function reply(status, body) {
   return { ok: status >= 200 && status < 300, status: status, json: async () => body }
 }
 
-const row = (id, match, rules) => ({ id: id, visitor: 'them', payload: { n: id }, match: match || 1, rules: rules || 1 })
+const row = (id, match, rules) => ({
+  id: id, key: 'moves', visitor: 'them', payload: { n: id }, match: match || 1, rules: rules || 1
+})
 
-// Each server answers one request. state lets a scenario change its answers
-// between steps.
-// hold parks the request after skip more requests, until a step releases it.
-const state = { read: 'ok', post: 200, postError: '', hold: null, skip: 0 }
-const servers = {
-  // An append returns a row newer than one still in flight. The cursor must
-  // not jump past it.
-  append: (url, method) => {
-    if (method === 'POST') return reply(200, { id: 3, visitor: 'me', payload: { n: 1 }, match: 1, rules: 1 })
-    if (url.indexOf('since=0') >= 0) return reply(200, { match: 1, rules: 1, rows: [row(1)] })
-    return reply(200, { match: 1, rules: 1, rows: [row(2), { id: 3, visitor: 'me', payload: { n: 1 }, match: 1, rules: 1 }] })
-  },
-  scripted: (url, method) => {
-    if (method === 'POST') {
-      if (state.post === 200) return reply(200, { id: 9, visitor: 'me', payload: {}, match: 1, rules: 1 })
-      return reply(state.post, { error: state.postError })
-    }
-    if (state.read === 'fail') return reply(500, { error: 'could not read that' })
-    if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
-    if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
-    return reply(200, { match: 1, rules: 1, rows: [row(1), row(2)] })
+// state lets a scenario change the server's answers between steps. hold
+// parks the next read until the scenario releases it.
+const state = { read: 'ok', post: 200, postError: '', hold: null }
+function server(url, method) {
+  if (method === 'POST') {
+    if (state.post === 200) return reply(200, { id: 3, key: 'moves', visitor: 'me', payload: { n: 1 }, match: 1, rules: 1 })
+    return reply(state.post, { error: state.postError })
   }
+  if (state.read === 'fail') return reply(500, { error: 'could not read that' })
+  if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
+  if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
+  return reply(200, { match: 1, rules: 1, rows: [row(1), row(2)] })
 }
-const server = servers[scenario === 'append' ? 'append' : 'scripted']
 
 global.fetch = (url, opts) => {
   const method = (opts && opts.method) || 'GET'
   fetches.push(method + ' ' + url)
   if (method === 'POST') sent.push(JSON.parse(opts.body))
-  const answer = server(url, method, opts && opts.body)
-  if (state.hold && state.skip-- <= 0) {
+  const answer = server(url, method)
+  if (state.hold && method === 'GET') {
     const hold = state.hold
     state.hold = null
     return new Promise((resolve) => { hold.release = () => resolve(answer) })
@@ -109,39 +96,75 @@ global.fetch = (url, opts) => {
 
 eval(src)
 
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
 const feed = window.bd.journal('moves')
 const draws = []
-feed.start(
-  (rows) => rows.map((r) => r.id),
-  (s) => { draws.push(s) }
-)
-const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+function start() {
+  feed.start(
+    (rows) => rows.map((r) => r.id),
+    (s) => { draws.push(s) }
+  )
+}
 
 const steps = {
-  append: async () => {
-    await feed.load()
+  // Pushed rows join the feed in order, and a row that comes back twice, from
+  // the append and then from the stream, is folded once.
+  push: async () => {
+    start()
+    await settle()
+    window.bd._rows([row(4)])
     results.push(await feed.append({ n: 1 }))
-    await feed.poll()
+    window.bd._rows([row(3, 1, 1)])
+    window.bd._rows([{ id: 9, key: 'other', payload: {}, match: 1, rules: 1 }])
   },
-  // A failed read, in a poll or a load, must leave the board alone.
+  // A row pushed while the first read is out is held, not dropped, even when
+  // the read does not include it.
+  heldDuringLoad: async () => {
+    const hold = {}
+    state.hold = hold
+    start()
+    window.bd._rows([row(3)])
+    const before = fetches.length
+    await feed.load()
+    results.push(fetches.length - before)
+    hold.release()
+    await settle()
+  },
+  // A failed read leaves the board alone.
   failedRead: async () => {
+    start()
     await settle()
     state.read = 'fail'
-    await feed.poll()
     await feed.load()
   },
-  // Other rules mean this page's reducer is the wrong one: stop and ask for
-  // a full reload, never adopt the new number.
+  // A pushed row under other rules means this page's reducer is the wrong
+  // one: stop and ask for a full reload, never fold it.
   rulesChange: async () => {
+    start()
     await settle()
-    state.read = 'rules'
-    await feed.poll()
-    await feed.poll()
+    window.bd._rows([row(5, 1, 2)])
+    window.bd._rows([row(6, 1, 2)])
     results.push(await feed.append({ n: 1 }))
+  },
+  // A pushed row from the next match reads the feed again.
+  newMatch: async () => {
+    start()
+    await settle()
+    state.read = 'match'
+    window.bd._rows([row(6, 2)])
+    await settle()
+  },
+  // A resync reads every started feed again.
+  resync: async () => {
+    start()
+    await settle()
+    window.bd._resync()
+    await settle()
   },
   // Expected refusals resolve null and never reach the error beacon. A
   // payload the server rejects is the page's bug and is reported.
   refusals: async () => {
+    start()
     await settle()
     for (const [status, error] of [[429, 'slow down'], [401, 'pick a name first'], [400, 'payload must be a JSON object'], [400, '` + JournalMatchClosed + `']]) {
       state.post = status
@@ -152,23 +175,6 @@ const steps = {
     state.post = 409
     state.postError = 'the page is out of date'
     results.push(await feed.append({ n: 1 }))
-  },
-  // A new match reloads the feed. No poll may run while that load is out.
-  busyDuringLoad: async () => {
-    await settle()
-    state.read = 'match'
-    const hold = {}
-    // The poll goes through; the load it starts is parked.
-    state.hold = hold
-    state.skip = 1
-    const polled = feed.poll()
-    await settle()
-    const before = fetches.length
-    await feed.poll()
-    results.push(fetches.length - before)
-    if (hold.release) hold.release()
-    await polled
-    await settle()
   }
 }
 
@@ -177,11 +183,10 @@ const steps = {
   await settle()
   console.log(JSON.stringify({
     ids: feed.rows.map((r) => r.id),
-    cursor: feed.cursor,
     match: feed.match,
     rules: feed.rules,
     stale: feed.stale,
-    busy: feed.busy,
+    held: feed.held !== null,
     lastDraw: draws[draws.length - 1] || null,
     draws: draws.length,
     events: events,
@@ -206,11 +211,10 @@ type sentAppend struct {
 
 type runtimeResult struct {
 	IDs       []int64           `json:"ids"`
-	Cursor    int64             `json:"cursor"`
 	Match     int               `json:"match"`
 	Rules     int               `json:"rules"`
 	Stale     bool              `json:"stale"`
-	Busy      bool              `json:"busy"`
+	Held      bool              `json:"held"`
 	LastDraw  []int64           `json:"lastDraw"`
 	Draws     int               `json:"draws"`
 	Events    []string          `json:"events"`
@@ -223,32 +227,7 @@ type runtimeResult struct {
 
 func runRuntime(t *testing.T, scenario string) runtimeResult {
 	t.Helper()
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed")
-	}
-
-	start := strings.Index(JournalRuntime, "<script>")
-	end := strings.LastIndex(JournalRuntime, "</script>")
-	if start < 0 || end < start {
-		t.Fatal("JournalRuntime has no script block")
-	}
-	script := JournalRuntime[start+len("<script>") : end]
-
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "runtime.js")
-	harnessPath := filepath.Join(dir, "harness.js")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
-		t.Fatalf("write runtime: %v", err)
-	}
-	if err := os.WriteFile(harnessPath, []byte(runtimeHarness), 0o600); err != nil {
-		t.Fatalf("write harness: %v", err)
-	}
-
-	out, err := exec.Command(node, harnessPath, scriptPath, scenario).CombinedOutput()
-	if err != nil {
-		t.Fatalf("node: %v\n%s", err, out)
-	}
+	out := runJS(t, JournalRuntime, runtimeHarness, scenario)
 	var got runtimeResult
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
@@ -256,49 +235,81 @@ func runRuntime(t *testing.T, scenario string) runtimeResult {
 	return got
 }
 
-func TestJournalRuntimeKeepsRowsFromAnAppend(t *testing.T) {
-	got := runRuntime(t, "append")
-
-	want := []int64{1, 2, 3}
-	if len(got.IDs) != len(want) {
-		t.Fatalf("rows = %v, want %v (the append must not skip row 2)", got.IDs, want)
+func sameIDs(got, want []int64) bool {
+	if len(got) != len(want) {
+		return false
 	}
 	for i := range want {
-		if got.IDs[i] != want[i] {
-			t.Fatalf("rows = %v, want %v", got.IDs, want)
+		if got[i] != want[i] {
+			return false
 		}
 	}
-	if got.Cursor != 3 {
-		t.Errorf("cursor = %d, want 3", got.Cursor)
+	return true
+}
+
+func TestJournalRuntimeFoldsPushedRows(t *testing.T) {
+	got := runRuntime(t, "push")
+
+	if want := []int64{1, 2, 3, 4}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v", got.IDs, want)
 	}
-	if len(got.LastDraw) != 3 {
-		t.Errorf("last draw = %v, want all three rows", got.LastDraw)
+	if !sameIDs(got.LastDraw, []int64{1, 2, 3, 4}) {
+		t.Errorf("last draw = %v, want all four rows", got.LastDraw)
 	}
 	if len(got.Sent) != 1 || got.Sent[0].Rules != 1 || got.Sent[0].Match != 1 {
 		t.Errorf("sent = %+v, want one append carrying match 1 and the page's rules 1", got.Sent)
 	}
+	reads := 0
+	for _, f := range got.Fetches {
+		if strings.HasPrefix(f, "GET") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf(
+			"reads = %d, want only the start: pushed rows need no read (%v)",
+			reads,
+			got.Fetches,
+		)
+	}
 }
 
-// A failed read in a poll or a load leaves the board as it was drawn.
+// A row the stream pushes while the first read is out must survive the read
+// landing without it.
+func TestJournalRuntimeHoldsRowsDuringALoad(t *testing.T) {
+	got := runRuntime(t, "heldDuringLoad")
+
+	if want := []int64{1, 2, 3}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v: the pushed row was lost", got.IDs, want)
+	}
+	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
+		t.Fatalf("reads started during the load = %s, want 0", got.Results)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the read landed")
+	}
+}
+
+// A failed read leaves the board as it was drawn.
 func TestJournalRuntimeKeepsTheBoardOnAFailedRead(t *testing.T) {
 	got := runRuntime(t, "failedRead")
 
-	if len(got.IDs) != 2 || got.IDs[0] != 1 || got.IDs[1] != 2 {
-		t.Fatalf("rows = %v, want [1 2] kept through the failed reads", got.IDs)
+	if !sameIDs(got.IDs, []int64{1, 2}) {
+		t.Fatalf("rows = %v, want [1 2] kept through the failed read", got.IDs)
 	}
 	if len(got.LastDraw) != 2 {
 		t.Fatalf("last draw = %v, want the board from before the failure", got.LastDraw)
 	}
-	if got.Busy {
-		t.Error("a failed read left the feed busy, so it would never poll again")
+	if got.Held {
+		t.Error("a failed read left the feed holding, so pushed rows would pile up")
 	}
 	if got.Stale {
 		t.Error("a failed read expired the page")
 	}
 }
 
-// Other rules from the server never replace the page's own number: the feed
-// stops, asks for a full reload, and refuses further writes.
+// Other rules never replace the page's own number: the feed stops, asks for
+// a full reload, and refuses further writes.
 func TestJournalRuntimeReloadsThePageOnNewRules(t *testing.T) {
 	got := runRuntime(t, "rulesChange")
 
@@ -321,7 +332,7 @@ func TestJournalRuntimeReloadsThePageOnNewRules(t *testing.T) {
 		t.Fatalf("stale events = %d, want 1 (events %v)", stale, got.Events)
 	}
 	for _, id := range got.IDs {
-		if id == 5 {
+		if id == 5 || id == 6 {
 			t.Fatal("a row under the new rules was folded by the old reducer")
 		}
 	}
@@ -332,6 +343,31 @@ func TestJournalRuntimeReloadsThePageOnNewRules(t *testing.T) {
 	}
 	if len(got.Results) != 1 || string(got.Results[0]) != "null" {
 		t.Fatalf("append on an expired page = %s, want null", got.Results)
+	}
+}
+
+func TestJournalRuntimeReadsANewMatch(t *testing.T) {
+	got := runRuntime(t, "newMatch")
+
+	if got.Match != 2 {
+		t.Fatalf("match = %d, want 2", got.Match)
+	}
+	if !sameIDs(got.IDs, []int64{6}) {
+		t.Fatalf("rows = %v, want only the new match's row", got.IDs)
+	}
+}
+
+func TestJournalRuntimeResyncReadsAgain(t *testing.T) {
+	got := runRuntime(t, "resync")
+
+	reads := 0
+	for _, f := range got.Fetches {
+		if strings.HasSuffix(f, "since=0") {
+			reads++
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("reads = %d, want the start plus the resync (%v)", reads, got.Fetches)
 	}
 }
 
@@ -374,21 +410,5 @@ func TestJournalRuntimeTakesRefusalsQuietly(t *testing.T) {
 	}
 	if !got.Stale {
 		t.Error("a 409 did not expire the page")
-	}
-}
-
-// A poll that finds a new match keeps the feed busy until the load settles,
-// so no second read runs beside it.
-func TestJournalRuntimeStaysBusyDuringALoad(t *testing.T) {
-	got := runRuntime(t, "busyDuringLoad")
-
-	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
-		t.Fatalf("reads during the load = %s, want 0", got.Results)
-	}
-	if got.Match != 2 {
-		t.Fatalf("match = %d, want 2 after the load", got.Match)
-	}
-	if got.Busy {
-		t.Error("the feed stayed busy after the load settled")
 	}
 }

@@ -45,7 +45,8 @@ const (
 // Config holds the environment knobs the handlers enforce.
 type Config struct {
 	// AdminToken guards /admin. Every admin request must carry it in the
-	// query string or form; there is no cookie.
+	// X-Admin-Token header or a form field; never a cookie and never a query
+	// parameter.
 	AdminToken string
 	// MaxMutationsPerDay is a cost kill switch. Zero disables the cap.
 	MaxMutationsPerDay int
@@ -55,6 +56,9 @@ type Config struct {
 	// CompactAfterTurns is the turn-count backstop for very short turns.
 	// Zero uses the default.
 	CompactAfterTurns int
+	// DatastarSrc is the script path the board loads Datastar from, content
+	// hashed in production. Empty uses webmaster.DatastarPath.
+	DatastarSrc string
 }
 
 // runState is what the live endpoint and the admin panel show while a
@@ -73,6 +77,10 @@ type Handlers struct {
 	queries *sqlc.Queries
 	mutator *webmaster.Mutator
 	cfg     Config
+
+	// hub tells the open pages' live streams what changed. Every write to
+	// the board publishes; the streams do the reading.
+	hub *hub
 
 	// mu serializes mutations. One process, one site: a second mutation
 	// waiting beats two of them writing versions over each other.
@@ -121,6 +129,7 @@ func New(
 		queries:       queries,
 		mutator:       mutator,
 		cfg:           cfg,
+		hub:           newHub(),
 		lastRewriteAt: make(map[string]time.Time),
 		lastStateAt:   make(map[string]time.Time),
 		journalBucket: make(map[string]*journalBucket),
@@ -806,6 +815,7 @@ func (h *Handlers) mutateInBackground(post sqlc.Post) {
 	h.pending = append(h.pending, post)
 	pending := len(h.pending)
 	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
 
 	h.logger.Info("Post queued for a rewrite",
 		slog.Int64("post_id", post.ID),
@@ -842,6 +852,9 @@ func (h *Handlers) runPending() {
 	batch := h.pending
 	h.pending = nil
 	h.liveMu.Unlock()
+	// A batch that turns out empty or capped never starts a run, so the
+	// spinner has to hear about the drained queue here.
+	h.hub.publish(topicBusy)
 
 	batch = h.liveOnly(context.Background(), batch)
 	if len(batch) == 0 {
@@ -928,18 +941,20 @@ func postAuthors(posts []sqlc.Post) []string {
 // beginRun, endRun and the snapshot helpers keep the live state in one place.
 func (h *Handlers) beginRun(kind string, authors []string) {
 	h.liveMu.Lock()
-	defer h.liveMu.Unlock()
 	h.running = &runState{Kind: kind, Authors: authors, Round: 1, Since: time.Now()}
 	h.lastError = ""
+	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
 }
 
 func (h *Handlers) endRun(err error) {
 	h.liveMu.Lock()
-	defer h.liveMu.Unlock()
 	h.running = nil
 	if err != nil {
 		h.lastError = err.Error()
 	}
+	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
 }
 
 func (h *Handlers) setRunningRound(round int) {
@@ -949,6 +964,7 @@ func (h *Handlers) setRunningRound(round int) {
 	}
 	h.liveMu.Unlock()
 	h.logger.Info("Mutation round started", slog.Int("round", round))
+	h.hub.publish(topicBusy)
 }
 
 func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
@@ -971,10 +987,16 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 	h.logger.Info("Mutation round finished", attrs...)
 }
 
+// setVersion records the current version. A new one is published, so open
+// pages restyle or reload.
 func (h *Handlers) setVersion(version int64) {
 	h.liveMu.Lock()
+	changed := h.version != version
 	h.version = version
 	h.liveMu.Unlock()
+	if changed {
+		h.hub.publish(topicSite)
+	}
 }
 
 func (h *Handlers) touchActivity() {
@@ -997,6 +1019,7 @@ func (h *Handlers) resetLive(version int64) {
 	h.lastError = ""
 	h.lastActivity = time.Now()
 	h.liveMu.Unlock()
+	h.hub.publish(topicAll)
 }
 
 func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
@@ -1111,6 +1134,7 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	h.setVersion(healed.ID)
+	h.hub.publish(topicState | topicJournal)
 	h.touchActivity()
 	h.logger.Info("Board returned to the seed", slog.Int64("version_id", healed.ID))
 	return true, nil

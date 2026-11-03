@@ -41,6 +41,20 @@ ORDER BY
 LIMIT
   ?;
 
+-- name: ListPostsAfter :many
+-- The posts an open page has not shown yet, newest first, the order the board
+-- reads.
+SELECT
+  *
+FROM
+  posts
+WHERE
+  id > ?
+ORDER BY
+  id DESC
+LIMIT
+  ?;
+
 -- name: CreateTurn :one
 INSERT INTO
   turns (kind, author, body)

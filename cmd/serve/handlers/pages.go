@@ -5,12 +5,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
-	"github.com/go-chi/chi/v5"
+	"github.com/starfederation/datastar-go/datastar"
 )
 
 // Index serves the current version as the page. The posts are folded in, and
@@ -34,7 +33,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The board is not here.", http.StatusInternalServerError)
 		return
 	}
-	posts, err := h.recentPosts(r.Context(), 200)
+	posts, err := h.recentPosts(r.Context(), livePostBatch)
 	if err != nil {
 		h.logger.Error("Failed to load posts", slog.Any("error", err))
 		http.Error(w, "The board is not here.", http.StatusInternalServerError)
@@ -54,6 +53,12 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)
 	docSite.Visitor = publicVisitor(visitorFromRequest(w, r))
+	docSite.Datastar = h.cfg.DatastarSrc
+	// The stream pushes rows after this id. A failed read starts the page at
+	// zero, which only means the first push carries rows it already has.
+	if cursor, err := h.queries.MaxJournalID(r.Context()); err == nil {
+		docSite.JournalCursor = cursor
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, webmaster.SiteDoc(docSite, converted)); err != nil {
@@ -62,8 +67,9 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreatePost appends the post, then asks the model to redecorate in the
-// background. The response does not wait for the model: the post shows up on
-// the next load, and open pages pick up the new version when it lands.
+// background. The response does not wait for the model and carries no page:
+// every open page, the poster's included, gets the post from its live stream.
+// A plain form post is redirected back to the board; a Datastar post gets 204.
 func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
@@ -73,11 +79,15 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	body := strings.TrimSpace(r.FormValue("body"))
 	author := identityFromRequest(r)
 	if author == "" {
+		if isDatastar(r) {
+			_ = datastar.NewSSE(w, r).Redirect("/")
+			return
+		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	if body == "" {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		h.postDone(w, r)
 		return
 	}
 	rewrite := h.allowRewrite(author)
@@ -93,9 +103,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.touchActivity()
-
-	// The board shows newest first, so the new post is already at the top.
-	location := "/"
+	h.hub.publish(topicPosts)
 
 	capped := h.overDailyCap(r.Context())
 	if !rewrite || capped {
@@ -103,49 +111,54 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 			slog.Bool("throttled", !rewrite),
 			slog.Bool("capped", capped),
 		)
-		http.Redirect(w, r, location, http.StatusSeeOther)
+		h.postDone(w, r)
 		return
 	}
 
 	h.mutateInBackground(createdPost(post))
-	http.Redirect(w, r, location, http.StatusSeeOther)
+	h.postDone(w, r)
 }
 
-// Version is a tiny endpoint for pages that want to notice a change while
-// they are open. It reports the current version and the newest post id. With
-// ?have=N it also says whether the page can take the new stylesheet in place
-// or needs to reload. The client compares the post id itself.
-func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
-	version, pending, running, _ := h.liveSnapshot()
-	if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
-		if id, ok := raw.(int64); ok && id > 0 && id != version {
-			version = id
-			h.setVersion(id)
-		}
+// postDone answers a post. The board shows newest first, so a plain form
+// lands on the new post at the top.
+func (h *Handlers) postDone(w http.ResponseWriter, r *http.Request) {
+	if isDatastar(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
-	if version == 0 {
-		var err error
-		version, err = h.currentVersion(r.Context())
-		if err != nil {
-			http.Error(w, "unknown", http.StatusInternalServerError)
-			return
-		}
-	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
 
-	// The newest post id tells an open page that the board has new posts even
-	// when the design did not change. A guessed 0 would disagree with the page
-	// and reload it forever, so a failed read is an error.
+// isDatastar reports a request sent by a Datastar action. Its reply must not
+// be a redirect to the board: Datastar would follow it and patch the whole
+// page into the document.
+func isDatastar(r *http.Request) bool {
+	return r.Header.Get("Datastar-Request") == "true"
+}
+
+// Version reports the current version, the newest post id and whether a
+// rewrite is queued or running. Pages do not poll it; their live stream
+// pushes changes. It is a plain read for tools and tests.
+func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
+	raw, err := h.queries.CurrentVersionID(r.Context())
+	version, ok := raw.(int64)
+	if err != nil || !ok {
+		http.Error(w, "unknown", http.StatusInternalServerError)
+		return
+	}
 	post, err := h.queries.LatestPostID(r.Context())
 	if err != nil {
 		h.logger.Error("Failed to load latest post id", slog.Any("error", err))
 		http.Error(w, "unknown", http.StatusInternalServerError)
 		return
 	}
+	_, pending, running, _ := h.liveSnapshot()
 
-	resp := struct {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
 		Version int64     `json:"version"`
 		Post    int64     `json:"post"`
-		Swap    string    `json:"swap,omitempty"`
 		Pending int       `json:"pending"`
 		Running *runState `json:"running,omitempty"`
 	}{
@@ -153,30 +166,11 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 		Post:    post,
 		Pending: pending,
 		Running: running,
-	}
-
-	have := r.URL.Query().Get("have")
-	if have != "" && have != strconv.FormatInt(version, 10) {
-		resp.Swap = "reload"
-		current, err := h.queries.CurrentSite(r.Context())
-		if err == nil {
-			resp.Version = current.ID
-			h.setVersion(current.ID)
-			if id, err := strconv.ParseInt(have, 10, 64); err == nil {
-				if previous, err := h.queries.GetSiteVersion(r.Context(), id); err == nil {
-					resp.Swap = swapKind(previous, current)
-				}
-			}
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
-// swapKind reports whether the only change is one that can be applied without
-// a navigation. A stylesheet that breaks out of its style tag also forces a
+// swapKind reports whether the only change is one an open page can apply
+// without a navigation. A stylesheet that breaks out of its style tag also forces a
 // reload, because in-place text cannot remove the elements it created.
 func swapKind(previous, current sqlc.SiteVersion) string {
 	if previous.Header != current.Header ||
@@ -195,25 +189,4 @@ func swapKind(previous, current sqlc.SiteVersion) string {
 func breaksOutOfStyle(css string) bool {
 	lower := strings.ToLower(css)
 	return strings.Contains(lower, "</style") || strings.Contains(lower, "<script")
-}
-
-// VersionCSS returns the stylesheet for one version. The client uses it only
-// after Version reports a css-only change.
-func (h *Handlers) VersionCSS(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "Bad version id", http.StatusBadRequest)
-		return
-	}
-	site, err := h.queries.GetSiteVersion(r.Context(), id)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"css": site.Css,
-	})
 }

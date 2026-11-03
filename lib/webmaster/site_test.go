@@ -70,3 +70,31 @@ func TestThePageCarriesTheViewersName(t *testing.T) {
 		t.Errorf("the page does not carry the escaped viewer name: %s", doc[:200])
 	}
 }
+
+// data-post is the newest post id on the page, so the live script can tell
+// when the board has posts it does not show.
+func TestThePageCarriesTheNewestPostID(t *testing.T) {
+	posts := []Post{
+		{ID: 7, Author: "a", Body: "newest"},
+		{ID: 9, Author: "b", Body: "out of order"},
+		{ID: 3, Author: "c", Body: "oldest"},
+	}
+	doc := SiteDoc(Site{Version: 4, Board: PostsPlaceholder}, posts)
+	if !strings.Contains(doc, `data-post="9"`) {
+		t.Errorf("page does not carry the newest post id: %.200s", doc)
+	}
+
+	empty := SiteDoc(Site{Version: 4, Board: PostsPlaceholder}, nil)
+	if !strings.Contains(empty, `data-post="0"`) {
+		t.Errorf("empty board does not carry data-post=0: %.200s", empty)
+	}
+}
+
+func TestACSSOnlySiteCarriesBothStamps(t *testing.T) {
+	doc := SiteDoc(Site{Version: 5, CSS: "body{color:red}"}, []Post{{ID: 2}})
+	for _, want := range []string{`data-version="5"`, `data-post="2"`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("page is missing %q", want)
+		}
+	}
+}

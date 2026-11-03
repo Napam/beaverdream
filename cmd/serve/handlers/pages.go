@@ -111,8 +111,9 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is a tiny endpoint for pages that want to notice a change while
-// they are open. With ?have=N it also says whether the page can take the new
-// stylesheet in place or needs to reload.
+// they are open. It reports the current version and the newest post id. With
+// ?have=N it also says whether the page can take the new stylesheet in place
+// or needs to reload. The client compares the post id itself.
 func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 	version, pending, running, _ := h.liveSnapshot()
 	if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
@@ -130,13 +131,25 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The newest post id tells an open page that the board has new posts even
+	// when the design did not change. A guessed 0 would disagree with the page
+	// and reload it forever, so a failed read is an error.
+	post, err := h.queries.LatestPostID(r.Context())
+	if err != nil {
+		h.logger.Error("Failed to load latest post id", slog.Any("error", err))
+		http.Error(w, "unknown", http.StatusInternalServerError)
+		return
+	}
+
 	resp := struct {
 		Version int64     `json:"version"`
+		Post    int64     `json:"post"`
 		Swap    string    `json:"swap,omitempty"`
 		Pending int       `json:"pending"`
 		Running *runState `json:"running,omitempty"`
 	}{
 		Version: version,
+		Post:    post,
 		Pending: pending,
 		Running: running,
 	}

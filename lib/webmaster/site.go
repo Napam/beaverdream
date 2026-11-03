@@ -172,15 +172,17 @@ const busyCSS = `<style>
 }
 </style>`
 
-// liveScript keeps open pages current. A stylesheet-only change is applied in
-// place, so colors can shift under the cursor. A markup change reloads, but it
-// saves unsent text and the reading position first, and it waits while someone
-// is typing. The model can break this at runtime; that is part of the game.
+// liveScript keeps open pages current. A new post always reloads, because the
+// posts are server-rendered markup. A stylesheet-only change is applied in
+// place, so colors can shift under the cursor. A markup change reloads. Every
+// reload saves unsent text and the reading position first, and it waits while
+// someone is typing. The model can break this at runtime; that is part of the game.
 const liveScript = `<script>
 (function () {
   var fetchPage = window.fetch.bind(window)
   var replacePage = location.replace.bind(location)
   var version = document.documentElement.getAttribute('data-version') || '0'
+  var post = document.documentElement.getAttribute('data-post') || '0'
   var typingAt = 0
   var waitingSince = 0
   var reloading = false
@@ -239,8 +241,12 @@ const liveScript = `<script>
     } catch (e) {}
   }
 
-  function reload(next) {
-    replacePage('/?v=' + next)
+  // The post stamp is in the URL too, so each reload is a real navigation.
+  // restoreState strips the query again.
+  function reload(next, nextPost) {
+    var url = '/?v=' + next
+    if (nextPost !== undefined) url += '&p=' + nextPost
+    replacePage(url)
   }
 
   function applyCSS(next) {
@@ -257,17 +263,17 @@ const liveScript = `<script>
       })
   }
 
-  function maybeReload(next) {
+  function maybeReload(next, nextPost) {
     if (reloading) return
     var now = Date.now()
     if (!waitingSince) waitingSince = now
     if (now - typingAt < 1500 && now - waitingSince < 15000) {
-      setTimeout(function () { maybeReload(next) }, 500)
+      setTimeout(function () { maybeReload(next, nextPost) }, 500)
       return
     }
     reloading = true
     saveState(next)
-    reload(next)
+    reload(next, nextPost)
   }
 
   // setBusy shows the code-owned spinner while a mutation is queued or
@@ -289,6 +295,12 @@ const liveScript = `<script>
         setBusy(state)
         document.documentElement.setAttribute('data-bd-state', state)
         document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
+        // Reset rewinds post ids, so any difference counts, not only a
+        // larger id.
+        if (String(d.post) !== post) {
+          maybeReload(d.version, d.post)
+          return
+        }
         if (String(d.version) === version) return
         if (d.swap === 'css') {
           applyCSS(d.version).then(function (ok) {
@@ -365,13 +377,21 @@ func SiteDoc(site Site, posts []Post) string {
 		board += rendered
 	}
 
+	// data-post is the newest post on the page. The live script reloads when
+	// the server reports a different one.
+	var newest int64
+	for _, p := range posts {
+		newest = max(newest, p.ID)
+	}
+
 	var b strings.Builder
 	// data-name is code-owned so the model's JavaScript can tell who is
 	// looking without reading the HttpOnly cookie.
 	fmt.Fprintf(
 		&b,
-		`<!doctype html><html lang="en" data-version="%d" data-name="%s"><head><meta charset="utf-8">`,
+		`<!doctype html><html lang="en" data-version="%d" data-post="%d" data-name="%s"><head><meta charset="utf-8">`,
 		site.Version,
+		newest,
 		escapedName,
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)

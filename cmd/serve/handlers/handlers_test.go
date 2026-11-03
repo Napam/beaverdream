@@ -602,6 +602,110 @@ func TestVersionReportsReloadForStyleBreakout(t *testing.T) {
 	}
 }
 
+type versionResponse struct {
+	Version int64  `json:"version"`
+	Post    int64  `json:"post"`
+	Swap    string `json:"swap"`
+}
+
+func getVersion(t *testing.T, h *handlers.Handlers, target string) versionResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.Version(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s: status = %d", target, rec.Code)
+	}
+	var resp versionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("%s: decode %q: %v", target, rec.Body.String(), err)
+	}
+	return resp
+}
+
+func TestVersionReportsTheNewestPost(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	before := getVersion(t, h, "/version")
+	if before.Post != 0 {
+		t.Errorf("post = %d on an empty board, want 0", before.Post)
+	}
+
+	first, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "dave", Body: "one"})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	mid := getVersion(t, h, "/version")
+	if mid.Post != first.ID {
+		t.Errorf("post = %d, want %d", mid.Post, first.ID)
+	}
+
+	second, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "erin", Body: "two"})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	after := getVersion(t, h, "/version")
+	if after.Post != second.ID {
+		t.Errorf("post = %d, want %d", after.Post, second.ID)
+	}
+	if after.Version != mid.Version {
+		t.Errorf("version moved on a post: %d -> %d", mid.Version, after.Version)
+	}
+}
+
+// The client compares the post id itself. A matching version with a new post
+// reports the post and no swap.
+func TestVersionReportsANewPostWhenTheVersionMatches(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	start := getVersion(t, h, "/version")
+	post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "dave", Body: "hi"})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+
+	resp := getVersion(t, h, "/version?have="+strconv.FormatInt(start.Version, 10))
+	if resp.Post != post.ID {
+		t.Errorf("post = %d, want %d", resp.Post, post.ID)
+	}
+	if resp.Version != start.Version {
+		t.Errorf("version = %d, want %d", resp.Version, start.Version)
+	}
+	if resp.Swap != "" {
+		t.Errorf("swap = %q, want none", resp.Swap)
+	}
+}
+
+func TestIndexCarriesTheNewestPostID(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	var newest int64
+	for _, body := range []string{"one", "two"} {
+		post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "dave", Body: body})
+		if err != nil {
+			t.Fatalf("create post: %v", err)
+		}
+		newest = post.ID
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(identityCookie("dave"))
+	rec := httptest.NewRecorder()
+	h.Index(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	want := `data-post="` + strconv.FormatInt(newest, 10) + `"`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Errorf("page is missing %s", want)
+	}
+	if got := getVersion(t, h, "/version").Post; got != newest {
+		t.Errorf("/version post = %d, page says %d", got, newest)
+	}
+}
+
 func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	h, _ := setupWithConfig(t, handlers.Config{AdminToken: "secret"})
 

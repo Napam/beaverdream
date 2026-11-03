@@ -247,6 +247,20 @@ func (q *Queries) LatestNotes(ctx context.Context) (string, error) {
 	return notes, err
 }
 
+const latestPostID = `-- name: LatestPostID :one
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  posts
+`
+
+func (q *Queries) LatestPostID(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, latestPostID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listPosts = `-- name: ListPosts :many
 SELECT
   id, author, body, created_at

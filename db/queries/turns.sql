@@ -25,6 +25,12 @@ FROM
 WHERE
   id = ?;
 
+-- name: LatestPostID :one
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  posts;
+
 -- name: ListRecentPosts :many
 SELECT
   *

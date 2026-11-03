@@ -112,6 +112,15 @@ prefer simple, readable code over production hardening.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
   form is a valid outcome.
+- Open pages poll `/version`, which carries two stamps: the current
+  `site_versions` id and the newest post id. The page holds the same two as
+  `data-version` and `data-post` on `<html>`. A different post id always
+  reloads, because posts are server-rendered markup. A different version uses
+  `swap`: css-only changes apply in place, anything else reloads. Post ids
+  rewind on reset, so the script compares with `!==`, never `>`. A post that
+  starts a rewrite can reload a tab twice, once for the post and once for the
+  design; that is expected. A failed post id read is a 500, never a 0, because
+  a wrong stamp reloads forever.
 - Everyone sees the same page. Personalization happens in the browser: the
   server fills `{{name}}` and `<html data-name>` from the cookie, and the
   prompt tells the model to branch on `document.documentElement.dataset.name`

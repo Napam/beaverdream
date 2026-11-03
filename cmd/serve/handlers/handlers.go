@@ -55,9 +55,6 @@ type Config struct {
 	// CompactAfterTurns is the turn-count backstop for very short turns.
 	// Zero uses the default.
 	CompactAfterTurns int
-	// DisableOverrides ignores stored per-visitor pages. The model still has
-	// the visitor's name in the page, so it can personalize in the browser.
-	DisableOverrides bool
 }
 
 // runState is what the live endpoint and the admin panel show while a
@@ -115,10 +112,6 @@ func New(
 	mutator *webmaster.Mutator,
 	cfg Config,
 ) *Handlers {
-	// The config is the one source of truth: a caller that disables overrides
-	// must not leave the mutator offering the tool.
-	mutator.DisableOverrides = cfg.DisableOverrides
-
 	h := &Handlers{
 		logger:        logger,
 		db:            dbConn,
@@ -362,14 +355,8 @@ func (h *Handlers) mutateHeld(
 	}()
 
 	currentSite := h.siteWithState(ctx, current)
-	overrides, err := h.overridesFor(ctx, current.ID)
-	if err != nil {
-		return webmaster.Result{}, err
-	}
-	currentSite.Overrides = overrides
-	hasVisibleOverrides := len(overrides) > 0 && !h.cfg.DisableOverrides
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
-		currentSite.Plain = sameSiteContent(current, seed) && !hasVisibleOverrides
+		currentSite.Plain = sameSiteContent(current, seed)
 	}
 	if count, err := h.queries.CountChangedSinceHeal(ctx); err == nil {
 		currentSite.ChangesSinceHeal = int(count)
@@ -439,7 +426,7 @@ func (h *Handlers) mutateHeld(
 				StateSchema: normalizeStateSchema(res.Site.StateSchema),
 				TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
 				Reason:      res.Reason,
-			}, res.Site.Overrides)
+			})
 			if err != nil {
 				return err
 			}
@@ -1053,11 +1040,7 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("seed site: %w", err)
 	}
-	overrides, err := h.overridesFor(ctx, current.ID)
-	if err != nil {
-		return false, err
-	}
-	if (len(overrides) == 0 || h.cfg.DisableOverrides) && sameSiteContent(current, seed) {
+	if sameSiteContent(current, seed) {
 		h.touchActivity()
 		return false, nil
 	}

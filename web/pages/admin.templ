@@ -2,7 +2,6 @@ package pages
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/db/generated/sqlc"
@@ -44,7 +43,7 @@ func dash(s string) string {
 
 // AdminPage shows the current render, the full conversation behind every
 // mutation, and a box for talking to the model directly.
-templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
+templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -161,34 +160,6 @@ templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []Ru
 							>heal now</button>
 						</form>
 					</div>
-				</section>
-				<section class={ adminCard }>
-					<p class={ adminLabel }>visitor overrides</p>
-					if len(overrides) == 0 {
-						<p class="text-sm text-gray-400 dark:text-neutral-600">everyone sees the same page</p>
-					}
-					for _, override := range overrides {
-						<div class="flex flex-col gap-2 border-t border-gray-200 py-3 first:border-t-0 first:pt-0 dark:border-neutral-800">
-							<div class="flex items-start justify-between gap-4">
-								<div>
-									<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">{ override.Name }</p>
-									<p class="text-xs text-gray-400 dark:text-neutral-600">{ strings.Join(override.FieldNames(), ", ") }</p>
-								</div>
-								<form method="post" action="/admin/overrides/clear">
-									<input type="hidden" name="token" value={ token }/>
-									<input type="hidden" name="name" value={ override.Name }/>
-									<button
-										type="submit"
-										class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline dark:text-neutral-500"
-									>clear</button>
-								</form>
-							</div>
-							<details>
-								<summary class="cursor-pointer text-xs text-gray-400 dark:text-neutral-600">what they see</summary>
-								<pre class={ adminPre + " mt-2" }>{ override.Preview() }</pre>
-							</details>
-						</div>
-					}
 				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>talk to the webmaster</p>

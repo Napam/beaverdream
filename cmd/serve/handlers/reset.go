@@ -54,7 +54,6 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		{`DELETE FROM turns`, nil},
 		// The cascade would do this, but reset must not depend on the
 		// foreign-key pragma being on for every connection.
-		{`DELETE FROM user_overrides WHERE version_id > ?`, []any{seedID.Int64}},
 		{`DELETE FROM site_versions WHERE id > ?`, []any{seedID.Int64}},
 		{`UPDATE site_versions SET turn_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 		{`DELETE FROM site_state`, nil},

@@ -51,11 +51,6 @@ func TestBoardWithoutPlaceholderIsRejected(t *testing.T) {
 	if ed.dirty || ed.site.Board != "<main>"+PostsPlaceholder+"</main>" {
 		t.Fatalf("board changed: %q", ed.site.Board)
 	}
-
-	board := "<main>no posts</main>"
-	if _, err := cleanOverride(nil, nil, &board, nil); err == nil {
-		t.Error("an override board without the placeholder was accepted")
-	}
 }
 
 func TestEditAppendsToAnEmptyStylesheet(t *testing.T) {
@@ -314,130 +309,6 @@ func TestSetSiteNeedsAField(t *testing.T) {
 	}
 }
 
-// The tool schema hides set_user_override when overrides are off, but a model
-// can still call it. The editor rejects it so no row is written and the turn
-// is not marked dirty by an invisible edit.
-func TestSetUserOverrideIsRejectedWhenOverridesAreOff(t *testing.T) {
-	ed := newEditor(Site{})
-	ed.disableOverrides = true
-	got := ed.run("set_user_override", args(t, map[string]any{
-		"name": "dave",
-		"css":  "body{color:red}",
-	}))
-	if !strings.Contains(got, "rejected") {
-		t.Fatalf("got %q, want a rejection", got)
-	}
-	if ed.dirty {
-		t.Error("a rejected override marked the site dirty")
-	}
-	if len(ed.site.Overrides) != 0 {
-		t.Errorf("a rejected override was stored: %+v", ed.site.Overrides)
-	}
-}
-
-func TestSetUserOverrideTargetsThePoster(t *testing.T) {
-	ed := newEditor(Site{})
-	ed.authors = []string{"dave", "kit"}
-	got := ed.run("set_user_override", args(t, map[string]any{
-		"name":   "poster",
-		"css":    ":root{--bg:#000}",
-		"footer": "<footer>only you</footer>",
-	}))
-	if got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-	for _, name := range []string{"dave", "kit"} {
-		override, ok := ed.site.Overrides[OverrideKey(name)]
-		if !ok {
-			t.Fatalf("no override for %s: %+v", name, ed.site.Overrides)
-		}
-		if override.CSS == nil || *override.CSS != ":root{--bg:#000}" {
-			t.Errorf("override css = %+v", override.CSS)
-		}
-		if override.Footer == nil || *override.Footer != "<footer>only you</footer>" {
-			t.Errorf("override footer = %+v", override.Footer)
-		}
-	}
-}
-
-func TestSetUserOverrideCleansTheName(t *testing.T) {
-	ed := newEditor(Site{})
-	got := ed.run("set_user_override", args(t, map[string]any{
-		"name": "Dave!",
-		"css":  "body{color:red}",
-	}))
-	if got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-	override, ok := ed.site.Overrides["dave"]
-	if !ok {
-		t.Fatalf("override was not stored under the clean name: %+v", ed.site.Overrides)
-	}
-	if override.Name != "Dave" {
-		t.Fatalf("display name = %q, want Dave", override.Name)
-	}
-}
-
-func TestSetUserOverrideKeepsFieldsItDidNotSend(t *testing.T) {
-	footer := "<footer>only you</footer>"
-	ed := newEditor(Site{Overrides: map[string]Override{
-		"dave": {Name: "dave", Footer: &footer},
-	}})
-	got := ed.run("set_user_override", args(t, map[string]any{
-		"name": "dave",
-		"css":  "body{color:red}",
-	}))
-	if got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-	override := ed.site.Overrides["dave"]
-	if override.CSS == nil || *override.CSS != "body{color:red}" {
-		t.Errorf("new css was not applied: %+v", override.CSS)
-	}
-	if override.Footer == nil || *override.Footer != footer {
-		t.Errorf("existing footer was dropped: %+v", override.Footer)
-	}
-}
-
-func TestSetUserOverrideNeedsAField(t *testing.T) {
-	ed := newEditor(Site{})
-	got := ed.run("set_user_override", args(t, map[string]any{"name": "dave"}))
-	if !strings.HasPrefix(got, "rejected:") {
-		t.Fatalf("got %q, want a rejection", got)
-	}
-}
-
-func TestSetUserOverrideClearRemovesThePage(t *testing.T) {
-	ed := newEditor(Site{Overrides: map[string]Override{
-		"dave": {Name: "dave"},
-	}})
-	got := ed.run("set_user_override", args(t, map[string]any{
-		"name":  "Dave",
-		"clear": true,
-	}))
-	if got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-	if len(ed.site.Overrides) != 0 {
-		t.Fatalf("override was not cleared: %+v", ed.site.Overrides)
-	}
-}
-
-func TestApplyOverrideAppendsCSSAndReplacesRegions(t *testing.T) {
-	css := "body{background:#000}"
-	footer := "<footer>just for you</footer>"
-	site := ApplyOverride(
-		Site{CSS: "h1{color:red}", Footer: "<footer>everyone</footer>"},
-		&Override{CSS: &css, Footer: &footer},
-	)
-	if site.CSS != "h1{color:red}\nbody{background:#000}" {
-		t.Errorf("css = %q", site.CSS)
-	}
-	if site.Footer != footer {
-		t.Errorf("footer = %q", site.Footer)
-	}
-}
-
 func TestSetSiteKeepsCSSBreakoutsAndURLs(t *testing.T) {
 	css := `body{background:url(https://example.com/x.png)}` +
 		`</style><script>alert(1)</script>`
@@ -635,37 +506,6 @@ func TestSiteDocServesModelMarkupInline(t *testing.T) {
 	}
 }
 
-// A failed or discarded mutation must not leave changes in the map the caller
-// passed in. The change summary would then diff a map against itself.
-func TestEditorDoesNotTouchCallerOverrides(t *testing.T) {
-	dave := Override{Name: "dave", CSS: ptr(":root{--bg:#000}")}
-	site := Site{
-		Board:     PostsPlaceholder,
-		Overrides: map[string]Override{"dave": dave},
-	}
-	ed := newEditor(site)
-	ed.authors = []string{"kit"}
-	if got := ed.run("set_user_override", args(t, map[string]any{
-		"name": "kit",
-		"css":  ":root{--bg:#fff}",
-	})); got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-	if got := ed.run("set_user_override", args(t, map[string]any{
-		"name": "dave",
-		"css":  ":root{--bg:#f00}",
-	})); got != "ok" {
-		t.Fatalf("got %q, want ok", got)
-	}
-
-	if len(site.Overrides) != 1 {
-		t.Fatalf("caller map grew: %+v", site.Overrides)
-	}
-	if *site.Overrides["dave"].CSS != ":root{--bg:#000}" {
-		t.Errorf("caller override was rewritten: %+v", site.Overrides["dave"])
-	}
-}
-
 func TestDoneStoresNotes(t *testing.T) {
 	ed := newEditor(Site{})
 	got := ed.run("done", args(t, map[string]any{
@@ -682,5 +522,3 @@ func TestDoneStoresNotes(t *testing.T) {
 		t.Fatalf("done = %v, dirty = %v", ed.done, ed.dirty)
 	}
 }
-
-func ptr(value string) *string { return &value }

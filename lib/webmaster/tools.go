@@ -41,29 +41,17 @@ type stateKeyInput struct {
 // database until the whole mutation finishes, so a failed round cannot leave a
 // half-written page behind.
 type editor struct {
-	site             Site
-	reason           string
-	notes            *string
-	done             bool
-	dirty            bool
-	authors          []string
-	disableOverrides bool
+	site   Site
+	reason string
+	notes  *string
+	done   bool
+	dirty  bool
 	// rejected counts rejected calls. The loop resets it before each
 	// response.
 	rejected int
 }
 
-// newEditor copies the override map. The editor's copy is what the change
-// summary diffs against the page it started from; sharing the caller's map
-// would make every override look unchanged.
 func newEditor(site Site) *editor {
-	if site.Overrides != nil {
-		cloned := make(map[string]Override, len(site.Overrides))
-		for key, override := range site.Overrides {
-			cloned[key] = override
-		}
-		site.Overrides = cloned
-	}
 	return &editor{site: site}
 }
 
@@ -145,64 +133,6 @@ func (e *editor) apply(name, arguments string) string {
 			return "rejected: arguments are not valid JSON"
 		}
 		return e.edit(in.Target, in.Old, in.New)
-
-	case "set_user_override":
-		if e.disableOverrides {
-			return "rejected: per-visitor overrides are off; " +
-				"use JavaScript and document.documentElement.dataset.name"
-		}
-		var in struct {
-			Name   string  `json:"name"`
-			CSS    *string `json:"css"`
-			Header *string `json:"header"`
-			Board  *string `json:"board"`
-			Footer *string `json:"footer"`
-			Clear  bool    `json:"clear"`
-		}
-		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
-		}
-		names, err := e.overrideTargets(in.Name)
-		if err != nil {
-			return "rejected: " + err.Error()
-		}
-		if in.Clear {
-			for _, name := range names {
-				key := OverrideKey(name)
-				if _, ok := e.site.Overrides[key]; ok {
-					delete(e.site.Overrides, key)
-					e.dirty = true
-				}
-			}
-			return "ok"
-		}
-		override, err := cleanOverride(in.CSS, in.Header, in.Board, in.Footer)
-		if err != nil {
-			return "rejected: " + err.Error()
-		}
-		if len(override.FieldNames()) == 0 {
-			return "rejected: set_user_override needs a field to change, or clear=true"
-		}
-		if e.site.Overrides == nil {
-			e.site.Overrides = make(map[string]Override, len(names))
-		}
-		grown := 0
-		for _, name := range names {
-			if _, exists := e.site.Overrides[OverrideKey(name)]; !exists {
-				grown++
-			}
-		}
-		if len(e.site.Overrides)+grown > maxOverrides {
-			return fmt.Sprintf("rejected: at most %d visitor overrides", maxOverrides)
-		}
-		for _, name := range names {
-			key := OverrideKey(name)
-			merged := MergeOverride(e.site.Overrides[key], override)
-			merged.Name = name
-			e.site.Overrides[key] = merged
-		}
-		e.dirty = true
-		return "ok"
 
 	case "set_state_schema":
 		var in struct {
@@ -371,33 +301,6 @@ func punctuationPattern(old string) string {
 	// replaced rule would swallow the line break after it.
 	pattern := strings.TrimPrefix(b.String(), `\s*`)
 	return strings.TrimSuffix(pattern, `\s*`)
-}
-
-// overrideTargets resolves the name a tool call targets. "poster" is a shortcut
-// for the people whose posts triggered this rewrite, which is the case the
-// model reaches for most.
-func (e *editor) overrideTargets(name string) ([]string, error) {
-	name = CleanIdentity(name)
-	if name == "" {
-		return nil, fmt.Errorf("name is empty")
-	}
-	if !strings.EqualFold(name, "poster") {
-		return []string{name}, nil
-	}
-
-	names := make([]string, 0, len(e.authors))
-	for _, author := range e.authors {
-		// Admin instructions use the same author name as the reserved admin
-		// visitor, and neither has a page worth overriding.
-		if author == "" || strings.EqualFold(author, "admin") {
-			continue
-		}
-		names = append(names, author)
-	}
-	if len(names) == 0 {
-		return nil, fmt.Errorf(`no poster to target; use a visitor name, not "poster"`)
-	}
-	return names, nil
 }
 
 func cleanRegion(name, html string) (string, error) {

@@ -2,7 +2,6 @@ package webmaster
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -27,7 +26,6 @@ const (
 	TurnHeal      = "heal"
 	TurnUndo      = "undo"
 	TurnRestore   = "restore"
-	TurnClear     = "clear"
 )
 
 // Room is the conversation the webmaster reads before it answers again.
@@ -100,7 +98,7 @@ func renderTurn(turn Turn) string {
 	case TurnWebmaster:
 		return renderWebmasterTurn(turn)
 
-	case TurnHeal, TurnUndo, TurnRestore, TurnClear:
+	case TurnHeal, TurnUndo, TurnRestore:
 		return fmt.Sprintf("#%d server: %s", turn.ID, turn.Body)
 	}
 	return ""
@@ -155,60 +153,11 @@ func DescribeChanges(before, after Site) string {
 	if normalizeSchema(before.StateSchema) != normalizeSchema(after.StateSchema) {
 		parts = append(parts, "shared state")
 	}
-	parts = append(parts, describeOverrides(before.Overrides, after.Overrides)...)
 
 	if len(parts) == 0 {
 		return ""
 	}
 	return clip(strings.Join(parts, "; "), 400)
-}
-
-func describeOverrides(before, after map[string]Override) []string {
-	keys := make([]string, 0, len(before)+len(after))
-	seen := make(map[string]bool, len(before)+len(after))
-	for key := range before {
-		if !seen[key] {
-			seen[key] = true
-			keys = append(keys, key)
-		}
-	}
-	for key := range after {
-		if !seen[key] {
-			seen[key] = true
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-
-	var parts []string
-	for _, key := range keys {
-		old, hadOld := before[key]
-		next, hasNext := after[key]
-		name := next.Name
-		if name == "" {
-			name = old.Name
-		}
-		switch {
-		case !hadOld && hasNext:
-			parts = append(parts, fmt.Sprintf(
-				"private page for %s (%s)",
-				name,
-				strings.Join(next.FieldNames(), ", "),
-			))
-		case hadOld && !hasNext:
-			parts = append(parts, "removed the private page for "+name)
-		case !sameOverride(old, next):
-			parts = append(parts, "changed the private page for "+name)
-		}
-	}
-	return parts
-}
-
-func sameOverride(a, b Override) bool {
-	return sameOptional(a.CSS, b.CSS) &&
-		sameOptional(a.Header, b.Header) &&
-		sameOptional(a.Board, b.Board) &&
-		sameOptional(a.Footer, b.Footer)
 }
 
 // normalizeSchema keeps an empty schema equal to the stored default.

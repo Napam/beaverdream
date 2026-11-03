@@ -91,15 +91,6 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	var overrides map[string]webmaster.Override
-	if !h.cfg.DisableOverrides {
-		var err error
-		overrides, err = h.overridesFor(ctx, site.ID)
-		if err != nil {
-			h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
-		}
-	}
-
 	summaryText := ""
 	var summaryThrough int64
 	summary, err := h.queries.GetLatestSummary(ctx)
@@ -114,7 +105,6 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 
 	if err := pages.AdminPage(
 		site,
-		sortedOverrides(overrides),
 		views,
 		versions,
 		summaryText,
@@ -320,83 +310,6 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 	h.touchActivity()
 
 	h.redirectAdmin(w, r, fmt.Sprintf("restored version %d", id))
-}
-
-// ClearOverride gives one visitor the normal page again. It appends a version
-// rather than editing the current one, so undo still works.
-func (h *Handlers) ClearOverride(w http.ResponseWriter, r *http.Request) {
-	if !h.requireAdmin(w, r) {
-		return
-	}
-	if h.cfg.DisableOverrides {
-		h.redirectAdmin(w, r, "overrides are off")
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Bad form", http.StatusBadRequest)
-		return
-	}
-	name := strings.TrimSpace(r.FormValue("name"))
-	key := webmaster.OverrideKey(name)
-	if key == "" {
-		h.redirectAdmin(w, r, "pick an override")
-		return
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	ctx := r.Context()
-	current, err := h.queries.CurrentSite(ctx)
-	if err != nil {
-		h.logger.Error("Failed to load current site", slog.Any("error", err))
-		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
-		return
-	}
-	overrides, err := h.overridesFor(ctx, current.ID)
-	if err != nil {
-		h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
-		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
-		return
-	}
-	if _, ok := overrides[key]; !ok {
-		h.redirectAdmin(w, r, "that visitor already has the normal page")
-		return
-	}
-	delete(overrides, key)
-
-	var cleared sqlc.SiteVersion
-	err = h.inTx(ctx, func(q *sqlc.Queries) error {
-		turn, err := q.CreateTurn(ctx, sqlc.CreateTurnParams{
-			Kind:   webmaster.TurnClear,
-			Author: "admin",
-			Body:   fmt.Sprintf("gave %s the normal page", name),
-		})
-		if err != nil {
-			return fmt.Errorf("record clear turn: %w", err)
-		}
-		created, err := insertVersion(ctx, q, sqlc.CreateSiteVersionParams{
-			Css:         current.Css,
-			Note:        current.Note,
-			Header:      current.Header,
-			Board:       current.Board,
-			Footer:      current.Footer,
-			StateSchema: normalizeStateSchema(current.StateSchema),
-			TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
-			Reason:      fmt.Sprintf("cleared the page for %s", name),
-		}, overrides)
-		cleared = created
-		return err
-	})
-	if err != nil {
-		h.logger.Error("Failed to clear the visitor override", slog.Any("error", err))
-		http.Error(w, "Could not clear the override", http.StatusInternalServerError)
-		return
-	}
-	h.setVersion(cleared.ID)
-	h.touchActivity()
-
-	h.redirectAdmin(w, r, fmt.Sprintf("%s has the normal page again", name))
 }
 
 func (h *Handlers) redirectAdmin(w http.ResponseWriter, r *http.Request, message string) {

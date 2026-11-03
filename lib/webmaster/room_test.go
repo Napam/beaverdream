@@ -77,33 +77,18 @@ func TestDescribeChangesNamesFieldsNotMarkup(t *testing.T) {
 		CSS:    "old",
 		Header: "<h1>old</h1>",
 		Board:  PostsPlaceholder,
-		Overrides: map[string]Override{
-			"dave": {Name: "dave", CSS: stringPtr(":root{--bg:#000}")},
-		},
 	}
 	after := Site{
 		CSS:    "new",
 		Header: "<h1>old</h1>",
 		Board:  PostsPlaceholder,
-		Overrides: map[string]Override{
-			"dave": {Name: "dave", CSS: stringPtr(":root{--bg:#fff}")},
-			"kit":  {Name: "kit", Footer: stringPtr("<footer>only you</footer>")},
-		},
 	}
 
 	got := DescribeChanges(before, after)
-	for _, want := range []string{
-		"stylesheet",
-		"changed the private page for dave",
-		"private page for kit (footer)",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("summary is missing %q: %s", want, got)
-		}
+	if got != "stylesheet" {
+		t.Errorf("summary = %q, want stylesheet", got)
 	}
 	if strings.Contains(got, "<") {
 		t.Errorf("summary carries markup: %s", got)
 	}
 }
-
-func stringPtr(value string) *string { return &value }

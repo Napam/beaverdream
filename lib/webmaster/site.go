@@ -23,9 +23,9 @@ const (
 // from the board just because the model rewrote the region without it.
 const PostsPlaceholder = "{{posts}}"
 
-// Site is one version of the page: three regions and a stylesheet. Overrides
-// are the per-visitor versions of those regions. StateSchema and State belong
-// to the model-declared shared state, not to the version row itself.
+// Site is one version of the page: three regions and a stylesheet. StateSchema
+// and State belong to the model-declared shared state, not to the version row
+// itself.
 //
 // Note is kept from older versions. It is no longer rendered or edited, but
 // seed matching still compares it, so it travels with the version.
@@ -38,7 +38,6 @@ type Site struct {
 	Footer           string
 	StateSchema      string
 	State            map[string]json.RawMessage
-	Overrides        map[string]Override
 	Name             string
 	Plain            bool
 	ChangesSinceHeal int

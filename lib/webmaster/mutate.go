@@ -32,10 +32,6 @@ type Mutator struct {
 	// slow mutation can be told apart from a slow model, and a long answer
 	// from a slow one.
 	OnRoundDone func(stats RoundStats)
-
-	// DisableOverrides removes the per-visitor tool and tells the model to
-	// personalize in the browser instead. Everyone sees one shared page.
-	DisableOverrides bool
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
@@ -126,16 +122,8 @@ func (m *Mutator) MutatePosts(
 		triggers = []Post{{Author: "admin"}}
 	}
 	ed := newEditor(current)
-	ed.authors = editorAuthors(triggers)
-	ed.disableOverrides = m.DisableOverrides
-	promptSite := current
-	if m.DisableOverrides {
-		// The rows still travel with the version, but the model must not see
-		// a feature it cannot use.
-		promptSite.Overrides = nil
-	}
-	sys := systemPrompt(!m.DisableOverrides)
-	usr := userPrompt(promptSite, room, triggers)
+	sys := systemPrompt()
+	usr := userPrompt(current, room, triggers)
 
 	res := Result{Site: current, Messages: []Message{
 		{Role: "system", Content: sys},
@@ -156,7 +144,7 @@ func (m *Mutator) MutatePosts(
 		resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Model:           openai.ChatModel(m.model),
 			Messages:        messages,
-			Tools:           toolParams(!m.DisableOverrides),
+			Tools:           toolParams(),
 			ToolChoice:      toolChoiceRequired,
 			MaxTokens:       openai.Int(maxOutputTokens),
 			Temperature:     openai.Float(0.8),
@@ -342,8 +330,8 @@ func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam
 
 // toolParams advertises the mutation tools. Every extra knob is another way a
 // small model can produce broken output.
-func toolParams(allowOverrides bool) []openai.ChatCompletionToolUnionParam {
-	tools := []openai.ChatCompletionToolUnionParam{
+func toolParams() []openai.ChatCompletionToolUnionParam {
+	return []openai.ChatCompletionToolUnionParam{
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "edit",
 			Description: openai.String(
@@ -392,44 +380,6 @@ func toolParams(allowOverrides bool) []openai.ChatCompletionToolUnionParam {
 				},
 			},
 		}),
-	}
-	if allowOverrides {
-		tools = append(tools, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name: "set_user_override",
-			Description: openai.String(
-				"Make the page different for one visitor. The name \"poster\" means " +
-					"the people who just posted. Other visitors keep the normal page. " +
-					"Only the fields you send change; the rest of that visitor's page stays. " +
-					"To remove one part, clear the override and set it again. " +
-					"CSS is added after the site stylesheet; regions replace the global ones.",
-			),
-			Parameters: shared.FunctionParameters{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{
-						"type":        "string",
-						"description": "A visitor name, or \"poster\" (reserved) for the people who just posted.",
-					},
-					"css": map[string]any{
-						"type":        "string",
-						"description": "Extra CSS rules, added after the site stylesheet.",
-					},
-					"header": map[string]any{"type": "string"},
-					"board": map[string]any{
-						"type":        "string",
-						"description": "Must contain {{posts}}.",
-					},
-					"footer": map[string]any{"type": "string"},
-					"clear": map[string]any{
-						"type":        "boolean",
-						"description": "Give this visitor the normal page again.",
-					},
-				},
-				"required": []string{"name"},
-			},
-		}))
-	}
-	return append(tools,
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_state_schema",
 			Description: openai.String(
@@ -492,11 +442,11 @@ func toolParams(allowOverrides bool) []openai.ChatCompletionToolUnionParam {
 				"required": []string{"reason"},
 			},
 		}),
-	)
+	}
 }
 
-// The system prompt is assembled from static pieces, so each mode has a stable
-// string and a stable prompt cache prefix.
+// The system prompt is assembled from static pieces, so it is one stable
+// string with a stable prompt cache prefix.
 const systemPromptHead = `You are the webmaster of beaverdream, a small anonymous message board.
 You are the one other presence in a room full of visitors. You have no text
 channel. The page is your voice: every rewrite is your turn in one continuous
@@ -534,15 +484,6 @@ Tools:
   only for a full restyle or a new layout. Only the fields you send change. The
   board must contain the literal placeholder {{posts}}. The page must keep one
   working post form.
-`
-
-const overrideToolText = `- set_user_override(name, css, header, board, footer, clear): make the page
-  different for one visitor. name is a visitor name, or "poster" for the people
-  who just posted. Only the fields you send change; the rest of that visitor's
-  page stays. CSS is added after the site stylesheet, so write a delta; header,
-  board and footer replace the global ones for that visitor. clear=true gives
-  them the normal page again. Everyone else keeps the normal page. Keep at most
-  12 visitors at a time. edit changes the shared page only.
 `
 
 const systemPromptMiddle = `- The board must always contain the literal placeholder {{posts}}, which is
@@ -610,13 +551,7 @@ Rules:
   from a plain board must change something visible. After a quiet board heals,
   start gentle again. You remember the old era even though the page does not.
 - Server lines in the log are things done to your page. You may have opinions
-  about them. An admin can undo, restore or clear a visitor without asking you.
-`
-
-const overrideRuleText = `- Per-visitor overrides are a private joke. The named visitor sees the change;
-  everyone else keeps the normal page. Use one when a post is personal, when
-  someone asks to be special, or when one person deserves it. Keep existing
-  overrides unless that visitor asks to be normal again.
+  about them. An admin can undo or restore without asking you.
 `
 
 const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write
@@ -667,13 +602,9 @@ with > is wrapped in span.quote, and >>N becomes a.post-ref linking to #pN.
 An empty board shows p.empty instead.
 `
 
-// systemPrompt keeps two stable strings, one per override mode, so each keeps
-// its own prompt cache prefix.
-func systemPrompt(allowOverrides bool) string {
-	if allowOverrides {
-		return systemPromptHead + overrideToolText + systemPromptMiddle +
-			overrideRuleText + systemPromptTail + pageAnatomy + systemPromptClose
-	}
+// systemPrompt is the same string on every turn, so it keeps one prompt cache
+// prefix.
+func systemPrompt() string {
 	return systemPromptHead + systemPromptMiddle + systemPromptTail +
 		pageAnatomy + systemPromptClose
 }
@@ -765,7 +696,7 @@ func PageRunes(site Site) int {
 }
 
 // pagePrompt renders the current page: stylesheet, regions, shared state,
-// visitor overrides and the plain flag.
+// and the plain flag.
 func pagePrompt(site Site) string {
 	var b strings.Builder
 
@@ -802,21 +733,6 @@ func pagePrompt(site Site) string {
 		}
 	}
 
-	b.WriteString("\nCURRENT PER-VISITOR OVERRIDES:\n")
-	if len(site.Overrides) == 0 {
-		b.WriteString("(none)\n")
-	} else {
-		keys := make([]string, 0, len(site.Overrides))
-		for key := range site.Overrides {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			override := site.Overrides[key]
-			fmt.Fprintf(&b, "- %s: %s\n", override.Name, strings.Join(override.FieldNames(), ", "))
-		}
-	}
-
 	b.WriteString("\nBOARD IS PLAIN: ")
 	if site.Plain {
 		b.WriteString("yes\n")
@@ -825,25 +741,6 @@ func pagePrompt(site Site) string {
 	}
 	fmt.Fprintf(&b, "CHANGES SINCE THE LAST HEAL: %d\n", site.ChangesSinceHeal)
 	return b.String()
-}
-
-// editorAuthors collects the names the "poster" override target expands to.
-func editorAuthors(triggers []Post) []string {
-	authors := make([]string, 0, len(triggers))
-	seen := make(map[string]bool, len(triggers))
-	for _, trigger := range triggers {
-		name := strings.TrimSpace(trigger.Author)
-		if name == "" {
-			continue
-		}
-		key := OverrideKey(name)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		authors = append(authors, name)
-	}
-	return authors
 }
 
 // reasoningOf pulls "reasoning_content" out of an OpenAI-compatible reply. It

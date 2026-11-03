@@ -115,30 +115,6 @@ func TestEditKeywordsSendEditAndDoneTogether(t *testing.T) {
 	}
 }
 
-func TestCursePromptTargetsThePoster(t *testing.T) {
-	srv := httptest.NewServer(Handler())
-	defer srv.Close()
-
-	status, raw := post(t, srv, `{"messages":[{"role":"user","content":"curse me"}]}`)
-	if status != http.StatusOK {
-		t.Fatalf("status = %d", status)
-	}
-
-	var got completion
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	var override string
-	for _, call := range got.Choices[0].Message.ToolCalls {
-		if call.Function.Name == "set_user_override" {
-			override = call.Function.Arguments
-		}
-	}
-	if !strings.Contains(override, `"name":"poster"`) {
-		t.Fatalf("curse theme does not target the poster: %q", override)
-	}
-}
-
 func TestToolResultClosesWithDone(t *testing.T) {
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()

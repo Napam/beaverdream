@@ -68,31 +68,6 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	}
 }
 
-func TestMutateGivesThePosterAPrivatePage(t *testing.T) {
-	m, closeServer := testMutator(t)
-	defer closeServer()
-
-	res, err := m.Mutate(
-		context.Background(),
-		Site{Board: PostsPlaceholder},
-		Room{},
-		Post{Author: "dave", Body: "curse me"},
-	)
-	if err != nil {
-		t.Fatalf("Mutate: %v", err)
-	}
-	override, ok := res.Site.Overrides["dave"]
-	if !ok {
-		t.Fatalf("no override for the poster: %+v", res.Site.Overrides)
-	}
-	if override.Footer == nil || !strings.Contains(*override.Footer, "only you") {
-		t.Errorf("override footer = %+v", override.Footer)
-	}
-	if override.CSS == nil || !strings.Contains(*override.CSS, "ff3b3b") {
-		t.Errorf("override css = %+v", override.CSS)
-	}
-}
-
 // editBytes sums the arguments of every call that changed the page, which is
 // what the model had to write out.
 func editBytes(res Result) int {
@@ -409,7 +384,6 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 		"CURRENT STYLESHEET:",
 		"CURRENT REGIONS:",
 		"CURRENT SHARED STATE:",
-		"CURRENT PER-VISITOR OVERRIDES:",
 		"BOARD IS PLAIN:",
 		"NEW POST #9",
 	}
@@ -487,22 +461,13 @@ func TestMutateReportsModelFailure(t *testing.T) {
 	}
 }
 
-// Each mode gets its own static prompt, so the tool the model is told about
-// always matches the tool it is offered.
-func TestTheSystemPromptMatchesTheOverrideMode(t *testing.T) {
-	on := systemPrompt(true)
-	off := systemPrompt(false)
-
-	if !strings.Contains(on, "set_user_override") {
-		t.Error("the prompt with overrides does not describe the tool")
+// The prompt points the model at the browser for per-visitor jokes.
+func TestTheSystemPromptTellsTheModelHowToPersonalize(t *testing.T) {
+	if !strings.Contains(systemPrompt(), "dataset.name") {
+		t.Error("the prompt does not tell the model how to personalize in the browser")
 	}
-	if strings.Contains(off, "set_user_override") {
-		t.Error("the prompt without overrides still describes the tool")
-	}
-	for name, prompt := range map[string]string{"on": on, "off": off} {
-		if !strings.Contains(prompt, "dataset.name") {
-			t.Errorf("%s prompt does not tell the model how to personalize in the browser", name)
-		}
+	if strings.Contains(systemPrompt(), "set_user_override") {
+		t.Error("the prompt still describes a per-visitor tool")
 	}
 }
 
@@ -516,51 +481,29 @@ func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
 		t.Fatalf("found only %d classes in %s", len(classes), rendered)
 	}
 
-	for _, allow := range []bool{true, false} {
-		prompt := systemPrompt(allow)
-		if prompt != systemPrompt(allow) {
-			t.Fatal("the system prompt is not a stable string")
-		}
-		for _, match := range classes {
-			for _, class := range strings.Fields(match[1]) {
-				if !strings.Contains(prompt, "."+class) &&
-					!strings.Contains(prompt, `class="`+class+`"`) {
-					t.Errorf("overrides %v: class %q is not named in the prompt", allow, class)
-				}
+	prompt := systemPrompt()
+	if prompt != systemPrompt() {
+		t.Fatal("the system prompt is not a stable string")
+	}
+	for _, match := range classes {
+		for _, class := range strings.Fields(match[1]) {
+			if !strings.Contains(prompt, "."+class) &&
+				!strings.Contains(prompt, `class="`+class+`"`) {
+				t.Errorf("class %q is not named in the prompt", class)
 			}
 		}
-		for _, want := range []string{
-			strings.TrimSpace(BaseCSS),
-			"white-space:pre-wrap",
-			"span.quote",
-			"a.post-ref",
-		} {
-			if !strings.Contains(prompt, want) {
-				t.Errorf("overrides %v: prompt lacks %q", allow, want)
-			}
-		}
-		if !strings.HasSuffix(prompt, "Do not write commentary outside tool calls.") {
-			t.Errorf("overrides %v: the closing instruction is not last", allow)
+	}
+	for _, want := range []string{
+		strings.TrimSpace(BaseCSS),
+		"white-space:pre-wrap",
+		"span.quote",
+		"a.post-ref",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt lacks %q", want)
 		}
 	}
-}
-
-// Disabling overrides removes the tool from the schema, so the model cannot
-// ask for a per-visitor page. The executor rejects it if a model calls it
-// anyway, and stored rows stay readable so the feature can be switched back on.
-func TestTheOverrideToolDisappearsWhenOverridesAreOff(t *testing.T) {
-	encode := func(allow bool) string {
-		data, err := json.Marshal(toolParams(allow))
-		if err != nil {
-			t.Fatalf("marshal tools: %v", err)
-		}
-		return string(data)
-	}
-
-	if !strings.Contains(encode(true), `"set_user_override"`) {
-		t.Error("the override tool is missing when overrides are on")
-	}
-	if strings.Contains(encode(false), `"set_user_override"`) {
-		t.Error("the override tool is still offered when overrides are off")
+	if !strings.HasSuffix(prompt, "Do not write commentary outside tool calls.") {
+		t.Error("the closing instruction is not last")
 	}
 }

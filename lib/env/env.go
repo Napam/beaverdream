@@ -41,10 +41,6 @@ type Env = struct {
 	MaxMutationsPerDay int
 	// Tool rounds per mutation before the loop gives up.
 	MutationRounds int
-	// EnableOverrides lets the model keep separate pages per visitor. Off by
-	// default: everyone sees the same page, and the model personalizes in the
-	// browser instead.
-	EnableOverrides bool
 }
 
 var Vars *Env
@@ -55,7 +51,6 @@ func init() {
 	_ = LoadDotEnv(".env")
 
 	migrate, _ := strconv.ParseBool(os.Getenv("DB_MIGRATE_ON_START"))
-	overrides, _ := strconv.ParseBool(os.Getenv("ENABLE_OVERRIDES"))
 	Vars = &Env{
 		DbMigrateOnStart:      migrate,
 		Host:                  GetEnv("HOST", "localhost"),
@@ -71,7 +66,6 @@ func init() {
 		AdminToken:            os.Getenv("ADMIN_TOKEN"),
 		MaxMutationsPerDay:    GetEnvInt("MAX_MUTATIONS_PER_DAY", 500),
 		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
-		EnableOverrides:       overrides,
 	}
 }
 

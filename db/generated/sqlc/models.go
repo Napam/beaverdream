@@ -55,10 +55,3 @@ type Turn struct {
 	DurationMs int64
 	CreatedAt  string
 }
-
-type UserOverride struct {
-	VersionID int64
-	Name      string
-	NameKey   string
-	Fields    string
-}

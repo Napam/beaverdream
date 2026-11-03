@@ -22,21 +22,20 @@ prefer simple, readable code over production hardening.
 ## Shape of the app
 
 - `turns` is the room: one ordered row for every post, every webmaster turn and
-  every server event (heal, undo, restore, clear). `id` is the conversation
+  every server event (heal, undo, restore). `id` is the conversation
   order. The `posts` view exposes only `kind = 'post'`; the board reads posts
   through it, so model text (said, notes, changes) cannot reach the page by
   accident. `site_versions` is the render, append-only; the current site is
   `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
   holds the compacted history: the newest row is one message standing in for
   everything through `through_turn_id`. `site_state` holds the model-declared
-  shared values, and its schema travels on the version row. `user_overrides`
-  holds the per-visitor versions of the page, keyed by `version_id` and name.
+  shared values, and its schema travels on the version row.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
-  `override.go` (per-visitor pages), `room.go` (the turn type, the room log and
+  `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
   (the loop, prompts, tool schemas).
 - `cmd/serve/handlers` owns HTTP: `pages.go` (board, post, version),
-  `overrides.go` (visitor pages, version writes), `admin.go` (auth, inject,
+  `versions.go` (version writes, carry forward), `admin.go` (auth, inject,
   restore), `handlers.go` (mutation wrapper, room log, cap, config).
 - GET requests never call the model. Only a post or an admin instruction
   mutates the site.
@@ -68,18 +67,18 @@ prefer simple, readable code over production hardening.
   `CompactAfterTurns` turns, so its start never slides before compaction.
 - The user prompt is ordered for the prompt cache: compacted history, room
   log, then the notes, the page and the new post, which change every turn.
-  The system prompt is static per override mode and includes `BaseCSS` and a
-  sample post rendered by `RenderPosts`.
-- Out-of-band changes are turns, not silent edits. Heal, undo, restore and
-  clear each record an event turn in the same transaction as the version they
-  carry. The webmaster's notes survive heal and failed turns; reset deletes
-  them with the room.
+  The system prompt is one static string and includes `BaseCSS` and a sample
+  post rendered by `RenderPosts`.
+- Out-of-band changes are turns, not silent edits. Heal, undo and restore
+  each record an event turn in the same transaction as the version they carry.
+  The webmaster's notes survive heal and failed turns; reset deletes them with
+  the room.
 - Keeping the page is a real turn. `done` with no edits writes no version and
   records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
   no-op: the plain-board rule lives in the prompt, not in code.
 - The board region must keep the literal `{{posts}}` placeholder; the server
   substitutes the escaped post list. `cleanRegion` rejects a board without it,
-  for `set_site`, `edit` and overrides alike. `SiteDoc` still appends the
+  for `set_site` and `edit` alike. `SiteDoc` still appends the
   posts if a stored board lacks it. Never let posts be stored inside
   model-controlled HTML.
 - The model changes the page with `edit` (replace one exact, unique piece of
@@ -87,8 +86,7 @@ prefer simple, readable code over production hardening.
   (whole fields, for a real restyle). Output tokens are the latency, so the
   prompt steers small changes to `edit`. An edit result goes through the same
   `cleanCSS` / `cleanRegion` as a whole write, and a rejected edit leaves the
-  field alone. `edit` targets the shared page only; override bodies are never
-  in the prompt, so there is nothing to anchor on. When a response calls
+  field alone. When a response calls
   `done` next to a rejected call and rounds remain, the loop defers that
   `done` so the model can fix the call; its reason and notes stay as the
   fallback. `set_site` cleans every field before it assigns any, and a write
@@ -114,22 +112,10 @@ prefer simple, readable code over production hardening.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
   form is a valid outcome.
-- Visitor overrides are off unless `ENABLE_OVERRIDES=true`. When off, the
-  `set_user_override` tool is not offered and the executor rejects it, so no
-  new row is written. Stored rows still travel forward so the flag is
-  reversible, but they are ignored at render time, hidden from the prompt, and
-  left out of the plain-page check; the admin page hides the list and refuses
-  to clear one. Keep the code: turning the env var back on restores it. The
-  model is told to use `document.documentElement.dataset.name` instead. When
-  on, overrides are
-  model-owned and belong to the version row. Only a name on the current version
-  gets one, matched case-insensitively after `webmaster.CleanIdentity`, and
-  later mutations inherit the map until the model clears it. A later
-  `set_user_override` merges, so fields the model omits stay. CSS is appended to
-  the site stylesheet; regions replace. Undo, restore and heal copy the
-  overrides of the version they carry; reset drops them with the versions.
-  Admin can clear one by name. Do not let overrides bypass `cleanCSS` or
-  `cleanRegion`.
+- Everyone sees the same page. Personalization happens in the browser: the
+  server fills `{{name}}` and `<html data-name>` from the cookie, and the
+  prompt tells the model to branch on `document.documentElement.dataset.name`
+  in a script. There is no per-visitor server state.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
@@ -159,11 +145,11 @@ prefer simple, readable code over production hardening.
 - Restore copies an old version forward as a new row. History stays immutable.
 - A quiet board heals back to the seed by copying it forward as a new row and
   recording a heal turn. It keeps posts and the webmaster's notes, clears shared
-  state and visitor overrides, takes `h.mu`, and never calls the model. The
+  state, takes `h.mu`, and never calls the model. The
   admin panel can heal immediately.
 - Reset is the one destructive action: it keeps the oldest version, deletes
   every turn (posts, webmaster turns, events, notes) with the compacted
-  summaries, later versions (with their overrides) and shared state, and
+  summaries, later versions and shared state, and
   rewinds the id sequences. It takes `h.mu`, so it cannot race a mutation.
 
 ## Frontend
@@ -177,8 +163,7 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 
 - Mock model: `task dev.mock-llm` on `localhost:6701`, model id `mock-model`.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
-  `curse`/`only me` adds a per-visitor override (ignored unless
-  `ENABLE_OVERRIDES=true`); `mocknoop` and `mockfail` test the no-op and error
+  `mocknoop` and `mockfail` test the no-op and error
   paths. `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.

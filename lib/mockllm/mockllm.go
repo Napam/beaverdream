@@ -38,10 +38,9 @@ type toolCall struct {
 }
 
 type theme struct {
-	css      string
-	title    string
-	header   string
-	personal bool
+	css    string
+	title  string
+	header string
 }
 
 // Handler serves chat completions and a model list.
@@ -208,12 +207,6 @@ func pickTheme(prompt string) theme {
 				`.post{border-top:3px solid #111}`,
 			title: "raw feed",
 		}
-	case strings.Contains(prompt, "curse") || strings.Contains(prompt, "only me"):
-		return theme{
-			css:      `:root{--bg:#180b0b;--fg:#f2dede;--accent:#ff6b6b;--muted:#9a6f6f;--panel:#241010;--border:#5a2a2a}`,
-			title:    "the usual board",
-			personal: true,
-		}
 	default:
 		return theme{
 			css:   `:root{--bg:#0b0b0f;--fg:#e6e6e6;--accent:#9db4ff;--muted:#6d7280;--panel:#15151b;--border:#2a2a33}`,
@@ -243,20 +236,6 @@ func (t theme) calls() []toolCall {
 		Type:     "function",
 		Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
 	}}
-	if t.personal {
-		calls = append(calls, toolCall{
-			ID:   "call_override",
-			Type: "function",
-			Function: functionCall{
-				Name: "set_user_override",
-				Arguments: mustJSON(map[string]any{
-					"name":   "poster",
-					"css":    ":root{--bg:#2a0808;--accent:#ff3b3b}",
-					"footer": `<footer class="colophon">only you can see this page.</footer>`,
-				}),
-			},
-		})
-	}
 	return calls
 }
 

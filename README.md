@@ -47,6 +47,19 @@ It is a toy. It runs on localhost and calls a local model.
   `GET /x/state`, and visitors change it with `POST /x/state/{key}`. It is the
   model's backend without giving it arbitrary Go. Restores keep the values;
   reset and heal clear them.
+- The journal is the model's backend for things people do together. It declares
+  append-only feeds with `set_journal_schema` (a game's moves, a chat, votes),
+  and the page appends small JSON payloads with `POST /j/{key}` and reads them
+  back from `GET /j/{key}?since=N`. The server owns order, a per-browser visitor
+  id, the match number and the rules number; it never reads a payload. A
+  code-owned runtime (`bd.journal(key)`) owns the cursor, the poll, seats and
+  error reporting, so the model writes only `reduce(rows)` and `render(state)`.
+  The log is public, so the reducer is the referee. A page with a live feed
+  stops auto-reloading on new posts and shows a code-owned "new posts" button
+  instead, so a game is not interrupted mid-match. When a model script throws,
+  the page reports it to `POST /x/err` and
+  the server records one `alert` turn per message per stretch, which the
+  webmaster reads as a `browser:` line and can fix.
 - A new post returns immediately. A single worker coalesces posts that arrive
   during a rewrite, so a burst becomes one mutation. Open pages poll
   `/version`, which reports the current version and the newest post id. A new

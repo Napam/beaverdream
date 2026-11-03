@@ -136,6 +136,7 @@ func (m *Mutator) MutatePosts(
 	}
 
 	hiddenWarned := false
+	journalWarned := false
 	for round := 0; round < m.maxRounds; round++ {
 		if m.OnRound != nil {
 			m.OnRound(round + 1)
@@ -218,6 +219,15 @@ func (m *Mutator) MutatePosts(
 					hiddenWarned = true
 				}
 			}
+			if deferred == "" && !journalWarned {
+				missing := MissingJournalKeys(ed.site)
+				// Only this turn's loss counts. A board that already had a
+				// missing key should not defer every later turn.
+				if len(missing) > 0 && len(MissingJournalKeys(current)) == 0 {
+					deferred = fmt.Sprintf(doneDropsJournal, strings.Join(missing, ", "))
+					journalWarned = true
+				}
+			}
 		}
 		if deferred != "" {
 			ed.done = false
@@ -285,6 +295,12 @@ const doneDeferred = "not finished: a call above was rejected. Fix it, then call
 // behind something left open before {{posts}}.
 const doneHidesPosts = "not finished: %s before {{posts}} hides every post. " +
 	"Close it and call done again, or call done again to keep the page as it is."
+
+// doneDropsJournal is the result of a done call whose page no longer mentions a
+// declared journal key, which would orphan the rows behind it.
+const doneDropsJournal = "not finished: no script in the page calls bd.journal for key %s, " +
+	"so that feature is gone and its rows can no longer be reached. Put the " +
+	"bd.journal call back, or remove the key from set_journal_schema, then call done again."
 
 // reportRound records one finished completion on the result and tells the
 // listener.
@@ -420,6 +436,42 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "set_journal_schema",
+			Description: openai.String(
+				"Declare the append-only event logs the page writes and folds. " +
+					"One key is one feed: a game's moves, a chat, votes, a guestbook.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"keys": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"name": map[string]any{
+									"type":        "string",
+									"description": "Lowercase letters, digits, _ or -. Also put this string in the page.",
+								},
+								"max": map[string]any{
+									"type":        "integer",
+									"description": "Rows to keep, newest wins. Default 300, max 1000.",
+								},
+								"rules": map[string]any{
+									"type": "integer",
+									"description": "Bump this when you change reduce(). " +
+										"Rows written under older rules are ignored, so a rules " +
+										"change does not replay old moves through new code.",
+								},
+							},
+							"required": []string{"name"},
+						},
+					},
+				},
+				"required": []string{"keys"},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "done",
 			Description: openai.String(
 				"End your turn and say one sentence to the room. You read it back " +
@@ -494,6 +546,10 @@ const systemPromptMiddle = `- The board must always contain the literal placehol
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
   the options). Up to 8 keys. Declare only what the page actually uses.
+- set_journal_schema(keys): declare append-only feeds the page writes and
+  folds. Use it when a post asks for something people do together: a game, a
+  chat, votes, a shared list. It is the only way to give the page real shared
+  behavior. Up to 6 keys, and every key must appear in the page.
 - done(reason, notes): end your turn. reason is the one sentence you say to the
   room; it goes in the log and you read it back next turn. notes replaces your
   private notes to your future self. Omit notes to keep them.
@@ -534,7 +590,9 @@ post asks you to break posting.
 
 Shared state:
 - The current values arrive in the prompt, and the page gets them in a JSON
-  script tag with id="bd-state".
+  script tag with id="bd-state". The tag is a snapshot from page load. A page
+  with a journal feed does not reload on new posts, so if it shows state,
+  refetch GET /x/state on the beaverdream:post event.
 - GET /x/state returns {"schema": ..., "state": ...}. POST /x/state/KEY with a
   value=... form field applies that key's op for the current visitor.
 - Use state only when a post asks for something people can click, vote on or
@@ -552,6 +610,58 @@ Rules:
   start gentle again. You remember the old era even though the page does not.
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo or restore without asking you.
+`
+
+// journalPrompt explains the one shared store the page can write to. It spells
+// out the shape and gives a working example: a small model cannot invent a
+// reducer, a seat rule and a poll from a one-line API description.
+const journalPrompt = `The journal:
+- The journal is an append-only public log. You declare a key, the page appends
+  small JSON payloads to it, and every visitor's page reads the rows in order
+  and folds them into what it draws. That is how a page gets real shared
+  behavior: a game, a chat, a vote, a shared list, a scoreboard.
+- Anyone can append anything, so the log is public and untrusted. Never put a
+  secret in it. The reducer is the referee: ignore rows that are out of turn,
+  illegal or nonsense, so a bad row changes nothing for anyone.
+- Declare keys with set_journal_schema, and open each one in a page script
+  with bd.journal("KEY"). A done call whose page no longer calls bd.journal
+  for a declared key is rejected, because the rows behind it would be
+  unreachable.
+- Bump rules when you change reduce(). Rows written under an older rules number
+  are ignored, so a rules change starts a clean board instead of replaying old
+  moves through new code. Open tabs still running the old code reload
+  themselves, and the server refuses their writes until they do. A bump skips
+  past any rules number stored rows already carry; the tool result says so.
+- The runtime is code-owned. Your page writes only reduce and render:
+
+<script>
+var feed = bd.journal("taps")
+feed.start(
+  function (rows) {
+    var total = 0
+    for (var i = 0; i < rows.length; i++) total += rows[i].payload.n || 1
+    return total
+  },
+  function (total) { document.getElementById("taps").textContent = total }
+)
+document.getElementById("tap").onclick = function () { feed.append({ n: 1 }) }
+</script>
+
+- bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
+  once, then polls. reduce(rows) returns any state you like and render(state,
+  feed) draws it. feed.append(payload) writes one row; feed.newMatch(payload)
+  opens the next match. Both resolve with the stored row, or with null when
+  the server refused it (someone opened the next match first, or the visitor
+  clicks too fast). They never throw for that, so no catch is needed. A row
+  is {id, visitor, payload, match, rules, at}. The payload must be a JSON
+  object of at most 600 bytes.
+  bd.visitor is the viewer's opaque id: use it for seats and for "your turn".
+- A page that starts a feed stops auto-reloading when new posts arrive; it gets
+  a beaverdream:post event instead, so show new posts yourself if you want.
+- When your script throws, a reduce fails or the server rejects a payload, the
+  server writes you a log line from the page's browser with the message. Only
+  the current page reports; errors from replaced pages are dropped. Fix what
+  it names.
 `
 
 const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write
@@ -606,7 +716,7 @@ An empty board shows p.empty instead.
 // prefix.
 func systemPrompt() string {
 	return systemPromptHead + systemPromptMiddle + systemPromptTail +
-		pageAnatomy + systemPromptClose
+		journalPrompt + pageAnatomy + systemPromptClose
 }
 
 // historyPostLen keeps old posts from crowding out the current site in the
@@ -730,6 +840,44 @@ func pagePrompt(site Site) string {
 			for _, key := range keys {
 				fmt.Fprintf(&b, "%s: %s\n", key, site.State[key])
 			}
+		}
+	}
+
+	b.WriteString("\nCURRENT JOURNAL:\n")
+	if strings.TrimSpace(site.JournalSchema) == "" ||
+		strings.TrimSpace(site.JournalSchema) == "{}" {
+		b.WriteString("(no keys)\n")
+	} else {
+		b.WriteString("schema: ")
+		b.WriteString(site.JournalSchema)
+		b.WriteString("\n")
+		keys := make([]string, 0, len(site.Journal))
+		for key := range site.Journal {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			state := site.Journal[key]
+			fmt.Fprintf(
+				&b,
+				"%s: match %d, rules %d, %d rows",
+				key,
+				state.Match,
+				state.Rules,
+				state.Rows,
+			)
+			if len(state.Last) > 0 {
+				b.WriteString(", newest rows of this match:")
+				for _, row := range state.Last {
+					data, err := json.Marshal(row)
+					if err != nil {
+						continue
+					}
+					b.WriteString(" ")
+					b.Write(data)
+				}
+			}
+			b.WriteString("\n")
 		}
 	}
 

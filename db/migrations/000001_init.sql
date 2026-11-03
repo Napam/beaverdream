@@ -58,6 +58,9 @@ CREATE TABLE site_versions (
   board TEXT NOT NULL DEFAULT '',
   footer TEXT NOT NULL DEFAULT '',
   state_schema TEXT NOT NULL DEFAULT '{}',
+  -- Journal keys the page may append to. The model declares them; the server
+  -- only checks names, sizes and order.
+  journal_schema TEXT NOT NULL DEFAULT '{}',
   turn_id INTEGER REFERENCES turns (id) ON DELETE SET NULL,
   reason TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -91,6 +94,29 @@ CREATE TABLE site_state (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- The journal is the one flexible store: an append-only log of small JSON
+-- events grouped by a model-declared key. The server owns order, identity,
+-- time and the rules stamp; it never reads what a payload means. A page reads
+-- rows with ?since=<id> and folds them in its own script.
+CREATE TABLE journal (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL,
+  -- Opaque per-browser id, set by the server. Display names are not unique,
+  -- so this is what can hold a seat.
+  visitor TEXT NOT NULL DEFAULT '',
+  -- Compact JSON written by the page. Never rendered by the server.
+  payload TEXT NOT NULL DEFAULT '{}',
+  -- A match boundary the page controls, so a rematch does not replay the
+  -- previous game.
+  match INTEGER NOT NULL DEFAULT 1,
+  -- The rules number that was declared when the row was written, so changing
+  -- the reducer does not replay old rows through new code.
+  rules INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX journal_key_id ON journal (key, id);
+
 -- The seed is a plain light board: a title, a simple post form, and an empty
 -- thread. The model takes it from here.
 INSERT INTO
@@ -113,6 +139,8 @@ VALUES
   );
 
 -- +goose Down
+DROP TABLE IF EXISTS journal;
+
 DROP TABLE IF EXISTS room_summaries;
 
 DROP TABLE IF EXISTS site_state;

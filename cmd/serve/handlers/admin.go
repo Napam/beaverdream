@@ -206,7 +206,7 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 }
 
 // HealBoard puts the plain seed back now instead of waiting for the idle
-// timer. Posts and shared state stay.
+// timer. Posts stay; shared state and the journal are cleared with it.
 func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return

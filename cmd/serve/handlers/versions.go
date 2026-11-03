@@ -48,8 +48,28 @@ func (h *Handlers) carryVersion(
 	author string,
 	body string,
 ) (sqlc.SiteVersion, error) {
+	return h.carryVersionAfter(ctx, source, kind, author, body, nil)
+}
+
+// carryVersionAfter is carryVersion with a first step in the same
+// transaction. Heal uses it to clear the shared state and the journal, so the
+// old data is gone exactly when the plain page lands, and not at all if the
+// write fails.
+func (h *Handlers) carryVersionAfter(
+	ctx context.Context,
+	source sqlc.SiteVersion,
+	kind string,
+	author string,
+	body string,
+	before func(*sqlc.Queries) error,
+) (sqlc.SiteVersion, error) {
 	var version sqlc.SiteVersion
 	err := h.inTx(ctx, func(q *sqlc.Queries) error {
+		if before != nil {
+			if err := before(q); err != nil {
+				return err
+			}
+		}
 		turn, err := q.CreateTurn(ctx, sqlc.CreateTurnParams{
 			Kind:   kind,
 			Author: author,
@@ -59,14 +79,15 @@ func (h *Handlers) carryVersion(
 			return fmt.Errorf("record event turn: %w", err)
 		}
 		created, err := insertVersion(ctx, q, sqlc.CreateSiteVersionParams{
-			Css:         source.Css,
-			Note:        source.Note,
-			Header:      source.Header,
-			Board:       source.Board,
-			Footer:      source.Footer,
-			StateSchema: normalizeStateSchema(source.StateSchema),
-			TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
-			Reason:      body,
+			Css:           source.Css,
+			Note:          source.Note,
+			Header:        source.Header,
+			Board:         source.Board,
+			Footer:        source.Footer,
+			StateSchema:   normalizeSchema(source.StateSchema),
+			JournalSchema: normalizeSchema(source.JournalSchema),
+			TurnID:        sql.NullInt64{Int64: turn.ID, Valid: true},
+			Reason:        body,
 		})
 		version = created
 		return err

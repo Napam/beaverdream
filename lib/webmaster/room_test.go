@@ -92,3 +92,15 @@ func TestDescribeChangesNamesFieldsNotMarkup(t *testing.T) {
 		t.Errorf("summary carries markup: %s", got)
 	}
 }
+
+func TestRenderLogLabelsBrowserErrors(t *testing.T) {
+	got := RenderLog([]Turn{{
+		ID:   3,
+		Kind: TurnAlert,
+		Body: "reduce is not a function",
+	}}, nil)
+	want := "#3 browser (reported by a visitor's page): reduce is not a function"
+	if !strings.Contains(got, want) {
+		t.Fatalf("log = %q, want a line containing %q", got, want)
+	}
+}

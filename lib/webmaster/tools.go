@@ -149,6 +149,50 @@ func (e *editor) apply(name, arguments string) string {
 		e.dirty = true
 		return "ok"
 
+	case "set_journal_schema":
+		var in struct {
+			Keys []journalKeyInput `json:"keys"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
+			return "rejected: arguments are not valid JSON"
+		}
+		// An omitted rule or max keeps the declared value. Otherwise adding a
+		// second key would silently reset the first one and replay its rows.
+		// A new rules number skips past every number stored rows carry, so a
+		// restore or a key declared again cannot replay an older reducer's
+		// rows.
+		current := ParseJournalSchema(e.site.JournalSchema)
+		var raised []string
+		for i := range in.Keys {
+			name := strings.TrimSpace(in.Keys[i].Name)
+			old, ok := current[name]
+			used := e.site.JournalRulesUsed[name]
+			rules, bumped, err := journalRules(in.Keys[i].Rules, old, ok, used)
+			if err != nil {
+				return fmt.Sprintf("rejected: rules for %q %s", name, err.Error())
+			}
+			if bumped {
+				raised = append(raised, fmt.Sprintf(
+					"rules for %q raised to %d, because stored rows already carry %d",
+					name, rules, used,
+				))
+			}
+			in.Keys[i].Rules = rules
+			if ok && in.Keys[i].Max <= 0 {
+				in.Keys[i].Max = old.Max
+			}
+		}
+		schema, err := cleanJournalSchema(in.Keys)
+		if err != nil {
+			return "rejected: " + err.Error()
+		}
+		e.site.JournalSchema = schema
+		e.dirty = true
+		if len(raised) > 0 {
+			return "ok (" + strings.Join(raised, "; ") + ")"
+		}
+		return "ok"
+
 	case "done":
 		var in struct {
 			Reason string  `json:"reason"`

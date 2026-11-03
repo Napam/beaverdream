@@ -91,11 +91,14 @@ type Handlers struct {
 	lastError     string
 	lastRewriteAt map[string]time.Time
 	lastStateAt   map[string]time.Time
-	lastActivity  time.Time
-	wake          chan struct{}
-	stop          chan struct{}
-	closeOnce     sync.Once
-	workerWG      sync.WaitGroup
+	journalBucket map[string]*journalBucket
+	// alertSeen collapses repeated browser errors into one event each.
+	alertSeen    map[string]time.Time
+	lastActivity time.Time
+	wake         chan struct{}
+	stop         chan struct{}
+	closeOnce    sync.Once
+	workerWG     sync.WaitGroup
 
 	compactAfterTokens int
 	compactAfterTurns  int
@@ -120,6 +123,8 @@ func New(
 		cfg:           cfg,
 		lastRewriteAt: make(map[string]time.Time),
 		lastStateAt:   make(map[string]time.Time),
+		journalBucket: make(map[string]*journalBucket),
+		alertSeen:     make(map[string]time.Time),
 		lastActivity:  time.Now(),
 		wake:          make(chan struct{}, 1),
 		stop:          make(chan struct{}),
@@ -166,20 +171,22 @@ func (h *Handlers) Close() {
 
 func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
 	return webmaster.Site{
-		Version:     row.ID,
-		CSS:         row.Css,
-		Note:        row.Note,
-		Header:      row.Header,
-		Board:       row.Board,
-		Footer:      row.Footer,
-		StateSchema: row.StateSchema,
+		Version:       row.ID,
+		CSS:           row.Css,
+		Note:          row.Note,
+		Header:        row.Header,
+		Board:         row.Board,
+		Footer:        row.Footer,
+		StateSchema:   row.StateSchema,
+		JournalSchema: row.JournalSchema,
 	}
 }
 
-// siteWithState attaches the model-declared shared state to a version before
-// it is rendered or sent to the model.
+// siteWithState attaches the model-declared shared state and journal to a
+// version before it is rendered or sent to the model.
 func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webmaster.Site {
 	site := siteFromRow(row)
+	site.Journal = h.journalState(ctx, row.JournalSchema)
 	schema := parseStateSchema(row.StateSchema)
 	if len(schema) == 0 {
 		return site
@@ -199,11 +206,12 @@ func sameSiteContent(a, b sqlc.SiteVersion) bool {
 		a.Header == b.Header &&
 		a.Board == b.Board &&
 		a.Footer == b.Footer &&
-		normalizeStateSchema(a.StateSchema) == normalizeStateSchema(b.StateSchema)
+		normalizeSchema(a.StateSchema) == normalizeSchema(b.StateSchema) &&
+		normalizeSchema(a.JournalSchema) == normalizeSchema(b.JournalSchema)
 }
 
-// normalizeStateSchema keeps an empty schema as a valid JSON object.
-func normalizeStateSchema(schema string) string {
+// normalizeSchema keeps an empty schema as a valid JSON object.
+func normalizeSchema(schema string) string {
 	if strings.TrimSpace(schema) == "" {
 		return "{}"
 	}
@@ -355,6 +363,7 @@ func (h *Handlers) mutateHeld(
 	}()
 
 	currentSite := h.siteWithState(ctx, current)
+	currentSite.JournalRulesUsed = h.journalRulesUsed(ctx)
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
 		currentSite.Plain = sameSiteContent(current, seed)
 	}
@@ -418,14 +427,15 @@ func (h *Handlers) mutateHeld(
 	txErr := h.inTx(finishCtx, func(q *sqlc.Queries) error {
 		if res.Changed {
 			version, err := insertVersion(finishCtx, q, sqlc.CreateSiteVersionParams{
-				Css:         res.Site.CSS,
-				Note:        res.Site.Note,
-				Header:      res.Site.Header,
-				Board:       res.Site.Board,
-				Footer:      res.Site.Footer,
-				StateSchema: normalizeStateSchema(res.Site.StateSchema),
-				TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
-				Reason:      res.Reason,
+				Css:           res.Site.CSS,
+				Note:          res.Site.Note,
+				Header:        res.Site.Header,
+				Board:         res.Site.Board,
+				Footer:        res.Site.Footer,
+				StateSchema:   normalizeSchema(res.Site.StateSchema),
+				JournalSchema: normalizeSchema(res.Site.JournalSchema),
+				TurnID:        sql.NullInt64{Int64: turn.ID, Valid: true},
+				Reason:        res.Reason,
 			})
 			if err != nil {
 				return err
@@ -1045,15 +1055,21 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	if err := h.queries.DeleteSiteState(ctx); err != nil {
-		return false, fmt.Errorf("clear shared state: %w", err)
-	}
-	healed, err := h.carryVersion(
+	healed, err := h.carryVersionAfter(
 		ctx,
 		seed,
 		webmaster.TurnHeal,
 		"server",
 		"the board went quiet; the plain page is back. you remember.",
+		func(q *sqlc.Queries) error {
+			if err := q.DeleteSiteState(ctx); err != nil {
+				return fmt.Errorf("clear shared state: %w", err)
+			}
+			if err := q.DeleteJournal(ctx); err != nil {
+				return fmt.Errorf("clear journal: %w", err)
+			}
+			return nil
+		},
 	)
 	if err != nil {
 		return false, err

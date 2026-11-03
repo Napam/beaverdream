@@ -8,6 +8,16 @@ import (
 	"database/sql"
 )
 
+type Journal struct {
+	ID        int64
+	Key       string
+	Visitor   string
+	Payload   string
+	Match     int64
+	Rules     int64
+	CreatedAt string
+}
+
 type Post struct {
 	ID        int64
 	Author    string
@@ -29,16 +39,17 @@ type SiteState struct {
 }
 
 type SiteVersion struct {
-	ID          int64
-	Css         string
-	Note        string
-	Header      string
-	Board       string
-	Footer      string
-	StateSchema string
-	TurnID      sql.NullInt64
-	Reason      string
-	CreatedAt   string
+	ID            int64
+	Css           string
+	Note          string
+	Header        string
+	Board         string
+	Footer        string
+	StateSchema   string
+	JournalSchema string
+	TurnID        sql.NullInt64
+	Reason        string
+	CreatedAt     string
 }
 
 type Turn struct {

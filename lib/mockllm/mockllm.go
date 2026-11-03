@@ -115,11 +115,123 @@ func decide(prompt string, toolResultSeen bool) []toolCall {
 	if strings.Contains(prompt, "mocknoop") || toolResultSeen {
 		return []toolCall{doneCall("nothing needed changing")}
 	}
+	if strings.Contains(prompt, "mockgame") {
+		return gameCalls()
+	}
 	if edit, ok := pickEdit(prompt); ok {
 		return []toolCall{editCall(edit), doneCall("a small edit")}
 	}
 	return pickTheme(prompt).calls()
 }
+
+// gameCalls declares a feed and ships a whole two-player applet in one turn.
+// The applet is the reference shape the prompt asks for: a reducer that is the
+// referee, a render that draws whatever the reducer returns, and no state of
+// its own.
+func gameCalls() []toolCall {
+	schema := map[string]any{"keys": []map[string]any{{
+		"name":  "moves",
+		"max":   200,
+		"rules": 1,
+	}}}
+	board := `<h2 class="board-title">tic tac toe</h2>` +
+		`<div id="game" class="ttt" data-journal="moves"></div>` +
+		GameScript + postForm + `{{posts}}`
+	site := map[string]string{
+		"css":   `:root{--bg:#0d1117;--fg:#e6edf3;--accent:#f78166;--muted:#8b949e;--panel:#161b22;--border:#30363d}`,
+		"board": board,
+	}
+	return []toolCall{
+		{
+			ID:       "call_journal",
+			Type:     "function",
+			Function: functionCall{Name: "set_journal_schema", Arguments: mustJSON(schema)},
+		},
+		{
+			ID:       "call_site",
+			Type:     "function",
+			Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
+		},
+		doneCall("two-player tic tac toe. click join and take a seat."),
+	}
+}
+
+// GameScript is the applet the mockgame keyword ships. It is exported so a
+// test can run its reducer against a row list.
+const GameScript = `<style>
+.ttt-grid{display:grid;grid-template-columns:repeat(3,64px);gap:6px;margin:.6em 0}
+.ttt-cell{height:64px;font-size:1.6em;font-weight:700;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:4px;cursor:pointer}
+.ttt-status{font-weight:700;margin:.4em 0}
+.ttt-join{background:var(--accent);color:#fff;border:0;border-radius:4px;padding:.4em .9em;font-weight:700;cursor:pointer}
+</style>
+<script>
+(function () {
+  var feed = bd.journal("moves")
+  var LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
+  function winnerOf(board) {
+    for (var l = 0; l < LINES.length; l++) {
+      var a = board[LINES[l][0]], b = board[LINES[l][1]], c = board[LINES[l][2]]
+      if (a && a === b && b === c) return a
+    }
+    return ''
+  }
+  function reduce(rows) {
+    var players = []
+    var board = ['', '', '', '', '', '', '', '', '']
+    var played = 0
+    var winner = ''
+    for (var i = 0; i < rows.length; i++) {
+      var p = rows[i].payload || {}
+      var who = rows[i].visitor
+      if (p.join) {
+        if (players.length < 2 && players.indexOf(who) < 0) players.push(who)
+        continue
+      }
+      if (typeof p.cell !== 'number' || winner) continue
+      if (players.length < 2) continue
+      var seat = players.indexOf(who)
+      if (seat < 0 || p.cell < 0 || p.cell > 8 || board[p.cell]) continue
+      if (played % 2 !== seat) continue
+      board[p.cell] = seat === 0 ? 'X' : 'O'
+      played++
+      winner = winnerOf(board)
+    }
+    if (!winner && played === 9) winner = 'draw'
+    var turn = players.length === 2 ? players[played % 2] : ''
+    return { board: board, players: players, winner: winner, turn: turn }
+  }
+  function render(s) {
+    var box = document.getElementById('game')
+    if (!box) return
+    var me = s.players.indexOf(bd.visitor)
+    var status
+    if (s.winner === 'draw') status = 'draw.'
+    else if (s.winner) status = s.winner + ' wins.'
+    else if (!s.players.length) status = 'press join.'
+    else if (s.turn === bd.visitor) status = 'your turn, ' + (me === 0 ? 'X' : 'O')
+    else status = 'waiting for the other player.'
+    var html = '<div class="ttt-status">' + status + '</div><div class="ttt-grid">'
+    for (var i = 0; i < 9; i++) {
+      html += '<button class="ttt-cell" data-cell="' + i + '">' + (s.board[i] || '') + '</button>'
+    }
+    html += '</div>'
+    if (me < 0 && s.players.length < 2 && !s.winner) {
+      html += '<button class="ttt-join" id="ttt-join">join</button>'
+    }
+    box.innerHTML = html
+    var join = document.getElementById('ttt-join')
+    if (join) join.onclick = function () { feed.append({ join: 1 }) }
+    var cells = box.querySelectorAll('.ttt-cell')
+    for (var c = 0; c < cells.length; c++) {
+      cells[c].onclick = function () {
+        if (s.turn !== bd.visitor || s.board[+this.dataset.cell]) return
+        feed.append({ cell: +this.dataset.cell })
+      }
+    }
+  }
+  feed.start(reduce, render)
+})()
+</script>`
 
 // PatchedAccent is the accent color the mockpatch keyword writes over the
 // default theme's accent.

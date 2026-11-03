@@ -30,14 +30,20 @@ const PostsPlaceholder = "{{posts}}"
 // Note is kept from older versions. It is no longer rendered or edited, but
 // seed matching still compares it, so it travels with the version.
 type Site struct {
-	Version          int64
-	CSS              string
-	Note             string
-	Header           string
-	Board            string
-	Footer           string
-	StateSchema      string
-	State            map[string]json.RawMessage
+	Version       int64
+	CSS           string
+	Note          string
+	Header        string
+	Board         string
+	Footer        string
+	StateSchema   string
+	State         map[string]json.RawMessage
+	JournalSchema string
+	Journal       map[string]JournalState
+	// JournalRulesUsed is the highest rules number stored under each key
+	// with rows, declared or not. Only the schema tool reads it.
+	JournalRulesUsed map[string]int
+	Visitor          string
 	Name             string
 	Plain            bool
 	ChangesSinceHeal int
@@ -188,6 +194,9 @@ const liveScript = `<script>
   var reloading = false
 
   document.addEventListener('input', function () { typingAt = Date.now() }, true)
+  // The journal runtime sends this when the server has journal rules this
+  // page's code was not written for. Only a fresh page has the right code.
+  document.addEventListener('beaverdream:stale', function () { maybeReload(version) })
 
   function saveState(next) {
     try {
@@ -276,6 +285,19 @@ const liveScript = `<script>
     reload(next, nextPost)
   }
 
+  // showNew offers the reload a page with a live feed would otherwise skip.
+  // A game keeps its state; the visitor decides when to pull in new posts.
+  function showNew(next, nextPost) {
+    var box = document.getElementById('bd-new')
+    var btn = document.getElementById('bd-new-btn')
+    if (!box || !btn) return
+    box.style.setProperty('display', 'block', 'important')
+    btn.onclick = function () {
+      box.style.setProperty('display', 'none', 'important')
+      maybeReload(next, nextPost)
+    }
+  }
+
   // setBusy shows the code-owned spinner while a mutation is queued or
   // running. The display value is set important so a model stylesheet cannot
   // hide it.
@@ -298,6 +320,14 @@ const liveScript = `<script>
         // Reset rewinds post ids, so any difference counts, not only a
         // larger id.
         if (String(d.post) !== post) {
+          if (document.documentElement.getAttribute('data-bd-live') === '1') {
+            // A page driving a live journal keeps its state: reloading here
+            // would look like a disconnect mid-game. Offer the posts instead.
+            post = String(d.post)
+            showNew(d.version, d.post)
+            document.dispatchEvent(new CustomEvent('beaverdream:post', { detail: d }))
+            return
+          }
           maybeReload(d.version, d.post)
           return
         }
@@ -353,6 +383,32 @@ func IdentityDoc(name string) string {
 		back + `</body></html>`
 }
 
+// journalKeyConfig is one key as the client runtime gets it. Rules is the
+// number this page's code was written for; the runtime holds it for the life
+// of the tab.
+type journalKeyConfig struct {
+	Match int `json:"match"`
+	Rules int `json:"rules"`
+}
+
+// journalConfig is the data the client runtime needs: who is looking, and the
+// declared journal keys with their current match and rules number. The row
+// count and recent rows the prompt uses stay out of the page.
+func journalConfig(site Site) []byte {
+	keys := make(map[string]journalKeyConfig, len(site.Journal))
+	for key, state := range site.Journal {
+		keys[key] = journalKeyConfig{Match: state.Match, Rules: state.Rules}
+	}
+	data, err := json.Marshal(struct {
+		Visitor string                      `json:"visitor"`
+		Keys    map[string]journalKeyConfig `json:"keys"`
+	}{Visitor: site.Visitor, Keys: keys})
+	if err != nil {
+		return []byte(`{"visitor":"","keys":{}}`)
+	}
+	return data
+}
+
 // SiteDoc builds the page served to visitors. There is no sandbox: the
 // model's regions, CSS and scripts are the page. The only code-owned parts are
 // the document shell, the live reload script, the busy spinner, and the small
@@ -397,6 +453,12 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" href="data:,">`)
 	b.WriteString(`<title>beaverdream</title>`)
+	// The journal config and runtime are code-owned and come before any model
+	// markup, so a page script can call bd.journal() while the page parses.
+	b.WriteString(`<script type="application/json" id="bd-journal">`)
+	b.Write(journalConfig(site))
+	b.WriteString(`</script>`)
+	b.WriteString(JournalRuntime)
 	// The live script goes before the model's markup, so an unclosed tag in a
 	// region cannot swallow it.
 	b.WriteString(liveScript)
@@ -417,6 +479,16 @@ func SiteDoc(site Site, posts []Post) string {
 		`border:2px solid rgba(127,127,127,.35)!important;` +
 		`border-top-color:rgba(127,127,127,.9)!important;` +
 		`animation:bd-busy-spin .7s linear infinite!important"></div>`)
+	// A page with a live feed does not reload on new posts, so this offers it.
+	// Inline styles keep a model stylesheet from hiding the only way to see
+	// what someone just wrote.
+	b.WriteString(`<div id="bd-new" style="display:none!important;position:fixed!important;` +
+		`bottom:16px!important;left:50%!important;transform:translateX(-50%)!important;` +
+		`z-index:2147483647!important"><button id="bd-new-btn" type="button" ` +
+		`style="font:inherit!important;font-size:14px!important;font-weight:700!important;` +
+		`padding:.5em 1em!important;border:0!important;border-radius:999px!important;` +
+		`background:#1f1f1f!important;color:#fff!important;cursor:pointer!important;` +
+		`box-shadow:0 2px 10px rgba(0,0,0,.25)!important">new posts</button></div>`)
 	if site.StateSchema != "" || len(site.State) > 0 {
 		state := site.State
 		if state == nil {

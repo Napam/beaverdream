@@ -29,7 +29,8 @@ prefer simple, readable code over production hardening.
   `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
   holds the compacted history: the newest row is one message standing in for
   everything through `through_turn_id`. `site_state` holds the model-declared
-  shared values, and its schema travels on the version row.
+  shared values, and its schema travels on the version row. `journal` holds the
+  model-declared append-only feeds, and their schema travels there too.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
@@ -131,6 +132,29 @@ prefer simple, readable code over production hardening.
   serialized and cooled down per visitor. Do not let visitors create keys or
   store raw HTML. Reset and heal clear the state; restores keep the values and
   take the old schema.
+- The journal is the model's one flexible store and the server never reads a
+  payload. Rows are append-only, grouped by a model-declared key, and carry the
+  browser's opaque visitor id plus the match and rules numbers. Only keys in
+  the current version's `journal_schema` are writable; visitors cannot create
+  keys. Every declared key must be opened by a `bd.journal("key")` call in the
+  page (the bare word in prose does not count), and a `done` whose page drops
+  one is deferred, because its rows would be unreachable. A rules number
+  belongs to the reducer that wrote rows under it: the page holds the rules
+  its code was written for and sends them with every append, the server
+  refuses a mismatch with 409, and a mismatch anywhere reloads the page, never
+  just the feed. A rules bump in `set_journal_schema` skips past every number
+  stored rows carry, declared key or not. A page that
+  starts a feed sets `data-bd-live` and stops reloading on new posts; the
+  code-owned `bd-new` button offers that reload instead, so posts are never
+  unreachable. The client runtime is code-owned; the model writes `reduce` and
+  `render` only.
+  The log is public, so the reducer, not the server, rejects illegal rows.
+- A browser error is a turn, not a console line. `/x/err` records one `alert`
+  turn per message per stretch, labelled as visitor-reported, and never
+  triggers a turn, or a script that throws again would loop forever. The
+  beacon carries the page's version; an error from a page that is no longer
+  current is dropped. Refusals the page did not cause (closed match, 409, 429,
+  401) resolve `append` with null and never reach the beacon.
 - The seed page reads like a plain light message board. Do not mention
   rewriting, AI, or the gimmick in its header, form or footer; the first post is
   the reveal. Keep the seed in `000001_init.sql` and the form example in the
@@ -154,7 +178,8 @@ prefer simple, readable code over production hardening.
 - Restore copies an old version forward as a new row. History stays immutable.
 - A quiet board heals back to the seed by copying it forward as a new row and
   recording a heal turn. It keeps posts and the webmaster's notes, clears shared
-  state, takes `h.mu`, and never calls the model. The
+  state and the journal in the same transaction as that version, takes `h.mu`,
+  and never calls the model. The
   admin panel can heal immediately.
 - Reset is the one destructive action: it keeps the oldest version, deletes
   every turn (posts, webmaster turns, events, notes) with the compacted

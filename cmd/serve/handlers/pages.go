@@ -53,6 +53,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)
+	docSite.Visitor = publicVisitor(visitorFromRequest(w, r))
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, webmaster.SiteDoc(docSite, converted)); err != nil {
@@ -181,7 +182,8 @@ func swapKind(previous, current sqlc.SiteVersion) string {
 	if previous.Header != current.Header ||
 		previous.Board != current.Board ||
 		previous.Footer != current.Footer ||
-		previous.StateSchema != current.StateSchema {
+		previous.StateSchema != current.StateSchema ||
+		normalizeSchema(previous.JournalSchema) != normalizeSchema(current.JournalSchema) {
 		return "reload"
 	}
 	if breaksOutOfStyle(previous.Css) || breaksOutOfStyle(current.Css) {

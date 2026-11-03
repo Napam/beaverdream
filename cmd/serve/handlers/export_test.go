@@ -1,6 +1,31 @@
 package handlers
 
-import "github.com/Napam/beaverdream/db/generated/sqlc"
+import (
+	"context"
+
+	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/lib/webmaster"
+)
+
+// JournalState and JournalRulesUsed expose what the prompt and the schema tool
+// get about the journal, without running a model.
+func (h *Handlers) JournalState(
+	ctx context.Context,
+	schema string,
+) map[string]webmaster.JournalState {
+	return h.journalState(ctx, schema)
+}
+
+func (h *Handlers) JournalRulesUsed(ctx context.Context) map[string]int {
+	return h.journalRulesUsed(ctx)
+}
+
+// ExecForTest runs raw SQL on the handler's database, so a test can make a
+// write fail with a trigger.
+func (h *Handlers) ExecForTest(ctx context.Context, query string) error {
+	_, err := h.db.ExecContext(ctx, query)
+	return err
+}
 
 // QueuePost and RunPending let tests queue a post and drain the queue without
 // racing the background worker.

@@ -26,6 +26,9 @@ const (
 	TurnHeal      = "heal"
 	TurnUndo      = "undo"
 	TurnRestore   = "restore"
+	// TurnAlert is a browser error the page reported about itself, so the
+	// webmaster can see that its own script broke.
+	TurnAlert = "alert"
 )
 
 // Room is the conversation the webmaster reads before it answers again.
@@ -100,6 +103,13 @@ func renderTurn(turn Turn) string {
 
 	case TurnHeal, TurnUndo, TurnRestore:
 		return fmt.Sprintf("#%d server: %s", turn.ID, turn.Body)
+
+	case TurnAlert:
+		return fmt.Sprintf(
+			"#%d browser (reported by a visitor's page): %s",
+			turn.ID,
+			clip(turn.Body, 200),
+		)
 	}
 	return ""
 }
@@ -152,6 +162,9 @@ func DescribeChanges(before, after Site) string {
 	}
 	if normalizeSchema(before.StateSchema) != normalizeSchema(after.StateSchema) {
 		parts = append(parts, "shared state")
+	}
+	if normalizeSchema(before.JournalSchema) != normalizeSchema(after.JournalSchema) {
+		parts = append(parts, "journal")
 	}
 
 	if len(parts) == 0 {

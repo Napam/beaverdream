@@ -34,9 +34,9 @@ WHERE
 
 -- name: CreateSiteVersion :one
 INSERT INTO
-  site_versions (css, note, header, board, footer, state_schema, turn_id, reason)
+  site_versions (css, note, header, board, footer, state_schema, journal_schema, turn_id, reason)
 VALUES
-  (?, ?, ?, ?, ?, ?, ?, ?)
+  (?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING
   *;
 

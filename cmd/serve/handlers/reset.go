@@ -57,9 +57,10 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		{`DELETE FROM site_versions WHERE id > ?`, []any{seedID.Int64}},
 		{`UPDATE site_versions SET turn_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 		{`DELETE FROM site_state`, nil},
+		{`DELETE FROM journal`, nil},
 		// Rewind every id sequence. The room starts empty, so the first post
 		// is turn 1 again.
-		{`DELETE FROM sqlite_sequence WHERE name IN ('turns')`, nil},
+		{`DELETE FROM sqlite_sequence WHERE name IN ('turns', 'journal')`, nil},
 		// AUTOINCREMENT remembers the highest id ever used. Bring it back to
 		// the seed so the next version is seed+1 instead of one past the
 		// history that was just deleted.

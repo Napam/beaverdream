@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -70,6 +71,27 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The panel shows the same journal and state the page and the prompt see,
+	// so a stuck feed can be read without opening sqlite.
+	live := h.siteWithState(ctx, site)
+	feeds := make([]pages.FeedView, 0, len(live.Journal))
+	for key, state := range live.Journal {
+		feeds = append(feeds, pages.FeedView{
+			Key:   key,
+			Match: state.Match,
+			Rules: state.Rules,
+			Rows:  state.Rows,
+			Last:  state.Last,
+		})
+	}
+	sort.Slice(feeds, func(i, j int) bool { return feeds[i].Key < feeds[j].Key })
+
+	states := make([]pages.StateView, 0, len(live.State))
+	for key, value := range live.State {
+		states = append(states, pages.StateView{Key: key, Value: string(value)})
+	}
+	sort.Slice(states, func(i, j int) bool { return states[i].Key < states[j].Key })
+
 	views := make([]pages.RunView, 0, len(runs))
 	for i, run := range runs {
 		// The newest conversations are the ones worth opening. Older runs
@@ -105,6 +127,8 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 
 	if err := pages.AdminPage(
 		site,
+		feeds,
+		states,
 		views,
 		versions,
 		summaryText,

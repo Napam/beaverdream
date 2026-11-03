@@ -1737,3 +1737,52 @@ func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
 		t.Errorf("compacted although the page fills the budget: %+v", summary)
 	}
 }
+
+// The admin panel reads the same journal and shared state the page and the
+// prompt do, so a stuck feed is visible without opening sqlite.
+func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	site, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:           site.Css,
+		Note:          site.Note,
+		Header:        site.Header,
+		Board:         site.Board,
+		Footer:        site.Footer,
+		StateSchema:   `{"taps":{"op":"counter"}}`,
+		JournalSchema: `{"moves":{"max":50,"rules":1}}`,
+		Reason:        "test declares a feed",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	appendJournal(t, h.JournalAppend, "moves", `{"cell":4}`, 0, visitorA)
+	if err := queries.UpsertSiteState(ctx, sqlc.UpsertSiteStateParams{
+		Key:   "taps",
+		Value: "7",
+	}); err != nil {
+		t.Fatalf("upsert state: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Admin(rec, httptest.NewRequest(http.MethodGet, "/admin?token="+testAdminToken, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"journal and shared state",
+		"1 row · match 1 · rules 1",
+		publicID(visitorA),
+		"taps = 7",
+		"JOURNAL SCHEMA",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("admin page is missing %q", want)
+		}
+	}
+}

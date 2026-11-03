@@ -58,6 +58,9 @@ channel, not a feature per request.
   under every key, declared or not. A bump, a new key, or a key declared
   again after it was dropped skips past it, so a restore cannot replay an
   older reducer's rows. Keeping the declared number keeps the old rows.
+- The admin panel shows every declared key with its row count, match, rules
+  and newest three rows, plus the current shared state values, so a stuck feed
+  can be read without sqlite. It is read-only.
 - The prompt shows each key's match, rules, row count and the newest three
   rows of the current match under the current rules, with id and visitor.
 - Heal clears the shared state and the journal in the same transaction as the

@@ -1,7 +1,9 @@
 package pages
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/db/generated/sqlc"
@@ -14,6 +16,22 @@ type RunView struct {
 	Run            sqlc.ListWebmasterTurnsRow
 	Messages       []webmaster.Message
 	MessagesLoaded bool
+}
+
+// FeedView is one declared journal key: the match being played, its rules and
+// size, and the last rows the page would fold.
+type FeedView struct {
+	Key   string
+	Match int
+	Rules int
+	Rows  int
+	Last  []webmaster.JournalTailRow
+}
+
+// StateView is one value in the model-declared shared state.
+type StateView struct {
+	Key   string
+	Value string
 }
 
 const (
@@ -41,9 +59,34 @@ func dash(s string) string {
 	return s
 }
 
+// feedText prints the last rows of a match in the shape the page's reducer
+// sees them, one per line.
+func feedText(rows []webmaster.JournalTailRow) string {
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, fmt.Sprintf("#%d %s %s", row.ID, row.Visitor, row.Payload))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func rowCount(n int) string {
+	if n == 1 {
+		return "1 row"
+	}
+	return strconv.Itoa(n) + " rows"
+}
+
+func stateText(states []StateView) string {
+	lines := make([]string, 0, len(states))
+	for _, state := range states {
+		lines = append(lines, state.Key+" = "+state.Value)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // AdminPage shows the current render, the full conversation behind every
 // mutation, and a box for talking to the model directly.
-templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
+templ AdminPage(site sqlc.SiteVersion, feeds []FeedView, states []StateView, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -142,7 +185,7 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 					<p class="mt-1 text-sm text-gray-500 dark:text-neutral-400">{ dash(site.Reason) }</p>
 					<details class="mt-3">
 						<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
-						<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nSTATE SCHEMA:\n" + site.StateSchema }</pre>
+						<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nSTATE SCHEMA:\n" + site.StateSchema + "\n\nJOURNAL SCHEMA:\n" + site.JournalSchema }</pre>
 					</details>
 					<div class="mt-3 flex flex-wrap gap-2">
 						<form method="post" action="/admin/undo">
@@ -160,6 +203,32 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 							>heal now</button>
 						</form>
 					</div>
+					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
+						heal clears the journal and shared state with the page, so a game in progress ends.
+					</p>
+				</section>
+				<section class={ adminCard }>
+					<p class={ adminLabel }>journal and shared state</p>
+					if len(feeds) == 0 && len(states) == 0 {
+						<p class="text-sm text-gray-400 dark:text-neutral-600">nothing declared</p>
+					}
+					for _, feed := range feeds {
+						<div class="mb-3 last:mb-0">
+							<p class="text-sm">
+								<span class="font-mono">{ feed.Key }</span>
+								<span class="text-gray-400 dark:text-neutral-600">· { rowCount(feed.Rows) } · match { strconv.Itoa(feed.Match) } · rules { strconv.Itoa(feed.Rules) }</span>
+							</p>
+							if len(feed.Last) == 0 {
+								<p class="text-xs text-gray-400 dark:text-neutral-600">no rows in this match yet</p>
+							} else {
+								<pre class={ adminPre + " mt-1" }>{ feedText(feed.Last) }</pre>
+							}
+						</div>
+					}
+					if len(states) > 0 {
+						<p class="mt-3 mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
+						<pre class={ adminPre }>{ stateText(states) }</pre>
+					}
 				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>talk to the webmaster</p>
@@ -206,7 +275,11 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 										if version.ID != site.ID {
 											<form method="post" action={ "/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore" }>
 												<input type="hidden" name="token" value={ token }/>
-												<button type="submit" class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline dark:text-neutral-500">restore</button>
+												<button
+													type="submit"
+													title="restores this version's page and journal schema; newer feed rows stay but become invisible"
+													class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline dark:text-neutral-500"
+												>restore</button>
 											</form>
 										} else {
 											<span class="text-xs text-gray-300 dark:text-neutral-700">current</span>
@@ -231,7 +304,7 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 					<form
 						method="post"
 						action="/admin/reset"
-						onsubmit="return confirm('Delete every post and later version, and clear the mutation history? This cannot be undone.')"
+						onsubmit="return confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
 					>
 						<input type="hidden" name="token" value={ token }/>
 						<button
@@ -240,7 +313,7 @@ templ AdminPage(site sqlc.SiteVersion, runs []RunView, versions []sqlc.SiteVersi
 						>reset the board</button>
 					</form>
 					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-						Deletes every post and later version, and clears the mutation history. The original version stays.
+						Deletes every post, feed row, shared value and later version, and clears the mutation history. The original version stays.
 					</p>
 				</section>
 			</div>

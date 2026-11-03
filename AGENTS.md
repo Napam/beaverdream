@@ -214,6 +214,6 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   environment variables win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
   models take `OPENAI_REASONING_EFFORT`; the dev task uses
-  `deepseek-v4.1-flash` with `none`.
+  `deepseek-v4.1-flash` with `xhigh`.
 - The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy
   `6931`.

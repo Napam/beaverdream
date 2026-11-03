@@ -110,7 +110,7 @@ task dev           # terminal 2: server on :6930, live reload proxy on :6931
 
 To use OpenCode Go instead of the mock, copy `.env.example` to `.env`, put the
 key in `OPENAI_API_KEY`, and run `task dev.deepseek`. It points at DeepSeek
-V4.1 Flash with reasoning turned off.
+V4.1 Flash with reasoning at `xhigh`.
 
 Open `http://localhost:6931`. The dev task binds the app and the live reload
 proxy to all interfaces, so another device on the same network can use
@@ -160,8 +160,9 @@ parameter reject the request; leave it empty for those.
 
 The model must support tool calls. If it answers in prose without calling a
 tool, the site does not change. DeepSeek V4.1 Flash on OpenCode Go is a
-reasoning model, so keep the effort at `none` unless you want the extra tokens
-and latency.
+reasoning model. `task dev.deepseek` sends `xhigh`; lower
+`OPENAI_REASONING_EFFORT` to `none` if you want to trade quality for fewer
+tokens and less latency.
 
 ## Admin
 

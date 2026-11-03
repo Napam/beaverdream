@@ -47,7 +47,7 @@ tasks:
       - go run ./cmd/mockllm -addr localhost:6701
 
   dev.deepseek:
-    desc: Run the dev server against OpenCode Go with DeepSeek V4.1 Flash (no reasoning)
+    desc: Run the dev server against OpenCode Go with DeepSeek V4.1 Flash (max reasoning)
     deps:
       - init
     cmds:
@@ -138,8 +138,8 @@ tasks:
       # from a calling task into a called one. dev.deepseek passes PROVIDER=deepseek.
       OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "deepseek"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
       OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "deepseek"}}deepseek-v4.1-flash{{else}}mock-model{{end}}'
-      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}none{{end}}'
-      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "deepseek"}}5{{else}}3{{end}}'
+      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}xhigh{{end}}'
+      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "deepseek"}}16384{{else}}3{{end}}'
     cmds:
       - |
         go tool templ generate \

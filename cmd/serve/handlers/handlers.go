@@ -36,10 +36,10 @@ const (
 	compactMaxChunks = 8
 	// summarizeTimeout is separate from the mutation budget so a slow summary
 	// cannot starve the rewrite that follows it.
-	summarizeTimeout = 45 * time.Second
-	// mutationTimeout bounds one model call sequence. A local model can be
-	// slow, but not this slow.
-	mutationTimeout = 2 * time.Minute
+	summarizeTimeout = 10 * time.Minute
+	// mutationTimeout bounds one model call sequence. A reasoning model at
+	// high effort can think for a long time per round, and many rounds add up.
+	mutationTimeout = 2 * time.Hour
 )
 
 // Config holds the environment knobs the handlers enforce.

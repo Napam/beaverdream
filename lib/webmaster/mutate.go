@@ -678,8 +678,8 @@ The live page:
   new data comes back over the stream to every page at once. Never @get or
   @post a page like /: the reply would be patched into the document.
 - These ids belong to the page and the live stream. Do not reuse them:
-  bd-live, bd-posts, bd-css, bd-busy, bd-state, bd-journal. Do not name your
-  own signals shared, or anything that starts with _bd.
+  bd-live, bd-posts, bd-css, bd-busy, bd-busy-ring, bd-state, bd-journal. Do not
+  name your own signals shared, or anything that starts with _bd.
 - Page scripts can listen on document for beaverdream:post (new posts just
   landed), beaverdream:state (shared values changed) and beaverdream:update
   (the stylesheet changed in place). New posts are fresh markup, so a script

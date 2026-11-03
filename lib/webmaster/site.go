@@ -176,17 +176,21 @@ func FormatWhen(s string) string {
 }
 
 // busyCSS animates the code-owned spinner. It is separate from BaseCSS so the
-// keyframes survive whatever the model writes over the page variables.
+// keyframes survive whatever the model writes over the page variables. The
+// turn is a custom property so the reduced-motion rule can stop it: an inline
+// important animation would beat a stylesheet important one.
 const busyCSS = `<style>
-@keyframes bd-busy-spin { to { transform: rotate(360deg) } }
+@keyframes bd-busy-spin { to { transform: rotate(var(--bd-busy-turn, 1turn)) } }
 @media (prefers-reduced-motion: reduce) {
-  #bd-busy { animation-duration: 2.4s !important }
+  #bd-busy-ring { --bd-busy-turn: 0turn }
 }
 </style>`
 
 // BusyIndicator is the code-owned spinner. The live stream patches it whole
-// when a rewrite is queued, starts or ends. Every rule is inline and
-// important, so a model stylesheet cannot move or hide it.
+// when a rewrite is queued, starts or ends. Every rule on the container is
+// inline and important, so a model stylesheet cannot move or hide it. The ring
+// spins inside the container: the container's transform lock is important, and
+// an important declaration beats an animation on the same element.
 func BusyIndicator(busy bool) string {
 	display := "none"
 	if busy {
@@ -198,10 +202,12 @@ func BusyIndicator(busy bool) string {
 		`filter:none!important;clip:auto!important;position:fixed!important;top:10px!important;` +
 		`left:10px!important;width:14px!important;height:14px!important;` +
 		`box-sizing:border-box!important;z-index:2147483647!important;` +
-		`pointer-events:none!important;border-radius:50%!important;` +
+		`pointer-events:none!important"><span id="bd-busy-ring" ` +
+		`style="display:block!important;width:100%!important;height:100%!important;` +
+		`box-sizing:border-box!important;border-radius:50%!important;` +
 		`border:2px solid rgba(127,127,127,.35)!important;` +
 		`border-top-color:rgba(127,127,127,.9)!important;` +
-		`animation:bd-busy-spin .7s linear infinite!important"></div>`
+		`animation:bd-busy-spin .7s linear infinite!important"></span></div>`
 }
 
 // PostsContainer wraps the rendered posts in the element the live stream

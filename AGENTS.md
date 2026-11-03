@@ -62,7 +62,14 @@ prefer simple, readable code over production hardening.
   tests set them low. The summary chains from the previous one, so old detail
   fades by design. Never summarize a running or failed turn, never put markup
   in the summary, and never let a failed summary block the mutation: the same
-  turns are retried next time.
+  turns are retried next time. Compaction runs after the finish transaction,
+  still under `h.mu`, on turns before the finished one and before any queued
+  post; the finished turn stays in the next log. The log query reads at least
+  `CompactAfterTurns` turns, so its start never slides before compaction.
+- The user prompt is ordered for the prompt cache: compacted history, room
+  log, then the notes, the page and the new post, which change every turn.
+  The system prompt is static per override mode and includes `BaseCSS` and a
+  sample post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo, restore and
   clear each record an event turn in the same transaction as the version they
   carry. The webmaster's notes survive heal and failed turns; reset deletes
@@ -71,25 +78,58 @@ prefer simple, readable code over production hardening.
   records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
   no-op: the plain-board rule lives in the prompt, not in code.
 - The board region must keep the literal `{{posts}}` placeholder; the server
-  substitutes the escaped post list. `SiteDoc` appends the posts if the
-  placeholder is missing. Never let posts be stored inside model-controlled
-  HTML.
+  substitutes the escaped post list. `cleanRegion` rejects a board without it,
+  for `set_site`, `edit` and overrides alike. `SiteDoc` still appends the
+  posts if a stored board lacks it. Never let posts be stored inside
+  model-controlled HTML.
+- The model changes the page with `edit` (replace one exact, unique piece of
+  the stylesheet or a region, or append when `old` is empty) and `set_site`
+  (whole fields, for a real restyle). Output tokens are the latency, so the
+  prompt steers small changes to `edit`. An edit result goes through the same
+  `cleanCSS` / `cleanRegion` as a whole write, and a rejected edit leaves the
+  field alone. `edit` targets the shared page only; override bodies are never
+  in the prompt, so there is nothing to anchor on. When a response calls
+  `done` next to a rejected call and rounds remain, the loop defers that
+  `done` so the model can fix the call; its reason and notes stay as the
+  fallback. `set_site` cleans every field before it assigns any, and a write
+  that changes nothing is "ok (no change)". Matching for `old` tries exact
+  text, then loose whitespace between words, then loose whitespace around
+  `{}:;,>`, and stops at the first step that finds anything.
+- `PostsSwallowedBy` reads header and board as the browser would and names an
+  unclosed comment, raw-text element or tag that hides `{{posts}}`. When this
+  turn's edits caused it and rounds remain, `done` is deferred once with the
+  reason; calling `done` again keeps the page. It never rewrites markup.
+- Every completion sends `tool_choice: required`; `done` is the only way to
+  end a turn with words.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
 - The only fixed markup is the document shell, the live script, the `bd-state`
-  JSON tag, and the small `set name` link. The server also replaces `{{name}}`
-  in the model's regions with the escaped cookie name. The post form is model
-  markup: the system prompt gives it the exact method, action and field names.
-  Do not reintroduce a code-owned composer; a broken form is a valid outcome.
-- Visitor overrides are model-owned and belong to the version row. Only a name
-  on the current version gets one, matched case-insensitively after
-  `webmaster.CleanIdentity`, and later mutations inherit the map until the model
-  clears it. A later `set_user_override` merges, so fields the model omits stay.
-  CSS is appended to the site stylesheet; regions replace. Undo, restore and
-  heal copy the overrides of the version they carry; reset drops them with the
-  versions. Admin can clear one by name. Do not let overrides bypass `cleanCSS`
-  or `cleanRegion`.
+  JSON tag, the small `set name` link, and the busy spinner. The spinner is
+  inline-styled and shown by the live script while a rewrite is queued or
+  running, so a model stylesheet cannot move or hide it. The server also
+  replaces `{{name}}`
+  in the model's regions with the escaped cookie name, and puts the same name
+  on `<html data-name="...">` so model scripts can personalize in the browser.
+  The post form is model markup: the system prompt gives it the exact method,
+  action and field names. Do not reintroduce a code-owned composer; a broken
+  form is a valid outcome.
+- Visitor overrides are off unless `ENABLE_OVERRIDES=true`. When off, the
+  `set_user_override` tool is not offered and the executor rejects it, so no
+  new row is written. Stored rows still travel forward so the flag is
+  reversible, but they are ignored at render time, hidden from the prompt, and
+  left out of the plain-page check; the admin page hides the list and refuses
+  to clear one. Keep the code: turning the env var back on restores it. The
+  model is told to use `document.documentElement.dataset.name` instead. When
+  on, overrides are
+  model-owned and belong to the version row. Only a name on the current version
+  gets one, matched case-insensitively after `webmaster.CleanIdentity`, and
+  later mutations inherit the map until the model clears it. A later
+  `set_user_override` merges, so fields the model omits stay. CSS is appended to
+  the site stylesheet; regions replace. Undo, restore and heal copy the
+  overrides of the version they carry; reset drops them with the versions.
+  Admin can clear one by name. Do not let overrides bypass `cleanCSS` or
+  `cleanRegion`.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
@@ -137,8 +177,18 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 
 - Mock model: `task dev.mock-llm` on `localhost:6701`, model id `mock-model`.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
-  `curse`/`only me` adds a per-visitor override; `mocknoop` and `mockfail`
-  test the no-op and error paths.
+  `curse`/`only me` adds a per-visitor override (ignored unless
+  `ENABLE_OVERRIDES=true`); `mocknoop` and `mockfail` test the no-op and error
+  paths. `mockedit` appends one CSS rule, `mockpatch` replaces the default
+  theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
+  next to it is deferred. Each sends the edit and `done` in one response.
+- Each model round logs `Mutation round finished` with its time, prompt,
+  cached and completion tokens, the tools it called and how many were
+  rejected. The same stats are stored on each assistant message in
+  `turns.messages`. `Mutation finished` sums the turn: rounds, the done round,
+  a done-only last round, rejections, the cached ratio, prompt section sizes
+  in runes, compaction time, and for posts the queue wait and the time from
+  post to version.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
   supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
   usually via `.env` (gitignored, `.env.example` is the template). Real

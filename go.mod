@@ -15,7 +15,9 @@ tool (
 require (
 	github.com/a-h/templ v0.3.1100
 	github.com/go-chi/chi/v5 v5.5.0
+	github.com/openai/openai-go/v3 v3.91.1
 	github.com/pressly/goose/v3 v3.29.0
+	golang.org/x/net v0.62.0
 	modernc.org/sqlite v1.61.1
 )
 
@@ -74,7 +76,6 @@ require (
 	github.com/ncruces/go-sqlite3-wasm/v6 v6.4.35401 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
-	github.com/openai/openai-go/v3 v3.91.1 // indirect
 	github.com/paulmach/orb v0.14.0 // indirect
 	github.com/pganalyze/pg_query_go/v6 v6.2.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
@@ -118,7 +119,6 @@ require (
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect

@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
@@ -17,8 +19,10 @@ import (
 
 const (
 	maxBodyLen = 2000
-	// roomLimit is how many turns the model reads back. It has to be large
-	// enough that the token trigger, not this cap, decides when to compact.
+	// roomLimit is the smallest number of turns the model reads back. The
+	// query limit is the larger of this and the turn backstop, so the log
+	// never drops its oldest line before compaction folds it in. A sliding
+	// start would lose those turns and the cached prompt prefix every turn.
 	roomLimit = 2000
 	// defaultCompactAfterTokens is the estimated transcript budget before
 	// compaction. Estimated at four runes per token.
@@ -51,6 +55,9 @@ type Config struct {
 	// CompactAfterTurns is the turn-count backstop for very short turns.
 	// Zero uses the default.
 	CompactAfterTurns int
+	// DisableOverrides ignores stored per-visitor pages. The model still has
+	// the visitor's name in the page, so it can personalize in the browser.
+	DisableOverrides bool
 }
 
 // runState is what the live endpoint and the admin panel show while a
@@ -108,6 +115,10 @@ func New(
 	mutator *webmaster.Mutator,
 	cfg Config,
 ) *Handlers {
+	// The config is the one source of truth: a caller that disables overrides
+	// must not leave the mutator offering the tool.
+	mutator.DisableOverrides = cfg.DisableOverrides
+
 	h := &Handlers{
 		logger:        logger,
 		db:            dbConn,
@@ -138,6 +149,7 @@ func New(
 		logger.Error("Failed to close interrupted turns", slog.Any("error", err))
 	}
 	mutator.OnRound = h.setRunningRound
+	mutator.OnRoundDone = h.logRoundDone
 	h.workerWG.Add(2)
 	go func() {
 		defer h.workerWG.Done()
@@ -275,6 +287,7 @@ func (h *Handlers) mutateHeld(
 	instruction string,
 	triggerPosts []sqlc.Post,
 ) (webmaster.Result, error) {
+	batchStart := time.Now()
 	current, err := h.queries.CurrentSite(ctx)
 	if err != nil {
 		return webmaster.Result{}, fmt.Errorf("current site: %w", err)
@@ -354,19 +367,12 @@ func (h *Handlers) mutateHeld(
 		return webmaster.Result{}, err
 	}
 	currentSite.Overrides = overrides
+	hasVisibleOverrides := len(overrides) > 0 && !h.cfg.DisableOverrides
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
-		currentSite.Plain = sameSiteContent(current, seed) && len(overrides) == 0
+		currentSite.Plain = sameSiteContent(current, seed) && !hasVisibleOverrides
 	}
 	if count, err := h.queries.CountChangedSinceHeal(ctx); err == nil {
 		currentSite.ChangesSinceHeal = int(count)
-	}
-
-	// Compaction is best effort. A failed summary must not take the mutation
-	// down with it; the same turns are retried next time. The page counts
-	// against the budget because the model reads it on every turn.
-	pageRunes := int64(webmaster.PageRunes(currentSite))
-	if err := h.compactRoom(ctx, turn.ID, triggers, pageRunes); err != nil {
-		h.logger.Error("Failed to compact the room", slog.Any("error", err))
 	}
 
 	room, err := h.roomFor(ctx, turn.ID)
@@ -450,6 +456,7 @@ func (h *Handlers) mutateHeld(
 			ID:         turn.ID,
 		})
 	})
+	var postToVersion time.Duration
 	if txErr != nil {
 		mutErr = fmt.Errorf("store turn: %w", txErr)
 		status = "error"
@@ -457,10 +464,39 @@ func (h *Handlers) mutateHeld(
 		finished = true
 		if versionID.Valid {
 			h.setVersion(versionID.Int64)
+			if oldest, ok := oldestPostTime(triggerPosts); ok {
+				postToVersion = time.Since(oldest)
+			}
+			if what := webmaster.PostsSwallowedBy(res.Site); what != "" {
+				h.logger.Warn("The new page hides its posts",
+					slog.Int64("version_id", versionID.Int64),
+					slog.String("cause", what),
+				)
+			}
 		}
 	}
 
-	h.logger.Info("Mutation finished",
+	// Compaction runs after the turn has landed, so a slow summary delays the
+	// next turn rather than this one's page. It is best effort: a failed
+	// summary must not take the mutation down with it, and the same turns are
+	// retried next time. The page the next turn reads counts against the
+	// budget. The mutation deadline may already be spent, so compaction runs
+	// on its own clock; summarize bounds each model call.
+	nextPage := currentSite
+	if res.Changed {
+		nextPage = res.Site
+	}
+	compactStart := time.Now()
+	if err := h.compactRoom(
+		context.WithoutCancel(ctx),
+		turn.ID,
+		int64(webmaster.PageRunes(nextPage)),
+	); err != nil {
+		h.logger.Error("Failed to compact the room", slog.Any("error", err))
+	}
+	compactMs := time.Since(compactStart).Milliseconds()
+
+	attrs := []any{
 		slog.Int64("turn_id", turn.ID),
 		slog.String("kind", kind),
 		slog.String("status", status),
@@ -468,24 +504,94 @@ func (h *Handlers) mutateHeld(
 		slog.Int64("duration_ms", elapsed),
 		slog.String("said", res.Reason),
 		slog.String("changes", res.Changes),
+	}
+	attrs = append(attrs, roundAttrs(res)...)
+	attrs = append(attrs,
+		slog.Int("summary_runes", utf8.RuneCountInString(room.Summary)),
+		slog.Int("notes_runes", utf8.RuneCountInString(room.Notes)),
+		slog.Int("log_runes", webmaster.LogRunes(room.Log, triggerIDs(triggers))),
+		slog.Int("page_runes", webmaster.PageRunes(currentSite)),
+		slog.Int64("compact_ms", compactMs),
 	)
+	if oldest, ok := oldestPostTime(triggerPosts); ok {
+		attrs = append(attrs,
+			slog.Int64("queue_wait_ms", batchStart.Sub(oldest).Milliseconds()),
+			slog.Int64("post_to_version_ms", postToVersion.Milliseconds()),
+		)
+	}
+	h.logger.Info("Mutation finished", attrs...)
 
 	return res, mutErr
 }
 
-// compactRoom folds the uncompacted history into one summary when it reaches
-// either the message or the token threshold. It measures the whole stretch,
-// then folds it in chunks until it is under the threshold. After it runs, the
-// next prompt starts from that summary and only the turns after it.
+// roundAttrs sums the rounds of one mutation for the finish log. A done-only
+// last round after earlier rounds is a round spent on one sentence, which the
+// prompt asks the model to avoid.
+func roundAttrs(res webmaster.Result) []any {
+	var prompt, cached, rejected int64
+	for _, round := range res.Rounds {
+		prompt += round.PromptTokens
+		cached += round.CachedTokens
+		rejected += int64(round.Rejected)
+	}
+	doneOnly := false
+	if n := len(res.Rounds); n > 1 {
+		last := res.Rounds[n-1].Tools
+		doneOnly = len(last) == 1 && last[0] == "done"
+	}
+	cacheRatio := 0.0
+	if prompt > 0 {
+		cacheRatio = math.Round(float64(cached)/float64(prompt)*100) / 100
+	}
+	return []any{
+		slog.Int("rounds", len(res.Rounds)),
+		slog.Int("done_round", res.DoneRound),
+		slog.Bool("last_round_done_only", doneOnly),
+		slog.Int64("rejected", rejected),
+		slog.Int64("prompt_tokens", prompt),
+		slog.Float64("cached_ratio", cacheRatio),
+	}
+}
+
+// triggerIDs is the set of posts a turn answers, which the log skips.
+func triggerIDs(triggers []webmaster.Post) map[int64]bool {
+	ids := make(map[int64]bool, len(triggers))
+	for _, trigger := range triggers {
+		ids[trigger.ID] = true
+	}
+	return ids
+}
+
+// oldestPostTime is when the first post of a batch was written. Admin turns
+// have no posts.
+func oldestPostTime(posts []sqlc.Post) (time.Time, bool) {
+	var oldest time.Time
+	for _, post := range posts {
+		created, err := time.Parse(time.RFC3339Nano, post.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if oldest.IsZero() || created.Before(oldest) {
+			oldest = created
+		}
+	}
+	return oldest, !oldest.IsZero()
+}
+
+// compactRoom folds the uncompacted history before the turn id before into
+// one summary when it reaches either the message or the token threshold. It
+// measures the whole stretch, then folds it in chunks until it is under the
+// threshold. After it runs, the next prompt starts from that summary and only
+// the turns after it. The caller runs it once a turn has finished, so the
+// finished turn itself stays in the next log.
 //
 // The token budget covers the whole prompt: the transcript plus pageRunes, the
-// size of the current page. If the page alone fills the budget, compacting
-// cannot help, so it logs once and leaves the history alone instead of
-// summarizing on every turn.
+// size of the page the next turn reads. If the page alone fills the budget,
+// compacting cannot help, so it logs once and leaves the history alone instead
+// of summarizing on every turn.
 func (h *Handlers) compactRoom(
 	ctx context.Context,
 	before int64,
-	triggers []webmaster.Post,
 	pageRunes int64,
 ) error {
 	if pageRunes/4 >= int64(h.compactAfterTokens) {
@@ -505,12 +611,10 @@ func (h *Handlers) compactRoom(
 		return err
 	}
 	upTo := before - 1
-	// The posts being answered have not had their turn yet. Leave them out of
-	// the summary so they are not answered twice.
-	for _, trigger := range triggers {
-		if trigger.ID > 0 && trigger.ID-1 < upTo {
-			upTo = trigger.ID - 1
-		}
+	// Queued posts have not had their turn yet; the next turn shows them as
+	// NEW POST. Leave them out of the summary so they are not answered twice.
+	if pending := h.oldestPendingID(); pending > 0 && pending-1 < upTo {
+		upTo = pending - 1
 	}
 	if upTo <= from {
 		return nil
@@ -640,7 +744,7 @@ func (h *Handlers) roomFor(ctx context.Context, before int64) (webmaster.Room, e
 	rows, err := h.queries.ListRoomLog(ctx, sqlc.ListRoomLogParams{
 		ID:    from,
 		ID_2:  before,
-		Limit: roomLimit,
+		Limit: int64(max(roomLimit, h.compactAfterTurns)),
 	})
 	if err != nil {
 		return webmaster.Room{}, fmt.Errorf("list room log: %w", err)
@@ -822,6 +926,18 @@ func (h *Handlers) setRunningRound(round int) {
 	h.logger.Info("Mutation round started", slog.Int("round", round))
 }
 
+func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
+	h.logger.Info("Mutation round finished",
+		slog.Int("round", stats.Round),
+		slog.Int64("ms", stats.Elapsed.Milliseconds()),
+		slog.Int64("prompt_tokens", stats.PromptTokens),
+		slog.Int64("cached_tokens", stats.CachedTokens),
+		slog.Int64("completion_tokens", stats.CompletionTokens),
+		slog.String("tools", strings.Join(stats.Tools, ",")),
+		slog.Int("rejected", stats.Rejected),
+	)
+}
+
 func (h *Handlers) setVersion(version int64) {
 	h.liveMu.Lock()
 	h.version = version
@@ -861,6 +977,19 @@ func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
 	return h.version, len(h.pending), running, h.lastError
 }
 
+// oldestPendingID is the lowest id among queued posts, or zero.
+func (h *Handlers) oldestPendingID() int64 {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	var oldest int64
+	for _, post := range h.pending {
+		if oldest == 0 || post.ID < oldest {
+			oldest = post.ID
+		}
+	}
+	return oldest
+}
+
 func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 	version, _, _, _ := h.liveSnapshot()
 	if version > 0 {
@@ -875,7 +1004,7 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 }
 
 const (
-	rewriteCooldown = 3 * time.Second
+	rewriteCooldown = time.Second
 	stateCooldown   = 250 * time.Millisecond
 	idleHealAfter   = 20 * time.Minute
 )
@@ -928,7 +1057,7 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if len(overrides) == 0 && sameSiteContent(current, seed) {
+	if (len(overrides) == 0 || h.cfg.DisableOverrides) && sameSiteContent(current, seed) {
 		h.touchActivity()
 		return false, nil
 	}

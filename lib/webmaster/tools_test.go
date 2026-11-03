@@ -17,14 +17,11 @@ func args(t *testing.T, v any) string {
 
 // The page is intentionally unsandboxed. Scripts and event handlers in a
 // region are the point of the toy, so they must survive the editor.
-func TestSetRegionKeepsScriptsAndHandlers(t *testing.T) {
+func TestSetSiteKeepsScriptsAndHandlers(t *testing.T) {
 	html := `<script>document.body.remove()</script>` +
 		`<div onclick="alert(1)">click</div>`
 	ed := newEditor(Site{Header: "original"})
-	got := ed.run("set_region", args(t, map[string]string{
-		"region": RegionHeader,
-		"html":   html,
-	}))
+	got := ed.run("set_site", args(t, map[string]string{"header": html}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}
@@ -33,25 +30,219 @@ func TestSetRegionKeepsScriptsAndHandlers(t *testing.T) {
 	}
 }
 
-func TestSetRegionRejectsUnknownRegion(t *testing.T) {
+func TestSetSiteEnforcesLength(t *testing.T) {
 	ed := newEditor(Site{})
-	got := ed.run("set_region", args(t, map[string]string{
-		"region": "sidebar",
-		"html":   "<p>hello there</p>",
-	}))
-	if !strings.Contains(got, "unknown region") {
-		t.Fatalf("got %q, want an unknown-region rejection", got)
-	}
-}
-
-func TestSetRegionEnforcesLength(t *testing.T) {
-	ed := newEditor(Site{})
-	got := ed.run("set_region", args(t, map[string]string{
-		"region": RegionBoard,
-		"html":   strings.Repeat("x", maxRegionLen+1),
+	got := ed.run("set_site", args(t, map[string]string{
+		"board": PostsPlaceholder + strings.Repeat("x", maxRegionLen),
 	}))
 	if !strings.HasPrefix(got, "rejected:") {
 		t.Fatalf("got %q, want a rejection", got)
+	}
+}
+
+// The placeholder is where the posts go. One rule covers every path that
+// writes a board, so a whole rewrite cannot drop it either.
+func TestBoardWithoutPlaceholderIsRejected(t *testing.T) {
+	ed := newEditor(Site{Board: "<main>" + PostsPlaceholder + "</main>"})
+	got := ed.run("set_site", args(t, map[string]string{"board": "<main>no posts</main>"}))
+	if !strings.Contains(got, "{{posts}}") || !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("got %q, want a placeholder rejection", got)
+	}
+	if ed.dirty || ed.site.Board != "<main>"+PostsPlaceholder+"</main>" {
+		t.Fatalf("board changed: %q", ed.site.Board)
+	}
+
+	board := "<main>no posts</main>"
+	if _, err := cleanOverride(nil, nil, &board, nil); err == nil {
+		t.Error("an override board without the placeholder was accepted")
+	}
+}
+
+func TestEditAppendsToAnEmptyStylesheet(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "", "new": "h1{color:red}",
+	}))
+	if got != "ok" || ed.site.CSS != "h1{color:red}" || !ed.dirty {
+		t.Fatalf("got %q, css %q, dirty %v", got, ed.site.CSS, ed.dirty)
+	}
+}
+
+func TestEditAppendsOnANewLine(t *testing.T) {
+	ed := newEditor(Site{CSS: "body{margin:0}"})
+	ed.run("edit", args(t, map[string]string{"target": "css", "old": "", "new": "h1{color:red}"}))
+	if ed.site.CSS != "body{margin:0}\nh1{color:red}" {
+		t.Fatalf("css = %q", ed.site.CSS)
+	}
+}
+
+func TestEditReplacesAUniqueMatch(t *testing.T) {
+	ed := newEditor(Site{Footer: `<footer class="colophon">beaverdream</footer>`})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "footer", "old": ">beaverdream<", "new": ">beaver nightmare<",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if ed.site.Footer != `<footer class="colophon">beaver nightmare</footer>` {
+		t.Fatalf("footer = %q", ed.site.Footer)
+	}
+}
+
+func TestEditRejectsMissingText(t *testing.T) {
+	ed := newEditor(Site{CSS: "body{margin:0}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "h1{color:blue}", "new": "h1{color:red}",
+	}))
+	if !strings.HasPrefix(got, "rejected: old text not found in css") {
+		t.Fatalf("got %q, want a not-found rejection", got)
+	}
+	if ed.dirty || ed.site.CSS != "body{margin:0}" || ed.rejected != 1 {
+		t.Fatalf("css %q, dirty %v, rejected %d", ed.site.CSS, ed.dirty, ed.rejected)
+	}
+}
+
+func TestEditRejectsAnAmbiguousMatch(t *testing.T) {
+	ed := newEditor(Site{CSS: "a{color:red}b{color:red}c{color:red}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "color:red", "new": "color:blue",
+	}))
+	if !strings.Contains(got, "matches 3 places") {
+		t.Fatalf("got %q, want the match count", got)
+	}
+	if ed.dirty {
+		t.Fatal("an ambiguous edit marked the site dirty")
+	}
+}
+
+// Models often copy a section with different indentation or line breaks.
+func TestEditToleratesWhitespaceDrift(t *testing.T) {
+	ed := newEditor(Site{CSS: "h1 {\n\tcolor: red;\n}\np { margin: 0 }"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "h1 { color: red; }", "new": "h1 { color: blue; }",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if ed.site.CSS != "h1 { color: blue; }\np { margin: 0 }" {
+		t.Fatalf("css = %q", ed.site.CSS)
+	}
+}
+
+// A model that reformats a rule while copying it still hits, in both
+// directions: spaces added around punctuation, and spaces removed.
+func TestEditToleratesPunctuationSpacing(t *testing.T) {
+	cases := []struct {
+		name, field, old, want string
+	}{
+		{
+			name:  "spaces added",
+			field: "a{color:red}\nb{margin:0}",
+			old:   "a { color: red }",
+			want:  "a{color:blue}\nb{margin:0}",
+		},
+		{
+			name:  "spaces removed",
+			field: "h1 {\n  color: red;\n  margin: 0;\n}",
+			old:   "h1{color:red;margin:0;}",
+			want:  "a{color:blue}",
+		},
+		{
+			name:  "space after a tag",
+			field: "<h1>beaverdream</h1>\n<p class=\"tagline\">\n  a small board</p>",
+			old:   `<p class="tagline">a small board</p>`,
+			want:  "<h1>beaverdream</h1>\na{color:blue}",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, matches := applyEdit(tc.field, tc.old, "a{color:blue}")
+			if matches != 1 {
+				t.Fatalf("matches = %d, want 1", matches)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Loosening the match must not turn two places into one.
+func TestEditPunctuationMatchStillRejectsAmbiguity(t *testing.T) {
+	field := "a { color: red }\nb { margin: 0 }\na{color:red}"
+	if _, matches := applyEdit(field, "a {color : red}", "x"); matches != 2 {
+		t.Fatalf("matches = %d, want 2", matches)
+	}
+
+	// The whitespace step finds two places, so the looser step never runs.
+	field = "a { color: red }\na  {  color:  red  }"
+	if _, matches := applyEdit(field, "a { color: red }", "x"); matches != 1 {
+		t.Fatalf("exact matches = %d, want 1", matches)
+	}
+	if _, matches := applyEdit(field, "a {\ncolor: red }", "x"); matches != 2 {
+		t.Fatalf("whitespace matches = %d, want 2", matches)
+	}
+}
+
+func TestEditCannotRemoveThePlaceholder(t *testing.T) {
+	board := `<main><div class="thread">` + PostsPlaceholder + `</div></main>`
+	ed := newEditor(Site{Board: board})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "board", "old": PostsPlaceholder, "new": "",
+	}))
+	if !strings.HasPrefix(got, "rejected: board must contain {{posts}}") {
+		t.Fatalf("got %q, want a placeholder rejection", got)
+	}
+	if ed.site.Board != board {
+		t.Fatalf("board changed: %q", ed.site.Board)
+	}
+}
+
+func TestEditEnforcesTheLimits(t *testing.T) {
+	ed := newEditor(Site{CSS: "body{}", Header: "<h1>beaverdream</h1>"})
+	if got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "", "new": strings.Repeat("x", maxCSSLen),
+	})); !strings.HasPrefix(got, "rejected:") {
+		t.Errorf("oversized stylesheet: got %q", got)
+	}
+	if got := ed.run("edit", args(t, map[string]string{
+		"target": "header", "old": "<h1>beaverdream</h1>", "new": "<b>",
+	})); !strings.HasPrefix(got, "rejected:") {
+		t.Errorf("tiny header: got %q", got)
+	}
+	if ed.dirty {
+		t.Fatal("a rejected edit marked the site dirty")
+	}
+}
+
+func TestEditsApplyInOrder(t *testing.T) {
+	ed := newEditor(Site{Header: "<h1>beaverdream</h1>"})
+	ed.run("edit", args(t, map[string]string{
+		"target": "header", "old": "beaverdream", "new": "beaver dream",
+	}))
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "header", "old": "beaver dream", "new": "BEAVER DREAM",
+	}))
+	if got != "ok" || ed.site.Header != "<h1>BEAVER DREAM</h1>" {
+		t.Fatalf("got %q, header %q", got, ed.site.Header)
+	}
+}
+
+func TestEditRejectsAnUnknownTarget(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("edit", args(t, map[string]string{"target": "sidebar", "old": "", "new": "x"}))
+	if !strings.Contains(got, "unknown target") {
+		t.Fatalf("got %q, want an unknown-target rejection", got)
+	}
+}
+
+func TestEditWithoutAChangeIsNotDirty(t *testing.T) {
+	ed := newEditor(Site{CSS: "h1{color:red}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "color:red", "new": "color:red",
+	}))
+	if got != "ok (no change)" || ed.dirty {
+		t.Fatalf("got %q, dirty %v", got, ed.dirty)
 	}
 }
 
@@ -81,11 +272,66 @@ func TestSetSiteUpdatesOnlyProvidedFields(t *testing.T) {
 	}
 }
 
+// A rejected field rejects the whole call. A later successful call must not
+// carry a stylesheet that slipped in before the rejection.
+func TestSetSiteRejectsTheWholeCall(t *testing.T) {
+	original := Site{
+		CSS:    "body{margin:0}",
+		Header: "<h1>beaverdream</h1>",
+		Board:  "<main>" + PostsPlaceholder + "</main>",
+	}
+	ed := newEditor(original)
+	got := ed.run("set_site", args(t, map[string]string{
+		"css":    "body{background:red}",
+		"header": "<h1>a new header</h1>",
+		"board":  "<main>no posts</main>",
+	}))
+	if !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("got %q, want a rejection", got)
+	}
+	if ed.site.CSS != original.CSS || ed.site.Header != original.Header ||
+		ed.site.Board != original.Board || ed.dirty {
+		t.Fatalf("a rejected set_site changed the page: %+v, dirty %v", ed.site, ed.dirty)
+	}
+}
+
+func TestSetSiteWithIdenticalContentIsNotDirty(t *testing.T) {
+	ed := newEditor(Site{CSS: "body{margin:0}", Board: "<main>" + PostsPlaceholder + "</main>"})
+	got := ed.run("set_site", args(t, map[string]string{
+		"css":   "  body{margin:0}\n",
+		"board": "<main>" + PostsPlaceholder + "</main>",
+	}))
+	if got != "ok (no change)" || ed.dirty {
+		t.Fatalf("got %q, dirty %v", got, ed.dirty)
+	}
+}
+
 func TestSetSiteNeedsAField(t *testing.T) {
 	ed := newEditor(Site{})
 	got := ed.run("set_site", args(t, map[string]any{}))
 	if !strings.HasPrefix(got, "rejected:") {
 		t.Fatalf("got %q, want a rejection", got)
+	}
+}
+
+// The tool schema hides set_user_override when overrides are off, but a model
+// can still call it. The editor rejects it so no row is written and the turn
+// is not marked dirty by an invisible edit.
+func TestSetUserOverrideIsRejectedWhenOverridesAreOff(t *testing.T) {
+	ed := newEditor(Site{})
+	ed.disableOverrides = true
+	got := ed.run("set_user_override", args(t, map[string]any{
+		"name": "dave",
+		"css":  "body{color:red}",
+	}))
+	if !strings.Contains(got, "rejected") {
+		t.Fatalf("got %q, want a rejection", got)
+	}
+	if ed.dirty {
+		t.Error("a rejected override marked the site dirty")
+	}
+	if len(ed.site.Overrides) != 0 {
+		t.Errorf("a rejected override was stored: %+v", ed.site.Overrides)
 	}
 }
 
@@ -192,11 +438,11 @@ func TestApplyOverrideAppendsCSSAndReplacesRegions(t *testing.T) {
 	}
 }
 
-func TestSetCSSKeepsBreakoutsAndURLs(t *testing.T) {
+func TestSetSiteKeepsCSSBreakoutsAndURLs(t *testing.T) {
 	css := `body{background:url(https://example.com/x.png)}` +
 		`</style><script>alert(1)</script>`
 	ed := newEditor(Site{CSS: "original"})
-	got := ed.run("set_css", args(t, map[string]string{"css": css}))
+	got := ed.run("set_site", args(t, map[string]string{"css": css}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}

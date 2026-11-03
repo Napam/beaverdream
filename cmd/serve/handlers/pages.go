@@ -54,10 +54,12 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)
-	docSite = webmaster.ApplyOverride(
-		docSite,
-		h.visitorOverride(r.Context(), site.ID, docSite.Name),
-	)
+	if !h.cfg.DisableOverrides {
+		docSite = webmaster.ApplyOverride(
+			docSite,
+			h.visitorOverride(r.Context(), site.ID, docSite.Name),
+		)
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := io.WriteString(w, webmaster.SiteDoc(docSite, converted)); err != nil {
@@ -187,15 +189,18 @@ func (h *Handlers) swapKind(
 		previous.StateSchema != current.StateSchema {
 		return "reload"
 	}
-	previousOverride := h.visitorOverride(ctx, previous.ID, name)
-	currentOverride := h.visitorOverride(ctx, current.ID, name)
-	if webmaster.OverrideMarkupChanged(previousOverride, currentOverride) {
-		return "reload"
+	if !h.cfg.DisableOverrides {
+		previousOverride := h.visitorOverride(ctx, previous.ID, name)
+		currentOverride := h.visitorOverride(ctx, current.ID, name)
+		if webmaster.OverrideMarkupChanged(previousOverride, currentOverride) {
+			return "reload"
+		}
+		if breaksOutOfStyle(webmaster.OverrideCSS(previousOverride)) ||
+			breaksOutOfStyle(webmaster.OverrideCSS(currentOverride)) {
+			return "reload"
+		}
 	}
-	if breaksOutOfStyle(previous.Css) ||
-		breaksOutOfStyle(current.Css) ||
-		breaksOutOfStyle(webmaster.OverrideCSS(previousOverride)) ||
-		breaksOutOfStyle(webmaster.OverrideCSS(currentOverride)) {
+	if breaksOutOfStyle(previous.Css) || breaksOutOfStyle(current.Css) {
 		return "reload"
 	}
 	return "css"
@@ -220,14 +225,17 @@ func (h *Handlers) VersionCSS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	merged := webmaster.ApplyOverride(
-		webmaster.Site{CSS: site.Css},
-		h.visitorOverride(r.Context(), site.ID, identityFromRequest(r)),
-	)
+	css := site.Css
+	if !h.cfg.DisableOverrides {
+		css = webmaster.ApplyOverride(
+			webmaster.Site{CSS: site.Css},
+			h.visitorOverride(r.Context(), site.ID, identityFromRequest(r)),
+		).CSS
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"css": merged.CSS,
+		"css": css,
 	})
 }

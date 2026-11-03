@@ -19,8 +19,54 @@ func TestThePageSwitchesWithoutATransition(t *testing.T) {
 		"bd-entering",
 		"bdFadeIn",
 	} {
-		if strings.Contains(doc, banned) {
+		if strings.Contains(stripBusy(doc), banned) {
 			t.Errorf("the page contains %q; it should switch without a transition", banned)
 		}
+	}
+}
+
+// stripBusy removes the code-owned spinner and its keyframes, so a test about
+// page transitions can look at everything else the shell serves.
+func stripBusy(doc string) string {
+	doc = strings.Replace(doc, busyCSS, "", 1)
+	const open = `<div id="bd-busy"`
+	if start := strings.Index(doc, open); start >= 0 {
+		if end := strings.Index(doc[start:], `</div>`); end >= 0 {
+			doc = doc[:start] + doc[start+end+len(`</div>`):]
+		}
+	}
+	return doc
+}
+
+// The busy spinner is the one animation the shell owns. It starts hidden and
+// the live script shows it while a rewrite is queued or running.
+func TestThePageShowsWhenTheSiteIsRewriting(t *testing.T) {
+	doc := SiteDoc(Site{Board: PostsPlaceholder}, nil)
+	for _, want := range []string{
+		`id="bd-busy"`,
+		`display:none!important`,
+		`bd-busy-spin`,
+		`setBusy(state)`,
+		`state === 'running' || state === 'queued'`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the page is missing %q", want)
+		}
+	}
+	// The spinner must not eat clicks on the page beneath it.
+	if !strings.Contains(doc, `pointer-events:none!important`) {
+		t.Error("the busy spinner can swallow clicks")
+	}
+}
+
+// The viewer's name is on the document so model-written JavaScript can make
+// the page personal without reading the HttpOnly cookie.
+func TestThePageCarriesTheViewersName(t *testing.T) {
+	doc := SiteDoc(
+		Site{Name: "O'Brien", Board: PostsPlaceholder},
+		nil,
+	)
+	if !strings.Contains(doc, `data-name="O&#39;Brien"`) {
+		t.Errorf("the page does not carry the escaped viewer name: %s", doc[:200])
 	}
 }

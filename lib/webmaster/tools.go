@@ -3,7 +3,9 @@ package webmaster
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -39,12 +41,16 @@ type stateKeyInput struct {
 // database until the whole mutation finishes, so a failed round cannot leave a
 // half-written page behind.
 type editor struct {
-	site    Site
-	reason  string
-	notes   *string
-	done    bool
-	dirty   bool
-	authors []string
+	site             Site
+	reason           string
+	notes            *string
+	done             bool
+	dirty            bool
+	authors          []string
+	disableOverrides bool
+	// rejected counts rejected calls. The loop resets it before each
+	// response.
+	rejected int
 }
 
 // newEditor copies the override map. The editor's copy is what the change
@@ -63,8 +69,17 @@ func newEditor(site Site) *editor {
 
 // run applies one tool call and returns the text fed back to the model. It
 // never returns a Go error: a rejected argument is a normal result the model
-// can correct on the next round.
+// can correct on the next round. Rejections are counted so the loop can tell
+// whether a response that called done still has something to fix.
 func (e *editor) run(name, arguments string) string {
+	result := e.apply(name, arguments)
+	if strings.HasPrefix(result, "rejected:") {
+		e.rejected++
+	}
+	return result
+}
+
+func (e *editor) apply(name, arguments string) string {
 	switch name {
 	case "set_site":
 		var in struct {
@@ -79,74 +94,63 @@ func (e *editor) run(name, arguments string) string {
 		if in.CSS == nil && in.Header == nil && in.Board == nil && in.Footer == nil {
 			return "rejected: set_site needs at least one field"
 		}
-		if in.CSS != nil {
-			css, err := cleanCSS(*in.CSS)
-			if err != nil {
-				return "rejected: " + err.Error()
-			}
-			e.site.CSS = css
-		}
-		regions := []struct {
+		// Every field is cleaned before any is assigned, so a rejected call
+		// leaves the whole page as it was.
+		fields := []struct {
 			name   string
 			value  *string
 			target *string
 		}{
+			{editTargetCSS, in.CSS, &e.site.CSS},
 			{RegionHeader, in.Header, &e.site.Header},
 			{RegionBoard, in.Board, &e.site.Board},
 			{RegionFooter, in.Footer, &e.site.Footer},
 		}
-		for _, region := range regions {
-			if region.value == nil {
+		cleaned := make([]string, len(fields))
+		for i, field := range fields {
+			if field.value == nil {
 				continue
 			}
-			cleaned, err := cleanRegion(region.name, *region.value)
-			if err != nil {
-				return "rejected: " + err.Error()
+			var err error
+			if field.name == editTargetCSS {
+				cleaned[i], err = cleanCSS(*field.value)
+			} else {
+				cleaned[i], err = cleanRegion(field.name, *field.value)
 			}
-			*region.target = cleaned
+			if err != nil {
+				return "rejected: " + err.Error() + "; nothing was applied"
+			}
+		}
+		changed := false
+		for i, field := range fields {
+			if field.value == nil || cleaned[i] == *field.target {
+				continue
+			}
+			*field.target = cleaned[i]
+			changed = true
+		}
+		if !changed {
+			return "ok (no change)"
 		}
 		e.dirty = true
 		return "ok"
 
-	case "set_css":
+	case "edit":
 		var in struct {
-			CSS string `json:"css"`
+			Target string `json:"target"`
+			Old    string `json:"old"`
+			New    string `json:"new"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 			return "rejected: arguments are not valid JSON"
 		}
-		css, err := cleanCSS(in.CSS)
-		if err != nil {
-			return "rejected: " + err.Error()
-		}
-		e.site.CSS = css
-		e.dirty = true
-		return "ok"
-
-	case "set_region":
-		var in struct {
-			Region string `json:"region"`
-			HTML   string `json:"html"`
-		}
-		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
-		}
-		region, err := cleanRegion(in.Region, in.HTML)
-		if err != nil {
-			return "rejected: " + err.Error()
-		}
-		switch in.Region {
-		case RegionHeader:
-			e.site.Header = region
-		case RegionBoard:
-			e.site.Board = region
-		case RegionFooter:
-			e.site.Footer = region
-		}
-		e.dirty = true
-		return "ok"
+		return e.edit(in.Target, in.Old, in.New)
 
 	case "set_user_override":
+		if e.disableOverrides {
+			return "rejected: per-visitor overrides are off; " +
+				"use JavaScript and document.documentElement.dataset.name"
+		}
 		var in struct {
 			Name   string  `json:"name"`
 			CSS    *string `json:"css"`
@@ -233,6 +237,142 @@ func (e *editor) run(name, arguments string) string {
 	return fmt.Sprintf("rejected: unknown tool %q", name)
 }
 
+// editTargetCSS names the site stylesheet as an edit target. The regions use
+// their own names.
+const editTargetCSS = "css"
+
+// edit changes part of one field of the shared page. The result goes through
+// the same cleaning as a whole-field write, so an edit cannot produce a page
+// that set_site would refuse. A rejected edit leaves the field as it was.
+func (e *editor) edit(target, old, replacement string) string {
+	var field *string
+	var section string
+	switch target {
+	case editTargetCSS:
+		field, section = &e.site.CSS, "CURRENT STYLESHEET"
+	case RegionHeader:
+		field, section = &e.site.Header, "the header in CURRENT REGIONS"
+	case RegionBoard:
+		field, section = &e.site.Board, "the board in CURRENT REGIONS"
+	case RegionFooter:
+		field, section = &e.site.Footer, "the footer in CURRENT REGIONS"
+	default:
+		return fmt.Sprintf("rejected: unknown target %q, use css, header, board or footer", target)
+	}
+
+	next, matches := applyEdit(*field, old, replacement)
+	switch {
+	case matches == 0:
+		return fmt.Sprintf(
+			"rejected: old text not found in %s. Copy it exactly from %s, "+
+				`use a shorter piece, or use old="" to append.`,
+			target, section,
+		)
+	case matches > 1:
+		return fmt.Sprintf(
+			"rejected: old text matches %d places in %s. "+
+				"Include more surrounding text so it matches once.",
+			matches, target,
+		)
+	}
+
+	var err error
+	if target == editTargetCSS {
+		next, err = cleanCSS(next)
+	} else {
+		next, err = cleanRegion(target, next)
+	}
+	if err != nil {
+		return "rejected: " + err.Error() + "; the edit was not applied"
+	}
+	if next == *field {
+		return "ok (no change)"
+	}
+	*field = next
+	e.dirty = true
+	return "ok"
+}
+
+// applyEdit replaces the one place old appears in field and reports how many
+// places matched; the returned text is only meaningful when that is 1. An
+// empty old appends replacement on a new line.
+//
+// Models often copy a section with different indentation, line breaks or
+// spacing, so matching tries three steps and stops at the first that finds
+// anything: the exact text, then any whitespace between words, then optional
+// whitespace around { } : ; , and >. Each step matches a superset of the one
+// before, so stopping early never turns an ambiguous match into a unique one.
+func applyEdit(field, old, replacement string) (string, int) {
+	if strings.TrimSpace(old) == "" {
+		if strings.TrimSpace(field) == "" {
+			return replacement, 1
+		}
+		return field + "\n" + replacement, 1
+	}
+
+	if matches := strings.Count(field, old); matches > 0 {
+		if matches > 1 {
+			return field, matches
+		}
+		return strings.Replace(field, old, replacement, 1), 1
+	}
+
+	for _, pattern := range []string{wordPattern(old), punctuationPattern(old)} {
+		spans := regexp.MustCompile(pattern).FindAllStringIndex(field, -1)
+		switch len(spans) {
+		case 0:
+			continue
+		case 1:
+			start, end := spans[0][0], spans[0][1]
+			return field[:start] + replacement + field[end:], 1
+		default:
+			return field, len(spans)
+		}
+	}
+	return field, 0
+}
+
+// wordPattern matches old with any run of whitespace between its words.
+func wordPattern(old string) string {
+	words := strings.Fields(old)
+	for i, word := range words {
+		words[i] = regexp.QuoteMeta(word)
+	}
+	return strings.Join(words, `\s+`)
+}
+
+// editPunctuation is where CSS and markup spacing is a matter of taste.
+const editPunctuation = "{}:;,>"
+
+// punctuationPattern is wordPattern that also lets whitespace appear or vanish
+// around editPunctuation, so `a { color: red }` matches `a{color:red}`.
+func punctuationPattern(old string) string {
+	var b strings.Builder
+	space := false
+	afterPunct := true
+	for _, r := range strings.TrimSpace(old) {
+		switch {
+		case unicode.IsSpace(r):
+			space = true
+		case strings.ContainsRune(editPunctuation, r):
+			b.WriteString(`\s*`)
+			b.WriteString(regexp.QuoteMeta(string(r)))
+			b.WriteString(`\s*`)
+			space, afterPunct = false, true
+		default:
+			if space && !afterPunct {
+				b.WriteString(`\s+`)
+			}
+			b.WriteString(regexp.QuoteMeta(string(r)))
+			space, afterPunct = false, false
+		}
+	}
+	// Whitespace at the ends belongs to the neighbors, not to the match, or a
+	// replaced rule would swallow the line break after it.
+	pattern := strings.TrimPrefix(b.String(), `\s*`)
+	return strings.TrimSuffix(pattern, `\s*`)
+}
+
 // overrideTargets resolves the name a tool call targets. "poster" is a shortcut
 // for the people whose posts triggered this rewrite, which is the case the
 // model reaches for most.
@@ -273,6 +413,9 @@ func cleanRegion(name, html string) (string, error) {
 	}
 	if len(html) > maxRegionLen {
 		return "", fmt.Errorf("region is longer than %d bytes", maxRegionLen)
+	}
+	if name == RegionBoard && !strings.Contains(html, PostsPlaceholder) {
+		return "", fmt.Errorf("board must contain %s, where the posts go", PostsPlaceholder)
 	}
 	return html, nil
 }

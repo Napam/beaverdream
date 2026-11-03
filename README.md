@@ -6,9 +6,13 @@ model answers by rewriting the page's CSS and markup instead of writing a
 reply. The current page is the latest answer; every earlier answer stays in the
 version history.
 
-There are no accounts and no per-user threads. A post usually changes the page
-for everyone, though the model can also give one visitor a private version. If
+There are no accounts and no per-user threads. A post that asks for something
+changes the page for everyone. Plain talk usually leaves the page alone. If
 someone talks it into making the board hostile, it can. That is the game.
+
+Per-visitor pages exist but are off by default: everyone shares one page, and
+the model personalizes in the browser with the viewer's name. Set
+`ENABLE_OVERRIDES=true` to let the model keep separate server-rendered pages.
 
 It is a toy. It runs on localhost and calls a local model.
 
@@ -19,12 +23,16 @@ It is a toy. It runs on localhost and calls a local model.
   new one. Nothing is overwritten.
 - A version has a stylesheet and three HTML regions: `header`, `board`, and
   `footer`. The board contains the literal placeholder `{{posts}}`, which the
-  server replaces with the code-owned post list. If the model drops the
-  placeholder, the posts are appended instead, so a post can never disappear.
+  server replaces with the code-owned post list. A model write that drops the
+  placeholder is rejected, and a stored board without it gets the posts
+  appended, so a post can never disappear.
 - A version can also carry overrides for individual visitor names. The model
   can restyle the whole page for one person while everyone else keeps the
   normal board. Overrides belong to the version, so undo, restore and heal move
-  them with the rest of the page.
+  them with the rest of the page. They are off by default: set
+  `ENABLE_OVERRIDES=true` to allow them. With them off, everyone sees the same
+  page, and the model personalizes in the browser instead: the viewer's name
+  is on the `<html>` tag as `data-name`, so a script can branch on it.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
   document. The only code-owned markup is the document shell, the live-update
@@ -49,13 +57,20 @@ It is a toy. It runs on localhost and calls a local model.
   `/version`: a stylesheet-only change is swapped in place, and a markup change
   reloads after saving the draft and reading position. An override that changes
   only one visitor's markup reloads that visitor and leaves everyone else alone.
+  A small spinner in the top-left corner shows while a rewrite is queued or
+  running.
 - After 20 quiet minutes the board copies the seed forward, keeping the posts
   and clearing shared state and visitor overrides. The next visitor gets the
   plain board and the reveal again. The admin panel can trigger the same heal
   immediately.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
-  stylesheet, the regions, shared state and per-visitor overrides, then calls
-  `done`. The result is stored as a new version plus a turn in the room, with
+  stylesheet, the regions, shared state, and per-visitor overrides when those
+  are enabled, then calls `done`. Small changes go through `edit`, which
+  replaces one exact piece of the stylesheet or a region, or appends to it, so
+  the model does not have to write the whole page out again. `set_site`
+  replaces whole parts for a real restyle. If an edit misses, the turn stays
+  open so the model can fix it. Each round logs its time, token counts and
+  tools. The result is stored as a new version plus a turn in the room, with
   the whole conversation.
 - The board is one conversation with one webmaster. Each turn reads back the
   room log: who said what, and what the webmaster said and changed, oldest
@@ -64,8 +79,10 @@ It is a toy. It runs on localhost and calls a local model.
   as a kept turn with no new version.
 - When the conversation reaches 128k estimated tokens (four runes per token)
   or a 10k-turn backstop, the server compacts it into one summary message and
-  starts a fresh log after it. The webmaster reads the summary first, then the
-  recent turns. Summaries survive heal; reset clears them with the room.
+  starts a fresh log after it. Compaction runs after a turn has landed, so a
+  slow summary never holds up the page. The webmaster reads the summary first,
+  then the recent turns. Summaries survive heal; reset clears them with the
+  room.
 
 **Do not expose this to the open internet.** Model-generated scripts run in
 every visitor's browser with the board's origin. That is the game. The admin
@@ -95,9 +112,12 @@ token.
 The mock model picks a theme from keywords in your post: `matrix`,
 `pink`/`cute`, `brutalist`/`concrete`, or
 `chaos`/`sabotage`/`prank` (which writes a script, so you can watch the page
-sabotage itself). `curse` or `only me` gives the poster a private page. Anything
-else gets a neutral theme. `mocknoop` asks it to leave the site alone;
-`mockfail` makes it fail, which is useful for testing error handling.
+sabotage itself). `curse` or `only me` gives the poster a private page, which
+only shows when `ENABLE_OVERRIDES=true`. Anything else gets a neutral theme.
+`mocknoop` asks it to leave the site alone; `mockfail` makes it fail, which is
+useful for testing error handling. `mockedit` and `mockpatch` make a small
+targeted edit (`mockpatch` needs the neutral theme on the page first), and
+`mockbadedit` sends an edit that misses, to show the retry.
 
 Production binary: `task build.go` writes `bin/app` with assets and migrations
 embedded.
@@ -144,7 +164,7 @@ and latency.
 - a form that sends an instruction straight to the model (optionally also
   storing it as a post),
 - the visitor overrides on the current version, with a clear button that gives
-  one person the normal page back,
+  one person the normal page back (hidden when overrides are disabled),
 - the version list, with a restore button that copies an old version forward as
   a new row,
 - a reset button that deletes every post, turn and later version, and clears
@@ -178,6 +198,7 @@ variables win over it. `.env` is gitignored; `.env.example` is the template.
 | `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |
 | `MAX_MUTATIONS_PER_DAY` | `500` | cost cap, `0` disables |
 | `MUTATION_ROUNDS` | `3` | tool rounds per mutation |
+| `ENABLE_OVERRIDES` | `false` | let the model keep separate pages per visitor |
 
 ## Development
 

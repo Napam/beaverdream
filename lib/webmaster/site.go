@@ -164,6 +164,15 @@ func FormatWhen(s string) string {
 	return t.Format("Jan 2 15:04")
 }
 
+// busyCSS animates the code-owned spinner. It is separate from BaseCSS so the
+// keyframes survive whatever the model writes over the page variables.
+const busyCSS = `<style>
+@keyframes bd-busy-spin { to { transform: rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) {
+  #bd-busy { animation-duration: 2.4s !important }
+}
+</style>`
+
 // liveScript keeps open pages current. A stylesheet-only change is applied in
 // place, so colors can shift under the cursor. A markup change reloads, but it
 // saves unsent text and the reading position first, and it waits while someone
@@ -253,13 +262,23 @@ const liveScript = `<script>
     if (reloading) return
     var now = Date.now()
     if (!waitingSince) waitingSince = now
-    if (now - typingAt < 3000 && now - waitingSince < 20000) {
-      setTimeout(function () { maybeReload(next) }, 1000)
+    if (now - typingAt < 1500 && now - waitingSince < 15000) {
+      setTimeout(function () { maybeReload(next) }, 500)
       return
     }
     reloading = true
     saveState(next)
     reload(next)
+  }
+
+  // setBusy shows the code-owned spinner while a mutation is queued or
+  // running. The display value is set important so a model stylesheet cannot
+  // hide it.
+  function setBusy(state) {
+    var el = document.getElementById('bd-busy')
+    if (!el) return
+    var busy = state === 'running' || state === 'queued'
+    el.style.setProperty('display', busy ? 'block' : 'none', 'important')
   }
 
   function tick() {
@@ -268,6 +287,7 @@ const liveScript = `<script>
       .then(function (r) { return r.json() })
       .then(function (d) {
         var state = d.running ? 'running' : (d.pending > 0 ? 'queued' : 'idle')
+        setBusy(state)
         document.documentElement.setAttribute('data-bd-state', state)
         document.dispatchEvent(new CustomEvent('beaverdream:status', { detail: d }))
         if (String(d.version) === version) return
@@ -283,11 +303,16 @@ const liveScript = `<script>
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', restoreState)
+    document.addEventListener('DOMContentLoaded', function () {
+      restoreState()
+      // The spinner lives in the body, so the first check waits for it.
+      tick()
+    })
   } else {
     restoreState()
+    tick()
   }
-  setInterval(tick, 2000)
+  setInterval(tick, 500)
 })()
 </script>`
 
@@ -319,8 +344,9 @@ func IdentityDoc(name string) string {
 
 // SiteDoc builds the page served to visitors. There is no sandbox: the
 // model's regions, CSS and scripts are the page. The only code-owned parts are
-// the document shell, the live reload script, and the small name link. The post
-// form is model markup, so it can move it, restyle it, or break it.
+// the document shell, the live reload script, the busy spinner, and the small
+// name link. The post form is model markup, so it can move it, restyle it, or
+// break it.
 func SiteDoc(site Site, posts []Post) string {
 	name := site.Name
 	if name == "" {
@@ -341,10 +367,13 @@ func SiteDoc(site Site, posts []Post) string {
 	}
 
 	var b strings.Builder
+	// data-name is code-owned so the model's JavaScript can tell who is
+	// looking without reading the HttpOnly cookie.
 	fmt.Fprintf(
 		&b,
-		`<!doctype html><html lang="en" data-version="%d"><head><meta charset="utf-8">`,
+		`<!doctype html><html lang="en" data-version="%d" data-name="%s"><head><meta charset="utf-8">`,
 		site.Version,
+		escapedName,
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" href="data:,">`)
@@ -352,11 +381,23 @@ func SiteDoc(site Site, posts []Post) string {
 	// The live script goes before the model's markup, so an unclosed tag in a
 	// region cannot swallow it.
 	b.WriteString(liveScript)
+	b.WriteString(busyCSS)
 	b.WriteString(`<style>`)
 	b.WriteString(BaseCSS)
 	b.WriteString(`</style><style id="bd-css">`)
 	b.WriteString(site.CSS)
 	b.WriteString(`</style></head><body>`)
+	// The busy spinner is code-owned and inline-styled, so a model stylesheet
+	// cannot move or hide it. The live script toggles display while a rewrite
+	// is queued or running.
+	b.WriteString(`<div id="bd-busy" role="status" aria-label="updating the page" ` +
+		`style="display:none!important;position:fixed!important;top:10px!important;` +
+		`left:10px!important;width:14px!important;height:14px!important;` +
+		`box-sizing:border-box!important;z-index:2147483647!important;` +
+		`pointer-events:none!important;border-radius:50%!important;` +
+		`border:2px solid rgba(127,127,127,.35)!important;` +
+		`border-top-color:rgba(127,127,127,.9)!important;` +
+		`animation:bd-busy-spin .7s linear infinite!important"></div>`)
 	if site.StateSchema != "" || len(site.State) > 0 {
 		state := site.State
 		if state == nil {

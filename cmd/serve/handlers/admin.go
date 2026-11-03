@@ -91,9 +91,13 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	overrides, err := h.overridesFor(ctx, site.ID)
-	if err != nil {
-		h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
+	var overrides map[string]webmaster.Override
+	if !h.cfg.DisableOverrides {
+		var err error
+		overrides, err = h.overridesFor(ctx, site.ID)
+		if err != nil {
+			h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
+		}
 	}
 
 	summaryText := ""
@@ -322,6 +326,10 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 // rather than editing the current one, so undo still works.
 func (h *Handlers) ClearOverride(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
+		return
+	}
+	if h.cfg.DisableOverrides {
+		h.redirectAdmin(w, r, "overrides are off")
 		return
 	}
 	if err := r.ParseForm(); err != nil {

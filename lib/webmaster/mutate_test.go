@@ -2,7 +2,11 @@ package webmaster
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -54,8 +58,8 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	if res.Messages[0].Role != "system" || res.Messages[1].Role != "user" {
 		t.Fatalf("unexpected prefix: %q, %q", res.Messages[0].Role, res.Messages[1].Role)
 	}
-	if len(res.Messages[2].ToolCalls) != 2 {
-		t.Fatalf("first round called %d tools, want 2", len(res.Messages[2].ToolCalls))
+	if len(res.Messages[2].ToolCalls) != 1 {
+		t.Fatalf("first round called %d tools, want 1", len(res.Messages[2].ToolCalls))
 	}
 	for _, call := range res.Messages[2].ToolCalls {
 		if call.Result != "ok" {
@@ -86,6 +90,255 @@ func TestMutateGivesThePosterAPrivatePage(t *testing.T) {
 	}
 	if override.CSS == nil || !strings.Contains(*override.CSS, "ff3b3b") {
 		t.Errorf("override css = %+v", override.CSS)
+	}
+}
+
+// editBytes sums the arguments of every call that changed the page, which is
+// what the model had to write out.
+func editBytes(res Result) int {
+	total := 0
+	for _, message := range res.Messages {
+		for _, call := range message.ToolCalls {
+			if call.Name != "done" {
+				total += len(call.Arguments)
+			}
+		}
+	}
+	return total
+}
+
+// A small change is a small answer: the edit and done in one response, with
+// arguments a fraction of a whole rewrite.
+func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+	rounds := 0
+	m.OnRoundDone = func(RoundStats) { rounds++ }
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockedit the heading red"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if !res.Changed || !res.Done || res.Changes != "stylesheet" {
+		t.Fatalf("changed %v, done %v, changes %q", res.Changed, res.Done, res.Changes)
+	}
+	if res.Site.CSS != "h1{color:#c00}" {
+		t.Errorf("css = %q", res.Site.CSS)
+	}
+	if rounds != 1 {
+		t.Errorf("rounds = %d, want 1", rounds)
+	}
+
+	theme, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "make it look like the matrix"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate theme: %v", err)
+	}
+	small, whole := editBytes(res), editBytes(theme)
+	if small > 200 || small*4 > whole {
+		t.Errorf("edit wrote %d bytes, a whole rewrite %d", small, whole)
+	}
+}
+
+func TestMutatePatchesAValueInPlace(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+
+	first, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "hello"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate default theme: %v", err)
+	}
+	res, err := m.Mutate(
+		context.Background(),
+		first.Site,
+		Room{},
+		Post{Author: "dave", Body: "mockpatch the accent"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate patch: %v", err)
+	}
+	if res.Changes != "stylesheet" {
+		t.Errorf("changes = %q, want stylesheet", res.Changes)
+	}
+	if !strings.Contains(res.Site.CSS, mockllm.PatchedAccent) ||
+		strings.Contains(res.Site.CSS, "--accent:#9db4ff") {
+		t.Errorf("accent was not patched: %q", res.Site.CSS)
+	}
+	if res.Site.Board != first.Site.Board {
+		t.Error("a stylesheet edit changed the board")
+	}
+}
+
+// A done next to a rejected edit would end the turn before the model saw the
+// rejection. With rounds left, the turn stays open for one fix.
+func TestMutateDefersDoneAfterARejectedEdit(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+	var rounds []RoundStats
+	m.OnRoundDone = func(stats RoundStats) { rounds = append(rounds, stats) }
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockbadedit"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(rounds) != 2 {
+		t.Fatalf("rounds = %d, want 2", len(rounds))
+	}
+	if rounds[0].Rejected != 1 || strings.Join(rounds[0].Tools, ",") != "edit,done" {
+		t.Errorf("first round = %+v", rounds[0])
+	}
+	first := res.Messages[2].ToolCalls
+	if !strings.HasPrefix(first[0].Result, "rejected:") {
+		t.Errorf("edit result = %q, want a rejection", first[0].Result)
+	}
+	if first[1].Result != doneDeferred {
+		t.Errorf("done result = %q, want it deferred", first[1].Result)
+	}
+	if !res.Done || res.Changed {
+		t.Errorf("done %v, changed %v", res.Done, res.Changed)
+	}
+}
+
+// On the last round there is nobody left to fix it, so done ends the turn.
+func TestMutateAcceptsDoneOnTheLastRound(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+	m.maxRounds = 1
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockbadedit"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if !res.Done || res.Reason != "a small edit" {
+		t.Fatalf("done %v, reason %q", res.Done, res.Reason)
+	}
+	if got := res.Messages[2].ToolCalls[1].Result; got != "ok" {
+		t.Errorf("done result = %q, want ok", got)
+	}
+}
+
+// Each assistant message carries the stats of its round, so a stored turn says
+// what every completion cost.
+func TestMutateRecordsRoundStats(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockbadedit"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(res.Rounds) != 2 || res.DoneRound != 2 {
+		t.Fatalf("rounds %d, done round %d", len(res.Rounds), res.DoneRound)
+	}
+	first := res.Messages[2].Stats
+	if first == nil || first.Round != 1 || first.Rejected != 1 ||
+		strings.Join(first.Tools, ",") != "edit,done" {
+		t.Fatalf("first round stats = %+v", first)
+	}
+	if res.Messages[3].Stats == nil || res.Messages[3].Stats.Round != 2 {
+		t.Fatalf("second round stats = %+v", res.Messages[3].Stats)
+	}
+
+	data, err := json.Marshal(res.Messages)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"stats":{"round":1,`) {
+		t.Errorf("stored messages lack the stats: %s", data)
+	}
+}
+
+// DeepSeek reports cache hits in its own usage field. It counts when the
+// OpenAI field is missing.
+func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":0,"model":"m",`+
+			`"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant",`+
+			`"content":"","tool_calls":[{"id":"c1","type":"function","function":`+
+			`{"name":"done","arguments":"{\"reason\":\"hi\"}"}}]}}],`+
+			`"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010,`+
+			`"prompt_cache_hit_tokens":900,"prompt_cache_miss_tokens":100}}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(res.Rounds) != 1 || res.Rounds[0].CachedTokens != 900 {
+		t.Fatalf("rounds = %+v, want 900 cached tokens", res.Rounds)
+	}
+}
+
+// Every completion asks for a tool call, so the model cannot end a turn in
+// prose.
+func TestMutateRequiresAToolCall(t *testing.T) {
+	var choices []any
+	mock := mockllm.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			ToolChoice any `json:"tool_choice"`
+		}
+		_ = json.Unmarshal(body, &req)
+		choices = append(choices, req.ToolChoice)
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		mock.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	if _, err := m.Mutate(
+		context.Background(),
+		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "mockbadedit"},
+	); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(choices) != 2 {
+		t.Fatalf("completions = %d, want 2", len(choices))
+	}
+	for i, choice := range choices {
+		if choice != "required" {
+			t.Errorf("round %d tool_choice = %v, want required", i+1, choice)
+		}
 	}
 }
 
@@ -151,8 +404,8 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 
 	order := []string{
 		"COMPACTED HISTORY:",
-		"YOUR NOTES:",
 		"ROOM LOG AFTER THAT",
+		"YOUR NOTES:",
 		"CURRENT STYLESHEET:",
 		"CURRENT REGIONS:",
 		"CURRENT SHARED STATE:",
@@ -170,6 +423,29 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 	}
 	if strings.LastIndex(got, "NEW POST") < strings.Index(got, "BOARD IS PLAIN:") {
 		t.Error("NEW POST is not the final section")
+	}
+}
+
+// A notes rewrite must not touch the cacheable prefix: everything through the
+// end of the room log stays byte for byte the same.
+func TestUserPromptKeepsTheLogPrefixWhenNotesChange(t *testing.T) {
+	room := Room{Summary: "old news", Log: []Turn{
+		{ID: 1, Kind: TurnPost, Author: "kit", Body: "hi"},
+		{ID: 2, Kind: TurnWebmaster, Said: "hello kit", Status: "kept"},
+	}}
+	trigger := []Post{{ID: 3, Author: "dave", Body: "yo"}}
+
+	room.Notes = "first notes"
+	before := userPrompt(Site{}, room, trigger)
+	room.Notes = "completely different notes"
+	after := userPrompt(Site{}, room, trigger)
+
+	cut := strings.Index(before, "\nYOUR NOTES:")
+	if cut < 0 || !strings.HasPrefix(after, before[:cut]) {
+		t.Fatalf("notes changed the prefix before them:\n%s\n---\n%s", before, after)
+	}
+	if !strings.Contains(before[:cut], `#2 you: "hello kit"`) {
+		t.Errorf("the room log is not inside the stable prefix:\n%s", before[:cut])
 	}
 }
 
@@ -208,5 +484,83 @@ func TestMutateReportsModelFailure(t *testing.T) {
 		Post{Body: "mockfail"},
 	); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+// Each mode gets its own static prompt, so the tool the model is told about
+// always matches the tool it is offered.
+func TestTheSystemPromptMatchesTheOverrideMode(t *testing.T) {
+	on := systemPrompt(true)
+	off := systemPrompt(false)
+
+	if !strings.Contains(on, "set_user_override") {
+		t.Error("the prompt with overrides does not describe the tool")
+	}
+	if strings.Contains(off, "set_user_override") {
+		t.Error("the prompt without overrides still describes the tool")
+	}
+	for name, prompt := range map[string]string{"on": on, "off": off} {
+		if !strings.Contains(prompt, "dataset.name") {
+			t.Errorf("%s prompt does not tell the model how to personalize in the browser", name)
+		}
+	}
+}
+
+// The model styles posts it never writes. Every class the post renderer emits
+// must be named in the static prompt, with the base rules it overrides.
+func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
+	rendered := RenderPosts([]Post{{ID: 3, Author: "a", When: "now", Body: "x\n>q\n>>2"}}) +
+		RenderPosts(nil)
+	classes := regexp.MustCompile(`class="([^"]+)"`).FindAllStringSubmatch(rendered, -1)
+	if len(classes) < 8 {
+		t.Fatalf("found only %d classes in %s", len(classes), rendered)
+	}
+
+	for _, allow := range []bool{true, false} {
+		prompt := systemPrompt(allow)
+		if prompt != systemPrompt(allow) {
+			t.Fatal("the system prompt is not a stable string")
+		}
+		for _, match := range classes {
+			for _, class := range strings.Fields(match[1]) {
+				if !strings.Contains(prompt, "."+class) &&
+					!strings.Contains(prompt, `class="`+class+`"`) {
+					t.Errorf("overrides %v: class %q is not named in the prompt", allow, class)
+				}
+			}
+		}
+		for _, want := range []string{
+			strings.TrimSpace(BaseCSS),
+			"white-space:pre-wrap",
+			"span.quote",
+			"a.post-ref",
+		} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("overrides %v: prompt lacks %q", allow, want)
+			}
+		}
+		if !strings.HasSuffix(prompt, "Do not write commentary outside tool calls.") {
+			t.Errorf("overrides %v: the closing instruction is not last", allow)
+		}
+	}
+}
+
+// Disabling overrides removes the tool from the schema, so the model cannot
+// ask for a per-visitor page. The executor rejects it if a model calls it
+// anyway, and stored rows stay readable so the feature can be switched back on.
+func TestTheOverrideToolDisappearsWhenOverridesAreOff(t *testing.T) {
+	encode := func(allow bool) string {
+		data, err := json.Marshal(toolParams(allow))
+		if err != nil {
+			t.Fatalf("marshal tools: %v", err)
+		}
+		return string(data)
+	}
+
+	if !strings.Contains(encode(true), `"set_user_override"`) {
+		t.Error("the override tool is missing when overrides are on")
+	}
+	if strings.Contains(encode(false), `"set_user_override"`) {
+		t.Error("the override tool is still offered when overrides are off")
 	}
 }

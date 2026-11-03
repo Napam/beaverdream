@@ -108,14 +108,53 @@ func completions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// decide returns the tool calls for one round. The first round edits the site;
-// once a tool result is in the history, the second round closes with done, so
-// tests exercise the multi-round loop rather than a single response.
+// decide returns the tool calls for one round. A theme keyword rewrites the
+// site in the first round and closes with done in the second, so tests
+// exercise the multi-round loop. An edit keyword sends the edit and done in
+// one response.
 func decide(prompt string, toolResultSeen bool) []toolCall {
 	if strings.Contains(prompt, "mocknoop") || toolResultSeen {
 		return []toolCall{doneCall("nothing needed changing")}
 	}
+	if edit, ok := pickEdit(prompt); ok {
+		return []toolCall{editCall(edit), doneCall("a small edit")}
+	}
 	return pickTheme(prompt).calls()
+}
+
+// PatchedAccent is the accent color the mockpatch keyword writes over the
+// default theme's accent.
+const PatchedAccent = "--accent:#c00"
+
+// pickEdit returns the targeted edit for the edit keywords. Each one answers
+// with the edit and done in the same response, the way the prompt asks:
+//   - mockedit appends one CSS rule.
+//   - mockpatch replaces the default theme's accent, so it needs a page that
+//     already carries that theme.
+//   - mockbadedit names text that is not on the page, so the edit is
+//     rejected and the done next to it is deferred.
+func pickEdit(prompt string) (map[string]string, bool) {
+	switch {
+	case strings.Contains(prompt, "mockbadedit"):
+		return map[string]string{"target": "css", "old": "no such text", "new": "x"}, true
+	case strings.Contains(prompt, "mockedit"):
+		return map[string]string{"target": "css", "old": "", "new": "h1{color:#c00}"}, true
+	case strings.Contains(prompt, "mockpatch"):
+		return map[string]string{
+			"target": "css",
+			"old":    "--accent:#9db4ff",
+			"new":    PatchedAccent,
+		}, true
+	}
+	return nil, false
+}
+
+func editCall(edit map[string]string) toolCall {
+	return toolCall{
+		ID:       "call_edit",
+		Type:     "function",
+		Function: functionCall{Name: "edit", Arguments: mustJSON(edit)},
+	}
 }
 
 func doneCall(reason string) toolCall {
@@ -192,28 +231,18 @@ const postForm = `<form class="postbox" method="post" action="/posts">` +
 	`<button type="submit">post</button></div></form>`
 
 func (t theme) calls() []toolCall {
-	board := `<h2 class="board-title">` + t.title + `</h2>` + postForm + `{{posts}}`
-	calls := []toolCall{
-		{
-			ID:   "call_css",
-			Type: "function",
-			Function: functionCall{
-				Name:      "set_css",
-				Arguments: mustJSON(map[string]string{"css": t.css}),
-			},
-		},
-		{
-			ID:   "call_board",
-			Type: "function",
-			Function: functionCall{
-				Name: "set_region",
-				Arguments: mustJSON(map[string]string{
-					"region": "board",
-					"html":   board,
-				}),
-			},
-		},
+	site := map[string]string{
+		"css":   t.css,
+		"board": `<h2 class="board-title">` + t.title + `</h2>` + postForm + `{{posts}}`,
 	}
+	if t.header != "" {
+		site["header"] = t.header
+	}
+	calls := []toolCall{{
+		ID:       "call_site",
+		Type:     "function",
+		Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
+	}}
 	if t.personal {
 		calls = append(calls, toolCall{
 			ID:   "call_override",
@@ -224,19 +253,6 @@ func (t theme) calls() []toolCall {
 					"name":   "poster",
 					"css":    ":root{--bg:#2a0808;--accent:#ff3b3b}",
 					"footer": `<footer class="colophon">only you can see this page.</footer>`,
-				}),
-			},
-		})
-	}
-	if t.header != "" {
-		calls = append(calls, toolCall{
-			ID:   "call_header",
-			Type: "function",
-			Function: functionCall{
-				Name: "set_region",
-				Arguments: mustJSON(map[string]string{
-					"region": "header",
-					"html":   t.header,
 				}),
 			},
 		})

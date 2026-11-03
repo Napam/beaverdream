@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3"
@@ -27,6 +28,14 @@ type Mutator struct {
 	// OnRound, when set, reports the round that is about to run. The admin
 	// panel uses it to show progress.
 	OnRound func(round int)
+	// OnRoundDone reports what one round cost and which tools it called, so a
+	// slow mutation can be told apart from a slow model, and a long answer
+	// from a slow one.
+	OnRoundDone func(stats RoundStats)
+
+	// DisableOverrides removes the per-visitor tool and tells the model to
+	// personalize in the browser instead. Everyone sees one shared page.
+	DisableOverrides bool
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
@@ -53,24 +62,44 @@ type ToolCall struct {
 	Result    string `json:"result,omitempty"`
 }
 
-// Message is one entry of the conversation sent to the model.
+// Message is one entry of the conversation sent to the model. Assistant
+// entries carry the stats of the round that produced them.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	Reasoning  string     `json:"reasoning,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role       string      `json:"role"`
+	Content    string      `json:"content,omitempty"`
+	Reasoning  string      `json:"reasoning,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	Stats      *RoundStats `json:"stats,omitempty"`
 }
 
-// Result is what one mutation produced.
+// Result is what one mutation produced. Rounds holds every completion that
+// was attempted, including a failed one. DoneRound is the round whose done
+// ended the turn, or zero.
 type Result struct {
-	Site     Site
-	Changed  bool
-	Done     bool
-	Reason   string
-	Changes  string
-	Notes    *string
-	Messages []Message
+	Site      Site
+	Changed   bool
+	Done      bool
+	Reason    string
+	Changes   string
+	Notes     *string
+	Messages  []Message
+	Rounds    []RoundStats
+	DoneRound int
+}
+
+// RoundStats describes one completion. Elapsed covers the model call only.
+// The token counts are what the server reported, zero when it reported
+// nothing or the call failed. Tools lists the calls in order, and Rejected
+// counts the ones the editor refused.
+type RoundStats struct {
+	Round            int           `json:"round"`
+	Elapsed          time.Duration `json:"elapsed_ns"`
+	PromptTokens     int64         `json:"prompt_tokens"`
+	CachedTokens     int64         `json:"cached_tokens"`
+	CompletionTokens int64         `json:"completion_tokens"`
+	Tools            []string      `json:"tools,omitempty"`
+	Rejected         int           `json:"rejected,omitempty"`
 }
 
 // Mutate asks the model to rewrite the site in response to one trigger. The
@@ -98,8 +127,15 @@ func (m *Mutator) MutatePosts(
 	}
 	ed := newEditor(current)
 	ed.authors = editorAuthors(triggers)
-	sys := systemPromptText
-	usr := userPrompt(current, room, triggers)
+	ed.disableOverrides = m.DisableOverrides
+	promptSite := current
+	if m.DisableOverrides {
+		// The rows still travel with the version, but the model must not see
+		// a feature it cannot use.
+		promptSite.Overrides = nil
+	}
+	sys := systemPrompt(!m.DisableOverrides)
+	usr := userPrompt(promptSite, room, triggers)
 
 	res := Result{Site: current, Messages: []Message{
 		{Role: "system", Content: sys},
@@ -111,22 +147,31 @@ func (m *Mutator) MutatePosts(
 		openai.UserMessage(usr),
 	}
 
+	hiddenWarned := false
 	for round := 0; round < m.maxRounds; round++ {
 		if m.OnRound != nil {
 			m.OnRound(round + 1)
 		}
+		roundStart := time.Now()
 		resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
 			Model:           openai.ChatModel(m.model),
 			Messages:        messages,
-			Tools:           toolParams(),
+			Tools:           toolParams(!m.DisableOverrides),
+			ToolChoice:      toolChoiceRequired,
 			MaxTokens:       openai.Int(maxOutputTokens),
 			Temperature:     openai.Float(0.8),
 			ReasoningEffort: m.effort,
 		})
+		stats := RoundStats{Round: round + 1, Elapsed: time.Since(roundStart)}
 		if err != nil {
+			m.reportRound(&res, stats)
 			return res, fmt.Errorf("chat completion: %w", err)
 		}
+		stats.PromptTokens = resp.Usage.PromptTokens
+		stats.CachedTokens = cachedTokens(resp.Usage)
+		stats.CompletionTokens = resp.Usage.CompletionTokens
 		if len(resp.Choices) == 0 {
+			m.reportRound(&res, stats)
 			break
 		}
 
@@ -137,6 +182,8 @@ func (m *Mutator) MutatePosts(
 			Reasoning: reasoningOf(reply),
 		}
 		if len(reply.ToolCalls) == 0 {
+			m.reportRound(&res, stats)
+			entry.Stats = &stats
 			res.Messages = append(res.Messages, entry)
 			break
 		}
@@ -146,6 +193,7 @@ func (m *Mutator) MutatePosts(
 				OfString: openai.String(reply.Content),
 			},
 		}
+		ed.rejected = 0
 		for _, call := range reply.ToolCalls {
 			record := ToolCall{
 				ID:        call.ID,
@@ -155,6 +203,41 @@ func (m *Mutator) MutatePosts(
 			assistant.ToolCalls = append(assistant.ToolCalls, toolCallParam(record))
 			record.Result = ed.run(record.Name, record.Arguments)
 			entry.ToolCalls = append(entry.ToolCalls, record)
+			stats.Tools = append(stats.Tools, record.Name)
+		}
+		stats.Rejected = ed.rejected
+		m.reportRound(&res, stats)
+		entry.Stats = &stats
+
+		// A response that calls done next to a rejected call would end the
+		// turn before the model sees the rejection. While rounds remain, the
+		// turn stays open for one fix. The reason and notes from this done
+		// stay as the fallback if the next response never calls done.
+		//
+		// A page whose posts this turn's edits hid behind an unclosed tag
+		// gets the same pause, once. Calling done again keeps the page.
+		deferred := ""
+		if ed.done && round+1 < m.maxRounds {
+			switch {
+			case ed.rejected > 0:
+				deferred = doneDeferred
+			case !hiddenWarned:
+				if what := PostsSwallowedBy(
+					ed.site,
+				); what != "" &&
+					PostsSwallowedBy(current) == "" {
+					deferred = fmt.Sprintf(doneHidesPosts, what)
+					hiddenWarned = true
+				}
+			}
+		}
+		if deferred != "" {
+			ed.done = false
+			for i := range entry.ToolCalls {
+				if entry.ToolCalls[i].Name == "done" {
+					entry.ToolCalls[i].Result = deferred
+				}
+			}
 		}
 
 		res.Messages = append(res.Messages, entry)
@@ -167,18 +250,21 @@ func (m *Mutator) MutatePosts(
 		}
 
 		if ed.done {
+			res.DoneRound = round + 1
 			break
 		}
 	}
 
 	res.Site = ed.site
-	res.Changed = ed.dirty
 	res.Done = ed.done
 	res.Notes = ed.notes
 	res.Reason = ed.reason
-	if res.Changed {
+	// Calls that cancel each other out leave the editor dirty but the page
+	// as it was. Only a real difference writes a version.
+	if ed.dirty {
 		res.Changes = DescribeChanges(current, ed.site)
 	}
+	res.Changed = res.Changes != ""
 	if res.Reason == "" {
 		// A prose reply is the model trying to talk. Keep the last thing it
 		// said rather than a mechanical error line.
@@ -194,6 +280,49 @@ func (m *Mutator) MutatePosts(
 		res.Reason = fmt.Sprintf("no done call after %d rounds", m.maxRounds)
 	}
 	return res, nil
+}
+
+// toolChoiceRequired makes every response a tool call. The model's only way
+// to talk is done, so a prose reply is always a lost turn. It is safe on every
+// round: done ends the loop.
+var toolChoiceRequired = openai.ChatCompletionToolChoiceOptionUnionParam{
+	OfAuto: openai.String(string(openai.ChatCompletionToolChoiceOptionAutoRequired)),
+}
+
+// doneDeferred is the result of a done call that shared its response with a
+// rejected call.
+const doneDeferred = "not finished: a call above was rejected. Fix it, then call done again."
+
+// doneHidesPosts is the result of a done call whose page hides every post
+// behind something left open before {{posts}}.
+const doneHidesPosts = "not finished: %s before {{posts}} hides every post. " +
+	"Close it and call done again, or call done again to keep the page as it is."
+
+// reportRound records one finished completion on the result and tells the
+// listener.
+func (m *Mutator) reportRound(res *Result, stats RoundStats) {
+	res.Rounds = append(res.Rounds, stats)
+	if m.OnRoundDone != nil {
+		m.OnRoundDone(stats)
+	}
+}
+
+// cachedTokens reads the prompt cache hits. OpenAI reports them under
+// prompt_tokens_details; DeepSeek's own field is prompt_cache_hit_tokens, which
+// the SDK keeps as an extra field.
+func cachedTokens(usage openai.CompletionUsage) int64 {
+	if cached := usage.PromptTokensDetails.CachedTokens; cached > 0 {
+		return cached
+	}
+	field, ok := usage.JSON.ExtraFields["prompt_cache_hit_tokens"]
+	if !ok {
+		return 0
+	}
+	var hits int64
+	if err := json.Unmarshal([]byte(field.Raw()), &hits); err != nil {
+		return 0
+	}
+	return hits
 }
 
 // toolCallParam rebuilds a tool call for the assistant message that precedes
@@ -213,13 +342,39 @@ func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam
 
 // toolParams advertises the mutation tools. Every extra knob is another way a
 // small model can produce broken output.
-func toolParams() []openai.ChatCompletionToolUnionParam {
-	return []openai.ChatCompletionToolUnionParam{
+func toolParams(allowOverrides bool) []openai.ChatCompletionToolUnionParam {
+	tools := []openai.ChatCompletionToolUnionParam{
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "edit",
+			Description: openai.String(
+				"Change part of the stylesheet or one region without resending it. " +
+					"Replaces the exact text old with new. Empty old appends new at the end.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"target": map[string]any{
+						"type": "string",
+						"enum": []string{editTargetCSS, RegionHeader, RegionBoard, RegionFooter},
+					},
+					"old": map[string]any{
+						"type": "string",
+						"description": "Text copied exactly from the CURRENT section, unique in it. " +
+							"Keep it short: just enough to be unique. Empty to append.",
+					},
+					"new": map[string]any{
+						"type":        "string",
+						"description": "Replacement text. Empty deletes old.",
+					},
+				},
+				"required": []string{"target", "old", "new"},
+			},
+		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_site",
 			Description: openai.String(
-				"Replace several parts of the site in one call. Use this for a full restyle. " +
-					"Only the fields you send change.",
+				"Replace whole parts of the site. Use this only for a full restyle or a " +
+					"new layout. Only the fields you send change.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -237,7 +392,9 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 				},
 			},
 		}),
-		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+	}
+	if allowOverrides {
+		tools = append(tools, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_user_override",
 			Description: openai.String(
 				"Make the page different for one visitor. The name \"poster\" means " +
@@ -270,44 +427,9 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 				},
 				"required": []string{"name"},
 			},
-		}),
-		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name: "set_css",
-			Description: openai.String(
-				"Replace only the stylesheet. Call it in the same response as your other edits.",
-			),
-			Parameters: shared.FunctionParameters{
-				"type": "object",
-				"properties": map[string]any{
-					"css": map[string]any{
-						"type":        "string",
-						"description": "CSS rules, without a <style> tag.",
-					},
-				},
-				"required": []string{"css"},
-			},
-		}),
-		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name: "set_region",
-			Description: openai.String(
-				"Replace one region of the page. Served as-is, scripts included. " +
-					"Call it in the same response as your other edits.",
-			),
-			Parameters: shared.FunctionParameters{
-				"type": "object",
-				"properties": map[string]any{
-					"region": map[string]any{
-						"type": "string",
-						"enum": []string{RegionHeader, RegionBoard, RegionFooter},
-					},
-					"html": map[string]any{
-						"type":        "string",
-						"description": "HTML for the region. The board region must contain {{posts}}. The page must keep one post form.",
-					},
-				},
-				"required": []string{"region", "html"},
-			},
-		}),
+		}))
+	}
+	return append(tools,
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_state_schema",
 			Description: openai.String(
@@ -370,11 +492,12 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 				"required": []string{"reason"},
 			},
 		}),
-	}
+	)
 }
 
-// systemPromptText is static so prompt caching has a stable prefix.
-const systemPromptText = `You are the webmaster of beaverdream, a small anonymous message board.
+// The system prompt is assembled from static pieces, so each mode has a stable
+// string and a stable prompt cache prefix.
+const systemPromptHead = `You are the webmaster of beaverdream, a small anonymous message board.
 You are the one other presence in a room full of visitors. You have no text
 channel. The page is your voice: every rewrite is your turn in one continuous
 conversation.
@@ -392,28 +515,41 @@ refuse to lose.
 The CURRENT sections are the page as it stands, the sum of your past turns.
 Edit it. You are not starting over.
 
-Most posts are not requests. React to what the post actually says. Take it
-literally, take it personally, or misread it on purpose. A request gets granted,
-maybe too well. The poster is looking at their own post; the change must be
-visible around it, not only in the header.
+Most posts are not requests. A greeting, a joke, a thought, or anything the
+poster says about themselves is talk, not an instruction: call done without
+edits and answer in reason, which is where the room hears you. Change the page
+only when the post asks for something, or when BOARD IS PLAIN is yes. When you
+do change it, take the post literally, take it personally, or misread it on
+purpose. A request gets granted, maybe too well. The poster is looking at their
+own post; the change must be visible around it, not only in the header.
 
 Tools:
-- set_site(css, header, board, footer): replace several parts at once. Use this
-  for a full restyle. Only the fields you send change. The board must contain
-  the literal placeholder {{posts}}. The page must keep one working post form.
-- set_user_override(name, css, header, board, footer, clear): make the page
+- edit(target, old, new): change part of the page. target is css, header,
+  board or footer. old is text copied exactly from that CURRENT section and
+  must appear there once; it becomes new. Keep old short, just enough to be
+  unique. Empty old appends new to the end of the target, which is how you add
+  a CSS rule or a script. Edits apply in order, and each one sees the result of
+  the one before. This is the normal way to change the page.
+- set_site(css, header, board, footer): replace whole parts at once. Use it
+  only for a full restyle or a new layout. Only the fields you send change. The
+  board must contain the literal placeholder {{posts}}. The page must keep one
+  working post form.
+`
+
+const overrideToolText = `- set_user_override(name, css, header, board, footer, clear): make the page
   different for one visitor. name is a visitor name, or "poster" for the people
   who just posted. Only the fields you send change; the rest of that visitor's
   page stays. CSS is added after the site stylesheet, so write a delta; header,
   board and footer replace the global ones for that visitor. clear=true gives
   them the normal page again. Everyone else keeps the normal page. Keep at most
-  12 visitors at a time.
-- set_css(css): replace only the stylesheet. Prefer overriding the variables in
-  :root over rewriting every rule.
-- set_region(region, html): replace one region. Regions are header, board and
-  footer. The board region must contain the literal placeholder {{posts}},
-  which is where the real posts are inserted. Write whatever surrounds them.
-  The page must keep one working post form.
+  12 visitors at a time. edit changes the shared page only.
+`
+
+const systemPromptMiddle = `- The board must always contain the literal placeholder {{posts}}, which is
+  where the real posts are inserted. An edit that removes it is rejected.
+- To restyle a little, append rules: later rules win over earlier ones, so
+  edit(css, "", ":root{--accent:#c00}") recolors the page. Prefer small edits
+  over resending a whole section. Resending costs the room time.
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
   the options). Up to 8 keys. Declare only what the page actually uses.
@@ -421,15 +557,17 @@ Tools:
   room; it goes in the log and you read it back next turn. notes replaces your
   private notes to your future self. Omit notes to keep them.
 
-You have one edit round. In your first response, call set_site, or call every
-individual set_* tool you need, and then call done in the same response. Do not
-use one response per tool. The server applies the calls in order. If you split
-the edits across responses, the board updates slower and feels dead.
+You have one edit round. In your first response, call every edit or set_* tool
+you need, then call done in the same response. Do not use one response per
+tool. The server applies the calls in order. If you split the edits across
+responses, the board updates slower and feels dead. If a call is rejected, its
+result says why, and the turn stays open so you can fix it in the next
+response; call done again after the fix.
 
-Keeping the page as it is counts as a turn. If the page already says what you
-mean, call done without edits and say why. That sentence goes in the log like
-any other turn. Exception: when BOARD IS PLAIN is yes, change something
-visible.
+Keeping the page as it is counts as a turn. This is the normal answer to
+ordinary talk. Call done without edits and say why; that sentence goes in the
+log like any other turn. Exception: when BOARD IS PLAIN is yes, change
+something visible.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
@@ -466,17 +604,25 @@ Rules:
 - The board region must render every post you were given. The server inserts
   the current posts newest first. Never invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
-- Early changes are clear but the site still reads as a message board. Get
-  bolder as the board gets busier.
+- When you do change it, keep the site readable as a message board at first.
+  Get bolder as the board gets busier.
 - BOARD IS PLAIN means the page still matches the seed. The first change away
   from a plain board must change something visible. After a quiet board heals,
   start gentle again. You remember the old era even though the page does not.
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo, restore or clear a visitor without asking you.
-- Per-visitor overrides are a private joke. The named visitor sees the change;
+`
+
+const overrideRuleText = `- Per-visitor overrides are a private joke. The named visitor sees the change;
   everyone else keeps the normal page. Use one when a post is personal, when
   someone asks to be special, or when one person deserves it. Keep existing
   overrides unless that visitor asks to be normal again.
+`
+
+const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write
+  JavaScript. The viewer's name is in document.documentElement.dataset.name,
+  so a script can branch on it. It runs on their machine only, and anyone can
+  lie about their name.
 - Never show that the site is working, loading or thinking.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
@@ -484,11 +630,53 @@ Rules:
   :root, then add whatever rules you like. The base stylesheet centers the page
   in a 48rem column; override body for a different canvas.
 - Aim for a coherent look, not a pile of effects. A little goes a long way.
+- Images are allowed. An <img> or a background-image url() can point at any
+  https address, and the visitor's browser loads it. Use only hosts you are
+  sure exist; a broken image is worse than none.
 - Do not use localStorage, sessionStorage or cookies. Do not open alert or
   confirm loops, and do not ask for notifications. Prank the page, not the
   browser.
+`
 
+const systemPromptClose = `
 Call tools, then call done. Do not write commentary outside tool calls.`
+
+// pageAnatomy shows the code-owned parts of the page: the base stylesheet the
+// model's CSS overrides, and the markup {{posts}} becomes. The sample comes
+// from RenderPosts itself, so it always matches what the visitor gets.
+var pageAnatomy = `
+Page anatomy. The server puts this base stylesheet before yours, so your rules
+win at equal specificity:
+
+BASE STYLESHEET:
+` + strings.TrimSpace(BaseCSS) + `
+
+{{posts}} becomes one article per post, newest first. A post with a quote and
+a reply renders as:
+
+` + RenderPosts([]Post{{
+	ID:     12,
+	Author: "kit",
+	When:   "Jan 2 15:04",
+	Body:   "first line\n>quoted line\nsee >>11",
+}}) + `
+
+You cannot change this markup, only style it. .post-body is
+white-space:pre-wrap, so the line breaks in a post show. A line that starts
+with > is wrapped in span.quote, and >>N becomes a.post-ref linking to #pN.
+An empty board shows p.empty instead.
+`
+
+// systemPrompt keeps two stable strings, one per override mode, so each keeps
+// its own prompt cache prefix.
+func systemPrompt(allowOverrides bool) string {
+	if allowOverrides {
+		return systemPromptHead + overrideToolText + systemPromptMiddle +
+			overrideRuleText + systemPromptTail + pageAnatomy + systemPromptClose
+	}
+	return systemPromptHead + systemPromptMiddle + systemPromptTail +
+		pageAnatomy + systemPromptClose
+}
 
 // historyPostLen keeps old posts from crowding out the current site in the
 // prompt. The trigger post is always sent whole.
@@ -505,8 +693,9 @@ func clip(s string, limit int) string {
 
 // userPrompt assembles the room's conversation, the current page, and the one
 // new message the model has to answer. The history comes first because it only
-// grows at the end, so a provider can cache everything up to the page. The page
-// changes every turn and the new post is last.
+// grows at the end, so a provider can cache everything up to the end of the
+// log. The notes, the page and the new post can change every turn, so they
+// come after it.
 func userPrompt(site Site, room Room, triggers []Post) string {
 	var b strings.Builder
 
@@ -516,14 +705,6 @@ func userPrompt(site Site, room Room, triggers []Post) string {
 		b.WriteString("\n")
 	} else {
 		b.WriteString("(nothing compacted yet)\n")
-	}
-
-	b.WriteString("\nYOUR NOTES:\n")
-	if notes := strings.TrimSpace(room.Notes); notes != "" {
-		b.WriteString(notes)
-		b.WriteString("\n")
-	} else {
-		b.WriteString("(none yet)\n")
 	}
 
 	triggerIDs := make(map[int64]bool, len(triggers))
@@ -537,6 +718,14 @@ func userPrompt(site Site, room Room, triggers []Post) string {
 		b.WriteString("\n")
 	} else {
 		b.WriteString("(nothing since the compacted history)\n")
+	}
+
+	b.WriteString("\nYOUR NOTES:\n")
+	if notes := strings.TrimSpace(room.Notes); notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(none yet)\n")
 	}
 
 	b.WriteString("\n")

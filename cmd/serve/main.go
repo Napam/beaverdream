@@ -95,6 +95,7 @@ func run(logger *slog.Logger) error {
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
 		AdminToken:         adminToken,
 		MaxMutationsPerDay: env.Vars.MaxMutationsPerDay,
+		DisableOverrides:   !env.Vars.EnableOverrides,
 	})
 	defer h.Close()
 

@@ -73,20 +73,45 @@ func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
 		t.Errorf("finish_reason = %q", got.Choices[0].FinishReason)
 	}
 
-	names := map[string]string{}
-	for _, call := range got.Choices[0].Message.ToolCalls {
-		names[call.Function.Name] = call.Function.Arguments
+	calls := got.Choices[0].Message.ToolCalls
+	if len(calls) != 1 || calls[0].Function.Name != "set_site" {
+		t.Fatalf("want one set_site call, got %+v", calls)
 	}
-	for _, want := range []string{"set_css", "set_region"} {
-		if _, ok := names[want]; !ok {
-			t.Errorf("missing tool %q, got %v", want, names)
+	var site struct {
+		CSS   string `json:"css"`
+		Board string `json:"board"`
+	}
+	if err := json.Unmarshal([]byte(calls[0].Function.Arguments), &site); err != nil {
+		t.Fatalf("decode args: %v", err)
+	}
+	if !strings.Contains(site.CSS, "00ff6a") {
+		t.Errorf("css is not the matrix palette: %s", site.CSS)
+	}
+	if !strings.Contains(site.Board, "{{posts}}") {
+		t.Errorf("board lost the posts placeholder: %s", site.Board)
+	}
+}
+
+// The edit keywords answer in one response: the edit, then done.
+func TestEditKeywordsSendEditAndDoneTogether(t *testing.T) {
+	srv := httptest.NewServer(Handler())
+	defer srv.Close()
+
+	for _, keyword := range []string{"mockedit", "mockpatch", "mockbadedit"} {
+		status, raw := post(t, srv,
+			`{"messages":[{"role":"user","content":"NEW POST: `+keyword+`"}]}`)
+		if status != http.StatusOK {
+			t.Fatalf("%s: status = %d", keyword, status)
 		}
-	}
-	if !strings.Contains(names["set_css"], "00ff6a") {
-		t.Errorf("css is not the matrix palette: %s", names["set_css"])
-	}
-	if !strings.Contains(names["set_region"], "{{posts}}") {
-		t.Errorf("board lost the posts placeholder: %s", names["set_region"])
+		var got completion
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatalf("%s: decode: %v", keyword, err)
+		}
+		calls := got.Choices[0].Message.ToolCalls
+		if len(calls) != 2 || calls[0].Function.Name != "edit" ||
+			calls[1].Function.Name != "done" {
+			t.Errorf("%s: want edit then done, got %+v", keyword, calls)
+		}
 	}
 }
 
@@ -177,19 +202,16 @@ func TestChaosPromptIncludesScript(t *testing.T) {
 	}
 	var header string
 	for _, call := range got.Choices[0].Message.ToolCalls {
-		if call.Function.Name != "set_region" {
+		if call.Function.Name != "set_site" {
 			continue
 		}
 		var args struct {
-			Region string `json:"region"`
-			HTML   string `json:"html"`
+			Header string `json:"header"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			t.Fatalf("decode args: %v", err)
 		}
-		if args.Region == "header" {
-			header = args.HTML
-		}
+		header = args.Header
 	}
 	if !strings.Contains(header, "<script>") {
 		t.Fatalf("chaos theme has no script: %q", header)

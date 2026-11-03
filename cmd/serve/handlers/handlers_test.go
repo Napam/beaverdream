@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,16 @@ func setup(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 
 func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
+	return setupWithModel(t, cfg, func(next http.Handler) http.Handler { return next })
+}
+
+// setupWithModel lets a test wrap the mock model, to fail or hold some calls.
+func setupWithModel(
+	t *testing.T,
+	cfg handlers.Config,
+	wrap func(http.Handler) http.Handler,
+) (*handlers.Handlers, *sqlc.Queries) {
+	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db") +
 		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
@@ -55,7 +66,7 @@ func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sq
 		t.Fatalf("migrate: %v", err)
 	}
 
-	mockServer := httptest.NewServer(mockllm.Handler())
+	mockServer := httptest.NewServer(wrap(mockllm.Handler()))
 	t.Cleanup(mockServer.Close)
 
 	client := openai.NewClient(
@@ -221,7 +232,7 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if !runs[0].VersionID.Valid {
 		t.Error("the turn is not linked to the version it produced")
 	}
-	if !strings.Contains(runs[0].Messages, "set_css") {
+	if !strings.Contains(runs[0].Messages, "set_site") {
 		t.Error("run does not keep the tool calls")
 	}
 }
@@ -643,6 +654,66 @@ func TestVisitorOverrideChangesOnlyThatVisitorsPage(t *testing.T) {
 	}
 }
 
+// Overrides can be switched off without deleting anything. A stored row is
+// ignored at render time, so every visitor gets the same page.
+func TestDisableOverridesKeepsEveryoneOnTheSamePage(t *testing.T) {
+	h, queries := setupWithConfig(t, handlers.Config{
+		AdminToken:       testAdminToken,
+		DisableOverrides: true,
+	})
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+
+	rec := postFormAs(t, h.CreatePost, "/posts", url.Values{
+		"body": {"curse me"},
+	}, "dave")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+
+	// The mock still calls the tool, but the editor rejects it, so the version
+	// lands without a per-visitor row.
+	waitFor(t, "the new version", func() bool {
+		current, err := queries.CurrentSite(ctx)
+		return err == nil && current.ID > seed.ID
+	})
+	current, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.GetUserOverride(ctx, sqlc.GetUserOverrideParams{
+		VersionID: current.ID,
+		NameKey:   "dave",
+	}); err == nil {
+		t.Error("a per-visitor override was stored while overrides are disabled")
+	}
+
+	pageFor := func(name string) string {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.AddCookie(identityCookie(name))
+		out := httptest.NewRecorder()
+		h.Index(out, req)
+		if out.Code != http.StatusOK {
+			t.Fatalf("page for %s: status = %d", name, out.Code)
+		}
+		return out.Body.String()
+	}
+
+	for _, name := range []string{"dave", "kit"} {
+		page := pageFor(name)
+		if strings.Contains(page, "only you can see this page.") {
+			t.Errorf("%s sees an override while overrides are disabled", name)
+		}
+		if !strings.Contains(page, `data-name="`+name+`"`) {
+			t.Errorf("%s page does not carry its name for client-side personalization", name)
+		}
+	}
+}
+
 func TestVersionReloadsWhenOnlyTheVisitorOverrideChanges(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -889,6 +960,65 @@ func TestVersionCSSIncludesTheVisitorOverride(t *testing.T) {
 	}
 	if strings.Contains(kit, "h1{color:red}") {
 		t.Errorf("kit sees dave's css: %s", kit)
+	}
+}
+
+// With overrides off, a stored row cannot make the client reload or pull the
+// private stylesheet. The shared page is all there is.
+func TestDisabledOverridesAreIgnoredByVersionChecks(t *testing.T) {
+	h, queries := setupWithConfig(t, handlers.Config{
+		AdminToken:       testAdminToken,
+		DisableOverrides: true,
+	})
+	ctx := context.Background()
+
+	seed, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	version, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
+		Css:         seed.Css,
+		Note:        seed.Note,
+		Header:      seed.Header,
+		Board:       seed.Board,
+		Footer:      seed.Footer,
+		StateSchema: seed.StateSchema,
+		Reason:      "a hidden private page",
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		VersionID: version.ID,
+		Name:      "dave",
+		NameKey:   "dave",
+		Fields:    `{"name":"dave","css":"h1{color:red}","header":"<p>private</p>"}`,
+	}); err != nil {
+		t.Fatalf("create override: %v", err)
+	}
+
+	// Markup in the override is what forces a reload when overrides are on.
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/version?have="+strconv.FormatInt(seed.ID, 10),
+		nil,
+	)
+	req.AddCookie(identityCookie("dave"))
+	rec := httptest.NewRecorder()
+	h.Version(rec, req)
+	if !strings.Contains(rec.Body.String(), `"swap":"css"`) {
+		t.Errorf("swap = %s, want css", rec.Body.String())
+	}
+
+	cssReq := withURLParam(
+		httptest.NewRequest(http.MethodGet, "/version/x/css", nil),
+		"id", strconv.FormatInt(version.ID, 10),
+	)
+	cssReq.AddCookie(identityCookie("dave"))
+	cssRec := httptest.NewRecorder()
+	h.VersionCSS(cssRec, cssReq)
+	if strings.Contains(cssRec.Body.String(), "h1{color:red}") {
+		t.Errorf("private css leaked into the shared stylesheet: %s", cssRec.Body.String())
 	}
 }
 
@@ -1569,7 +1699,9 @@ func TestNoopTurnIsKeptAndLeavesThePage(t *testing.T) {
 const compactionTurns = 40
 
 // Compaction is the opencode shape: once the history gets big, replace it
-// with one summary, then build a new log after that point.
+// with one summary, then build a new log after that point. It runs after the
+// turn lands, so the next turn is the first to read the summary, and the turn
+// that triggered it stays in that log.
 func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 	h, queries := setupCompaction(t)
 	ctx := context.Background()
@@ -1602,9 +1734,12 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		t.Error("summary is empty")
 	}
 
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"mocknoop"},
+	})
 	turns, err := queries.ListWebmasterTurns(ctx, 10)
-	if err != nil {
-		t.Fatalf("list turns: %v", err)
+	if err != nil || len(turns) != 2 {
+		t.Fatalf("list turns: %v %+v", err, turns)
 	}
 	var messages []webmaster.Message
 	if err := json.Unmarshal([]byte(turns[0].Messages), &messages); err != nil {
@@ -1612,18 +1747,154 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 	}
 	prompt := messages[1].Content
 
-	if !strings.Contains(prompt, "COMPACTED HISTORY:") {
-		t.Errorf("prompt has no compacted history:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, summary.Text) {
+	if !strings.Contains(prompt, "COMPACTED HISTORY:\n"+summary.Text) {
 		t.Errorf("prompt does not carry the summary text:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "(nothing since the compacted history)") {
-		t.Errorf("prompt still repeats compacted turns:\n%s", prompt)
-	}
-	if strings.Contains(prompt, "#1 dave:") {
+	if strings.Contains(prompt, "#1 dave:") || strings.Contains(prompt, "#45 dave:") {
 		t.Errorf("compacted post is still in the room log:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, "#"+strconv.FormatInt(turns[1].ID, 10)+" you (v2)") {
+		t.Errorf("the turn that compacted is missing from the next log:\n%s", prompt)
+	}
+}
+
+// A post still waiting in the queue is answered by a later turn, so the
+// summary must stop before it.
+func TestCompactionLeavesQueuedPostsOut(t *testing.T) {
+	h, queries := setupCompaction(t)
+	ctx := context.Background()
+
+	for i := 1; i <= compactionTurns+5; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	queued, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "kit",
+		Body:   "waiting my turn",
+	})
+	if err != nil {
+		t.Fatalf("create queued post: %v", err)
+	}
+	h.HoldPost(createdPostRow(queued))
+
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	summary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("no summary was written: %v", err)
+	}
+	if summary.ThroughTurnID != queued.ID-1 {
+		t.Errorf("summary covers through %d, want %d", summary.ThroughTurnID, queued.ID-1)
+	}
+}
+
+func createdPostRow(row sqlc.CreatePostRow) sqlc.Post { return sqlc.Post(row) }
+
+// setupWithSummarizer serves the mock model, but sends every summarizer call
+// to summary instead.
+func setupWithSummarizer(
+	t *testing.T,
+	cfg handlers.Config,
+	summary http.HandlerFunc,
+) (*handlers.Handlers, *sqlc.Queries) {
+	t.Helper()
+	return setupWithModel(t, cfg, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			if strings.Contains(string(body), "Summarize this stretch of the room") {
+				summary(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+}
+
+// A summary that fails must not cost the turn its page.
+func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
+	var calls atomic.Int32
+	h, queries := setupWithSummarizer(t, handlers.Config{
+		AdminToken:         testAdminToken,
+		CompactAfterTokens: 2500,
+		CompactAfterTurns:  compactionTurns,
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "summarizer down", http.StatusBadRequest)
+	})
+	ctx := context.Background()
+
+	for i := 1; i <= compactionTurns+5; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(turns) != 1 || turns[0].Status != "changed" {
+		t.Fatalf("turn did not land: %v %+v", err, turns)
+	}
+	if site, err := queries.CurrentSite(ctx); err != nil || site.ID != 2 {
+		t.Fatalf("version did not land: %v %+v", err, site)
+	}
+	if summary, err := queries.GetLatestSummary(ctx); err == nil {
+		t.Errorf("a failed summary was stored: %+v", summary)
+	}
+	if calls.Load() == 0 {
+		t.Error("the summarizer was never asked")
+	}
+}
+
+// The page is visible before a slow summary finishes.
+func TestSlowSummaryDoesNotDelayTheVersion(t *testing.T) {
+	release := make(chan struct{})
+	h, queries := setupWithSummarizer(t, handlers.Config{
+		AdminToken:         testAdminToken,
+		CompactAfterTokens: 2500,
+		CompactAfterTurns:  compactionTurns,
+	}, func(w http.ResponseWriter, _ *http.Request) {
+		<-release
+		http.Error(w, "too late", http.StatusBadRequest)
+	})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	ctx := context.Background()
+
+	for i := 1; i <= compactionTurns+5; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"make it pink"}})
+
+	waitFor(t, "the version while the summary is still running", func() bool {
+		site, err := queries.CurrentSite(ctx)
+		return err == nil && site.ID == 2
+	})
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(turns) != 1 || turns[0].Status != "changed" {
+		t.Fatalf("turn is not finished while the summary runs: %v %+v", err, turns)
+	}
+	close(release)
 }
 
 // Under the message threshold but over the token estimate: long posts still
@@ -1710,6 +1981,46 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 	}
 	if summary.ThroughTurnID == 0 {
 		t.Errorf("summary covers no turns: %+v", summary)
+	}
+}
+
+// Below the turn backstop the log keeps every turn since the last summary. A
+// fixed 2000-turn cap would drop the oldest line on every turn instead.
+func TestRoomLogKeepsEveryTurnBelowTheBackstop(t *testing.T) {
+	h, queries := setupWithConfig(t, handlers.Config{
+		AdminToken:         testAdminToken,
+		CompactAfterTokens: 10_000_000,
+		CompactAfterTurns:  3000,
+	})
+	ctx := context.Background()
+
+	const posts = 2500
+	for i := 1; i <= posts; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"mocknoop"},
+	})
+
+	turns, err := queries.ListWebmasterTurns(ctx, 1)
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("list turns: %v %+v", err, turns)
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(turns[0].Messages), &messages); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	prompt := messages[1].Content
+	if !strings.Contains(prompt, "#1 dave: message 1\n") {
+		t.Error("the oldest uncompacted post fell out of the log")
+	}
+	if !strings.Contains(prompt, "#2500 dave: message 2500\n") {
+		t.Error("the newest post is missing from the log")
 	}
 }
 

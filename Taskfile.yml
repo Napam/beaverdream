@@ -1,9 +1,10 @@
 version: "3"
 
 env:
-  HOST: "localhost"
+  HOST: "0.0.0.0"
   PORT: "6930"
   LIVE_RELOAD_PROXY_HOST: "localhost"
+  LIVE_RELOAD_PROXY_BIND: "0.0.0.0"
   LIVE_RELOAD_PROXY_PORT: "6931"
   DB_MIGRATE_ON_START: "true"
 
@@ -40,8 +41,8 @@ tasks:
     cmds:
       - go run ./cmd/mockllm -addr localhost:6701
 
-  dev.muse:
-    desc: Run the dev server against OpenCode Go with Muse Spark
+  dev.deepseek:
+    desc: Run the dev server against OpenCode Go with DeepSeek V4.1 Flash (no reasoning)
     deps:
       - init
     cmds:
@@ -51,7 +52,7 @@ tasks:
           echo "$LIVE_RELOAD_PROXY_HOST:$LIVE_RELOAD_PROXY_PORT is already in use — another dev session or orphaned watchers?" >&2
           exit 1
         fi
-      - task --parallel dev.tailwind dev.web dev.sql dev.go PROVIDER=muse
+      - task --parallel dev.tailwind dev.web dev.sql dev.go PROVIDER=deepseek
 
   gen.templ:
     desc: Generate go code from templ templates
@@ -129,11 +130,11 @@ tasks:
     env:
       TEMPL_DEV_MODE: true
       # The provider vars live on this leaf task: Taskfile env does not flow
-      # from a calling task into a called one. dev.muse passes PROVIDER=muse.
-      OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "muse"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
-      OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "muse"}}muse-spark-1.3-contributor{{else}}mock-model{{end}}'
-      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "muse"}}minimal{{end}}'
-      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "muse"}}5{{else}}3{{end}}'
+      # from a calling task into a called one. dev.deepseek passes PROVIDER=deepseek.
+      OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "deepseek"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
+      OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "deepseek"}}deepseek-v4.1-flash{{else}}mock-model{{end}}'
+      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}none{{end}}'
+      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "deepseek"}}5{{else}}3{{end}}'
     cmds:
       - |
         go tool templ generate \
@@ -141,9 +142,9 @@ tasks:
         --watch \
         --watch-pattern='(.+\.go$)|(.+\.templ$)' \
         --path=. \
-        --proxybind=$LIVE_RELOAD_PROXY_HOST \
+        --proxybind=$LIVE_RELOAD_PROXY_BIND \
         --proxyport=$LIVE_RELOAD_PROXY_PORT \
-        --proxy="http://$HOST:$PORT" \
+        --proxy="http://localhost:$PORT" \
         --open-browser=false \
         --cmd='./scripts/dev-run.sh'
 

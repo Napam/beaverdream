@@ -55,8 +55,17 @@ It is a toy. It runs on localhost and calls a local model.
   immediately.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
   stylesheet, the regions, shared state and per-visitor overrides, then calls
-  `done`. The result is stored as a new version plus a `mutation_runs` row
-  holding the whole conversation.
+  `done`. The result is stored as a new version plus a turn in the room, with
+  the whole conversation.
+- The board is one conversation with one webmaster. Each turn reads back the
+  room log: who said what, and what the webmaster said and changed, oldest
+  first. It also carries a small private note to itself across turns. Keeping
+  the page is a real answer, so a post that does not warrant a change can end
+  as a kept turn with no new version.
+- When the conversation reaches 128k estimated tokens (four runes per token)
+  or a 10k-turn backstop, the server compacts it into one summary message and
+  starts a fresh log after it. The webmaster reads the summary first, then the
+  recent turns. Summaries survive heal; reset clears them with the room.
 
 **Do not expose this to the open internet.** Model-generated scripts run in
 every visitor's browser with the board's origin. That is the game. The admin
@@ -75,11 +84,16 @@ task dev           # terminal 2: server on :6930, live reload proxy on :6931
 ```
 
 To use OpenCode Go instead of the mock, copy `.env.example` to `.env`, put the
-key in `OPENAI_API_KEY`, and run `task dev.muse`. It points at Muse Spark with
-minimal reasoning.
+key in `OPENAI_API_KEY`, and run `task dev.deepseek`. It points at DeepSeek
+V4.1 Flash with reasoning turned off.
 
-Open `http://localhost:6931`. The mock model picks a theme from keywords in
-your post: `matrix`, `pink`/`cute`, `brutalist`/`concrete`, or
+Open `http://localhost:6931`. The dev task binds the app and the live reload
+proxy to all interfaces, so another device on the same network can use
+`http://<your-ip>:6931`. The admin panel is exposed too, still behind its
+token.
+
+The mock model picks a theme from keywords in your post: `matrix`,
+`pink`/`cute`, `brutalist`/`concrete`, or
 `chaos`/`sabotage`/`prank` (which writes a script, so you can watch the page
 sabotage itself). `curse` or `only me` gives the poster a private page. Anything
 else gets a neutral theme. `mocknoop` asks it to leave the site alone;
@@ -113,12 +127,14 @@ line or edit the `env` block in `Taskfile.yml`. The defaults match
 
 The server sends a `User-Agent` and, for `opencode.ai` URLs, a stable
 `x-opencode-session` header. Set `OPENAI_SESSION_ID` to pin that session.
-`OPENAI_REASONING_EFFORT` accepts `minimal`, `low`, `medium`, `high` or `xhigh`
-and is omitted when empty.
+`OPENAI_REASONING_EFFORT` accepts `none`, `minimal`, `low`, `medium`, `high`,
+`xhigh` or `max`, and is omitted when empty. Providers that do not support the
+parameter reject the request; leave it empty for those.
 
 The model must support tool calls. If it answers in prose without calling a
-tool, the site does not change. Muse Spark trains on request data, so the
-workspace must allow that in the OpenCode Console privacy settings.
+tool, the site does not change. DeepSeek V4.1 Flash on OpenCode Go is a
+reasoning model, so keep the effort at `none` unless you want the extra tokens
+and latency.
 
 ## Admin
 
@@ -131,11 +147,11 @@ workspace must allow that in the OpenCode Console privacy settings.
   one person the normal page back,
 - the version list, with a restore button that copies an old version forward as
   a new row,
-- a reset button that restores the seed posts, deletes every later version, and
-  clears the mutation history, keeping only the original version,
-- the newest mutation runs with their full conversation: system and user
+- a reset button that deletes every post, turn and later version, and clears
+  the room, keeping only the original version,
+- the newest webmaster turns with their full conversation: system and user
   prompts, assistant reasoning (when the server returns it), tool calls, tool
-  results, errors, and duration. Older runs keep a summary so the page stays
+  results, errors, and duration. Older turns keep a summary so the page stays
   small.
 
 Admin is always token-protected. Set `ADMIN_TOKEN` yourself, or let the server
@@ -158,7 +174,7 @@ variables win over it. `.env` is gitignored; `.env.example` is the template.
 | `OPENAI_MODEL` | `mock-model` | model id |
 | `OPENAI_API_KEY` | empty | provider key, usually from `.env` |
 | `OPENAI_SESSION_ID` | generated | `x-opencode-session` value for `opencode.ai` |
-| `OPENAI_REASONING_EFFORT` | empty | `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `OPENAI_REASONING_EFFORT` | empty | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |
 | `MAX_MUTATIONS_PER_DAY` | `500` | cost cap, `0` disables |
 | `MUTATION_ROUNDS` | `3` | tool rounds per mutation |

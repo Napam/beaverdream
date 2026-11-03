@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
@@ -65,7 +66,10 @@ type Message struct {
 type Result struct {
 	Site     Site
 	Changed  bool
+	Done     bool
 	Reason   string
+	Changes  string
+	Notes    *string
 	Messages []Message
 }
 
@@ -75,10 +79,10 @@ type Result struct {
 func (m *Mutator) Mutate(
 	ctx context.Context,
 	current Site,
-	posts []Post,
+	room Room,
 	trigger Post,
 ) (Result, error) {
-	return m.MutatePosts(ctx, current, posts, []Post{trigger})
+	return m.MutatePosts(ctx, current, room, []Post{trigger})
 }
 
 // MutatePosts is Mutate for a burst that was coalesced into one rewrite. The
@@ -86,7 +90,7 @@ func (m *Mutator) Mutate(
 func (m *Mutator) MutatePosts(
 	ctx context.Context,
 	current Site,
-	posts []Post,
+	room Room,
 	triggers []Post,
 ) (Result, error) {
 	if len(triggers) == 0 {
@@ -95,7 +99,7 @@ func (m *Mutator) MutatePosts(
 	ed := newEditor(current)
 	ed.authors = editorAuthors(triggers)
 	sys := systemPromptText
-	usr := userPrompt(current, posts, triggers)
+	usr := userPrompt(current, room, triggers)
 
 	res := Result{Site: current, Messages: []Message{
 		{Role: "system", Content: sys},
@@ -169,7 +173,23 @@ func (m *Mutator) MutatePosts(
 
 	res.Site = ed.site
 	res.Changed = ed.dirty
+	res.Done = ed.done
+	res.Notes = ed.notes
 	res.Reason = ed.reason
+	if res.Changed {
+		res.Changes = DescribeChanges(current, ed.site)
+	}
+	if res.Reason == "" {
+		// A prose reply is the model trying to talk. Keep the last thing it
+		// said rather than a mechanical error line.
+		for i := len(res.Messages) - 1; i >= 0; i-- {
+			content := strings.TrimSpace(res.Messages[i].Content)
+			if res.Messages[i].Role == "assistant" && content != "" {
+				res.Reason = clip(content, 200)
+				break
+			}
+		}
+	}
 	if res.Reason == "" {
 		res.Reason = fmt.Sprintf("no done call after %d rounds", m.maxRounds)
 	}
@@ -328,12 +348,24 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-			Name:        "done",
-			Description: openai.String("Stop editing and say why, in one short sentence."),
+			Name: "done",
+			Description: openai.String(
+				"End your turn and say one sentence to the room. You read it back " +
+					"next turn. Call it even when you keep the page as it is.",
+			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
 				"properties": map[string]any{
-					"reason": map[string]any{"type": "string"},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": "One sentence in your own voice: what this turn says to the room.",
+					},
+					"notes": map[string]any{
+						"type": "string",
+						"description": "Private notes to your future self: positions, promises, " +
+							"grudges, running jokes. Replaces your notes. Omit to keep them. " +
+							"Max 1000 characters.",
+					},
 				},
 				"required": []string{"reason"},
 			},
@@ -342,14 +374,28 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 }
 
 // systemPromptText is static so prompt caching has a stable prefix.
-const systemPromptText = `You are the webmaster of beaverdream, a tiny anonymous message board.
-You own how the board looks: its stylesheet and its markup. Visitors post
-messages. You never chat and you never reply in prose. You change the site.
+const systemPromptText = `You are the webmaster of beaverdream, a small anonymous message board.
+You are the one other presence in a room full of visitors. You have no text
+channel. The page is your voice: every rewrite is your turn in one continuous
+conversation.
+
+The COMPACTED HISTORY is everything older, folded into one message so it fits.
+The ROOM LOG is the recent stretch after that, in order. Together they are the
+conversation. Lines marked "you" are your own past turns: the sentence you
+wrote and what you changed. Continue from them. Hold a position, keep a
+promise, escalate, relent, notice that you already granted something, keep a
+running joke alive. Do not re-roll the page from scratch unless you mean to
+change the subject. When the log gets long, the server compacts it again; the
+compacted history is what survives, so write your notes for the things you
+refuse to lose.
+
+The CURRENT sections are the page as it stands, the sum of your past turns.
+Edit it. You are not starting over.
 
 Most posts are not requests. React to what the post actually says. Take it
-literally, take it personally, or misread it on purpose. A request gets
-granted, maybe too well. The poster is looking at their own post; the change
-must be visible around it, not only in the header.
+literally, take it personally, or misread it on purpose. A request gets granted,
+maybe too well. The poster is looking at their own post; the change must be
+visible around it, not only in the header.
 
 Tools:
 - set_site(css, header, board, footer): replace several parts at once. Use this
@@ -371,12 +417,19 @@ Tools:
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
   the options). Up to 8 keys. Declare only what the page actually uses.
-- done(reason): stop and record one short sentence explaining the change.
+- done(reason, notes): end your turn. reason is the one sentence you say to the
+  room; it goes in the log and you read it back next turn. notes replaces your
+  private notes to your future self. Omit notes to keep them.
 
 You have one edit round. In your first response, call set_site, or call every
 individual set_* tool you need, and then call done in the same response. Do not
 use one response per tool. The server applies the calls in order. If you split
 the edits across responses, the board updates slower and feels dead.
+
+Keeping the page as it is counts as a turn. If the page already says what you
+mean, call done without edits and say why. That sentence goes in the log like
+any other turn. Exception: when BOARD IS PLAIN is yes, change something
+visible.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
@@ -417,13 +470,13 @@ Rules:
   bolder as the board gets busier.
 - BOARD IS PLAIN means the page still matches the seed. The first change away
   from a plain board must change something visible. After a quiet board heals,
-  start gentle again.
+  start gentle again. You remember the old era even though the page does not.
+- Server lines in the log are things done to your page. You may have opinions
+  about them. An admin can undo, restore or clear a visitor without asking you.
 - Per-visitor overrides are a private joke. The named visitor sees the change;
   everyone else keeps the normal page. Use one when a post is personal, when
   someone asks to be special, or when one person deserves it. Keep existing
   overrides unless that visitor asks to be normal again.
-- Only leave the site alone when a post explicitly asks for that and the board
-  has already changed at least once.
 - Never show that the site is working, loading or thinking.
 - Default to readable text. A post that asks for chaos gets chaos.
 - The base is a plain light board. The variables are --bg, --fg, --panel,
@@ -450,9 +503,81 @@ func clip(s string, limit int) string {
 	return string(runes[:limit]) + "..."
 }
 
-// userPrompt assembles the current state, the recent conversation, and the one
-// new message the model has to react to.
-func userPrompt(site Site, posts []Post, triggers []Post) string {
+// userPrompt assembles the room's conversation, the current page, and the one
+// new message the model has to answer. The history comes first because it only
+// grows at the end, so a provider can cache everything up to the page. The page
+// changes every turn and the new post is last.
+func userPrompt(site Site, room Room, triggers []Post) string {
+	var b strings.Builder
+
+	b.WriteString("COMPACTED HISTORY:\n")
+	if summary := strings.TrimSpace(room.Summary); summary != "" {
+		b.WriteString(summary)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(nothing compacted yet)\n")
+	}
+
+	b.WriteString("\nYOUR NOTES:\n")
+	if notes := strings.TrimSpace(room.Notes); notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(none yet)\n")
+	}
+
+	triggerIDs := make(map[int64]bool, len(triggers))
+	for _, trigger := range triggers {
+		triggerIDs[trigger.ID] = true
+	}
+
+	b.WriteString("\nROOM LOG AFTER THAT, oldest first:\n")
+	if log := RenderLog(room.Log, triggerIDs); log != "" {
+		b.WriteString(log)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(nothing since the compacted history)\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(pagePrompt(site))
+
+	if len(triggers) == 1 {
+		trigger := triggers[0]
+		b.WriteString("\nNEW POST")
+		if trigger.ID != 0 {
+			fmt.Fprintf(&b, " #%d", trigger.ID)
+		}
+		if trigger.Author != "" {
+			fmt.Fprintf(&b, " from %s", trigger.Author)
+		}
+		b.WriteString(":\n")
+		b.WriteString(trigger.Body)
+		b.WriteString("\nThe poster is looking at this post.\n")
+	} else {
+		b.WriteString("\nNEW POSTS since the last change:\n")
+		for _, trigger := range triggers {
+			author := trigger.Author
+			if author == "" {
+				author = "anon"
+			}
+			fmt.Fprintf(&b, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
+		}
+		b.WriteString("The posters are looking at their own posts.\n")
+	}
+
+	return b.String()
+}
+
+// PageRunes is the size of the page sections of the prompt. The compaction
+// budget counts it, because the model reads the page on every turn.
+func PageRunes(site Site) int {
+	return utf8.RuneCountInString(pagePrompt(site))
+}
+
+// pagePrompt renders the current page: stylesheet, regions, shared state,
+// visitor overrides and the plain flag.
+func pagePrompt(site Site) string {
 	var b strings.Builder
 
 	b.WriteString("CURRENT STYLESHEET:\n")
@@ -509,53 +634,7 @@ func userPrompt(site Site, posts []Post, triggers []Post) string {
 	} else {
 		b.WriteString("no\n")
 	}
-	fmt.Fprintf(&b, "CHANGES SINCE PLAIN: %d\n", site.ChangesSincePlain)
-
-	triggerIDs := make(map[int64]bool, len(triggers))
-	for _, trigger := range triggers {
-		triggerIDs[trigger.ID] = true
-	}
-
-	b.WriteString("\nRECENT POSTS, oldest first:\n")
-	if len(posts) == 0 {
-		b.WriteString("(none)\n")
-	}
-	for _, p := range posts {
-		author := p.Author
-		if author == "" {
-			author = "anon"
-		}
-		body := p.Body
-		if !triggerIDs[p.ID] {
-			body = clip(body, historyPostLen)
-		}
-		fmt.Fprintf(&b, "#%d %s: %s\n", p.ID, author, body)
-	}
-
-	if len(triggers) == 1 {
-		trigger := triggers[0]
-		b.WriteString("\nNEW POST")
-		if trigger.ID != 0 {
-			fmt.Fprintf(&b, " #%d", trigger.ID)
-		}
-		if trigger.Author != "" {
-			fmt.Fprintf(&b, " from %s", trigger.Author)
-		}
-		b.WriteString(":\n")
-		b.WriteString(trigger.Body)
-		b.WriteString("\nThe poster is looking at this post.\n")
-	} else {
-		b.WriteString("\nNEW POSTS since the last change:\n")
-		for _, trigger := range triggers {
-			author := trigger.Author
-			if author == "" {
-				author = "anon"
-			}
-			fmt.Fprintf(&b, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
-		}
-		b.WriteString("The posters are looking at their own posts.\n")
-	}
-
+	fmt.Fprintf(&b, "CHANGES SINCE THE LAST HEAL: %d\n", site.ChangesSinceHeal)
 	return b.String()
 }
 

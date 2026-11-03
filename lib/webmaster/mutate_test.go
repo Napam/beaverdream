@@ -28,7 +28,7 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	res, err := m.Mutate(
 		context.Background(),
 		Site{Board: PostsPlaceholder},
-		nil,
+		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestMutateGivesThePosterAPrivatePage(t *testing.T) {
 	res, err := m.Mutate(
 		context.Background(),
 		Site{Board: PostsPlaceholder},
-		nil,
+		Room{},
 		Post{Author: "dave", Body: "curse me"},
 	)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 	res, err := m.Mutate(
 		context.Background(),
 		original,
-		nil,
+		Room{},
 		Post{Author: "dave", Body: "mocknoop please"},
 	)
 	if err != nil {
@@ -115,22 +115,23 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 }
 
 func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
-	site := Site{Version: 8, Board: PostsPlaceholder, ChangesSincePlain: 7}
-	posts := []Post{{
+	site := Site{Version: 8, Board: PostsPlaceholder, ChangesSinceHeal: 7}
+	room := Room{Log: []Turn{{
 		ID:     1,
+		Kind:   TurnPost,
 		Author: "long",
 		Body:   strings.Repeat("x", 1000),
-	}}
+	}}}
 	trigger := Post{ID: 9, Author: "dave", Body: "hello"}
 
-	got := userPrompt(site, posts, []Post{trigger})
+	got := userPrompt(site, room, []Post{trigger})
 	if strings.Contains(got, strings.Repeat("x", historyPostLen+1)) {
 		t.Error("old post was not shortened")
 	}
 	if !strings.Contains(got, "BOARD IS PLAIN: no") {
 		t.Error("prompt does not say whether the board is plain")
 	}
-	if !strings.Contains(got, "CHANGES SINCE PLAIN: 7") {
+	if !strings.Contains(got, "CHANGES SINCE THE LAST HEAL: 7") {
 		t.Error("prompt does not carry the change count")
 	}
 	if !strings.Contains(got, "NEW POST #9 from dave") {
@@ -141,8 +142,47 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	}
 }
 
+func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
+	room := Room{Summary: "old news", Notes: "keep an eye on dave", Log: []Turn{{
+		ID: 1, Kind: TurnPost, Author: "kit", Body: "hi",
+	}}}
+	trigger := Post{ID: 9, Author: "dave", Body: "yo"}
+	got := userPrompt(Site{CSS: "body{}", Plain: true}, room, []Post{trigger})
+
+	order := []string{
+		"COMPACTED HISTORY:",
+		"YOUR NOTES:",
+		"ROOM LOG AFTER THAT",
+		"CURRENT STYLESHEET:",
+		"CURRENT REGIONS:",
+		"CURRENT SHARED STATE:",
+		"CURRENT PER-VISITOR OVERRIDES:",
+		"BOARD IS PLAIN:",
+		"NEW POST #9",
+	}
+	last := -1
+	for _, section := range order {
+		at := strings.Index(got, section)
+		if at < 0 || at < last {
+			t.Fatalf("section %q is missing or out of order in:\n%s", section, got)
+		}
+		last = at
+	}
+	if strings.LastIndex(got, "NEW POST") < strings.Index(got, "BOARD IS PLAIN:") {
+		t.Error("NEW POST is not the final section")
+	}
+}
+
+func TestPageRunesCountsThePageSections(t *testing.T) {
+	small := PageRunes(Site{CSS: "x"})
+	big := PageRunes(Site{CSS: strings.Repeat("x", 4001)})
+	if big-small != 4000 {
+		t.Errorf("page runes grew by %d, want 4000", big-small)
+	}
+}
+
 func TestUserPromptCreditsABurstToEveryone(t *testing.T) {
-	got := userPrompt(Site{Version: 9}, nil, []Post{
+	got := userPrompt(Site{Version: 9}, Room{}, []Post{
 		{ID: 8, Author: "kit", Body: "one"},
 		{ID: 9, Author: "dave", Body: "two"},
 	})
@@ -164,7 +204,7 @@ func TestMutateReportsModelFailure(t *testing.T) {
 	if _, err := m.Mutate(
 		context.Background(),
 		Site{},
-		nil,
+		Room{},
 		Post{Body: "mockfail"},
 	); err == nil {
 		t.Fatal("expected an error")

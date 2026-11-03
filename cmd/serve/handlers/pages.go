@@ -111,7 +111,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mutateInBackground(post)
+	h.mutateInBackground(createdPost(post))
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 

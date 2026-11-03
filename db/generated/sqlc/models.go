@@ -8,20 +8,6 @@ import (
 	"database/sql"
 )
 
-type MutationRun struct {
-	ID            int64
-	Kind          string
-	TriggerPostID sql.NullInt64
-	Instruction   string
-	Reason        string
-	Status        string
-	ErrorText     string
-	Messages      string
-	VersionID     sql.NullInt64
-	DurationMs    int64
-	CreatedAt     string
-}
-
 type Post struct {
 	ID        int64
 	Author    string
@@ -29,11 +15,11 @@ type Post struct {
 	CreatedAt string
 }
 
-type SeedPost struct {
-	ID     int64
-	Author string
-	Body   string
-	Age    string
+type RoomSummary struct {
+	ID            int64
+	ThroughTurnID int64
+	Text          string
+	CreatedAt     string
 }
 
 type SiteState struct {
@@ -43,16 +29,31 @@ type SiteState struct {
 }
 
 type SiteVersion struct {
-	ID            int64
-	Css           string
-	Note          string
-	Header        string
-	Board         string
-	Footer        string
-	TriggerPostID sql.NullInt64
-	Reason        string
-	CreatedAt     string
-	StateSchema   string
+	ID          int64
+	Css         string
+	Note        string
+	Header      string
+	Board       string
+	Footer      string
+	StateSchema string
+	TurnID      sql.NullInt64
+	Reason      string
+	CreatedAt   string
+}
+
+type Turn struct {
+	ID         int64
+	Kind       string
+	Author     string
+	Body       string
+	Said       string
+	Changes    string
+	Notes      string
+	Status     string
+	ErrorText  string
+	Messages   string
+	DurationMs int64
+	CreatedAt  string
 }
 
 type UserOverride struct {

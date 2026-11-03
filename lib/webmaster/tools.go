@@ -17,6 +17,7 @@ const (
 	maxStateValue  = 200
 	minStateOpts   = 2
 	defaultListMax = 20
+	maxNotesLen    = 1000
 )
 
 // StateKey is one model-declared shared value. Op decides how a visitor may
@@ -40,12 +41,23 @@ type stateKeyInput struct {
 type editor struct {
 	site    Site
 	reason  string
+	notes   *string
 	done    bool
 	dirty   bool
 	authors []string
 }
 
+// newEditor copies the override map. The editor's copy is what the change
+// summary diffs against the page it started from; sharing the caller's map
+// would make every override look unchanged.
 func newEditor(site Site) *editor {
+	if site.Overrides != nil {
+		cloned := make(map[string]Override, len(site.Overrides))
+		for key, override := range site.Overrides {
+			cloned[key] = override
+		}
+		site.Overrides = cloned
+	}
 	return &editor{site: site}
 }
 
@@ -205,11 +217,16 @@ func (e *editor) run(name, arguments string) string {
 
 	case "done":
 		var in struct {
-			Reason string `json:"reason"`
+			Reason string  `json:"reason"`
+			Notes  *string `json:"notes"`
 		}
 		_ = json.Unmarshal([]byte(arguments), &in)
 		e.done = true
 		e.reason = truncateRunes(strings.TrimSpace(in.Reason), 200)
+		if in.Notes != nil {
+			notes := truncateRunes(strings.TrimSpace(*in.Notes), maxNotesLen)
+			e.notes = &notes
+		}
 		return "ok"
 	}
 

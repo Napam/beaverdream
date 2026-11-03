@@ -12,7 +12,7 @@ import (
 // RunView pairs a stored run with its parsed conversation, so the admin
 // template never touches JSON.
 type RunView struct {
-	Run            sqlc.MutationRun
+	Run            sqlc.ListWebmasterTurnsRow
 	Messages       []webmaster.Message
 	MessagesLoaded bool
 }
@@ -44,7 +44,7 @@ func dash(s string) string {
 
 // AdminPage shows the current render, the full conversation behind every
 // mutation, and a box for talking to the model directly.
-templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []RunView, versions []sqlc.SiteVersion, flash string, token string) {
+templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []RunView, versions []sqlc.SiteVersion, summary string, summaryThrough int64, flash string, token string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -122,6 +122,17 @@ templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []Ru
 							tick();
 						})();
 					</script>
+				</section>
+				<section class={ adminCard }>
+					<p class={ adminLabel }>compacted memory</p>
+					if summary == "" {
+						<p class="text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
+					} else {
+						<p class="mb-2 text-xs text-gray-400 dark:text-neutral-600">
+							one message standing in for turns through #{ strconv.FormatInt(summaryThrough, 10) }
+						</p>
+						<pre class={ adminPre }>{ summary }</pre>
+					}
 				</section>
 				<section class={ adminCard }>
 					<p class={ adminLabel }>current version</p>
@@ -249,7 +260,7 @@ templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []Ru
 					<form
 						method="post"
 						action="/admin/reset"
-						onsubmit="return confirm('Restore the seed posts, delete every later version, and clear the mutation history? This cannot be undone.')"
+						onsubmit="return confirm('Delete every post and later version, and clear the mutation history? This cannot be undone.')"
 					>
 						<input type="hidden" name="token" value={ token }/>
 						<button
@@ -258,7 +269,7 @@ templ AdminPage(site sqlc.SiteVersion, overrides []webmaster.Override, runs []Ru
 						>reset the board</button>
 					</form>
 					<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-						Restores the seed posts, deletes every later version, and clears the mutation history. The original version stays.
+						Deletes every post and later version, and clears the mutation history. The original version stays.
 					</p>
 				</section>
 			</div>
@@ -278,8 +289,11 @@ templ runCard(view RunView) {
 				}
 				<span class="text-xs text-gray-400 dark:text-neutral-600">{ strconv.FormatInt(view.Run.DurationMs, 10) }ms</span>
 			</div>
-			<div class="mt-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(view.Run.Reason) }</div>
-			<div class="mt-1 truncate text-xs text-gray-400 dark:text-neutral-600">{ view.Run.Instruction }</div>
+			<div class="mt-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(view.Run.Said) }</div>
+			if view.Run.Changes != "" {
+				<div class="mt-1 text-xs text-gray-400 dark:text-neutral-600">changed: { view.Run.Changes }</div>
+			}
+			<div class="mt-1 truncate text-xs text-gray-400 dark:text-neutral-600">{ dash(view.Run.Body) }</div>
 		</summary>
 		<div class="mt-3 flex flex-col gap-3">
 			if view.Run.ErrorText != "" {

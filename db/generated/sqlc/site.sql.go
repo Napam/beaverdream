@@ -12,22 +12,22 @@ import (
 
 const createSiteVersion = `-- name: CreateSiteVersion :one
 INSERT INTO
-  site_versions (css, note, header, board, footer, state_schema, trigger_post_id, reason)
+  site_versions (css, note, header, board, footer, state_schema, turn_id, reason)
 VALUES
   (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+  id, css, note, header, board, footer, state_schema, turn_id, reason, created_at
 `
 
 type CreateSiteVersionParams struct {
-	Css           string
-	Note          string
-	Header        string
-	Board         string
-	Footer        string
-	StateSchema   string
-	TriggerPostID sql.NullInt64
-	Reason        string
+	Css         string
+	Note        string
+	Header      string
+	Board       string
+	Footer      string
+	StateSchema string
+	TurnID      sql.NullInt64
+	Reason      string
 }
 
 func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionParams) (SiteVersion, error) {
@@ -38,7 +38,7 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 		arg.Board,
 		arg.Footer,
 		arg.StateSchema,
-		arg.TriggerPostID,
+		arg.TurnID,
 		arg.Reason,
 	)
 	var i SiteVersion
@@ -49,17 +49,17 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 		&i.Header,
 		&i.Board,
 		&i.Footer,
-		&i.TriggerPostID,
+		&i.StateSchema,
+		&i.TurnID,
 		&i.Reason,
 		&i.CreatedAt,
-		&i.StateSchema,
 	)
 	return i, err
 }
 
 const currentSite = `-- name: CurrentSite :one
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+  id, css, note, header, board, footer, state_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -78,10 +78,10 @@ func (q *Queries) CurrentSite(ctx context.Context) (SiteVersion, error) {
 		&i.Header,
 		&i.Board,
 		&i.Footer,
-		&i.TriggerPostID,
+		&i.StateSchema,
+		&i.TurnID,
 		&i.Reason,
 		&i.CreatedAt,
-		&i.StateSchema,
 	)
 	return i, err
 }
@@ -102,7 +102,7 @@ func (q *Queries) CurrentVersionID(ctx context.Context) (interface{}, error) {
 
 const getSiteVersion = `-- name: GetSiteVersion :one
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+  id, css, note, header, board, footer, state_schema, turn_id, reason, created_at
 FROM
   site_versions
 WHERE
@@ -119,48 +119,17 @@ func (q *Queries) GetSiteVersion(ctx context.Context, id int64) (SiteVersion, er
 		&i.Header,
 		&i.Board,
 		&i.Footer,
-		&i.TriggerPostID,
+		&i.StateSchema,
+		&i.TurnID,
 		&i.Reason,
 		&i.CreatedAt,
-		&i.StateSchema,
 	)
 	return i, err
 }
 
-const lastVersionMatching = `-- name: LastVersionMatching :one
-SELECT
-  MAX(id)
-FROM
-  site_versions
-WHERE
-  css = ?
-  AND header = ?
-  AND board = ?
-  AND footer = ?
-`
-
-type LastVersionMatchingParams struct {
-	Css    string
-	Header string
-	Board  string
-	Footer string
-}
-
-func (q *Queries) LastVersionMatching(ctx context.Context, arg LastVersionMatchingParams) (interface{}, error) {
-	row := q.db.QueryRowContext(ctx, lastVersionMatching,
-		arg.Css,
-		arg.Header,
-		arg.Board,
-		arg.Footer,
-	)
-	var max interface{}
-	err := row.Scan(&max)
-	return max, err
-}
-
 const listSiteVersions = `-- name: ListSiteVersions :many
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+  id, css, note, header, board, footer, state_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -185,10 +154,10 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 			&i.Header,
 			&i.Board,
 			&i.Footer,
-			&i.TriggerPostID,
+			&i.StateSchema,
+			&i.TurnID,
 			&i.Reason,
 			&i.CreatedAt,
-			&i.StateSchema,
 		); err != nil {
 			return nil, err
 		}
@@ -205,7 +174,7 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 
 const seedSiteVersion = `-- name: SeedSiteVersion :one
 SELECT
-  id, css, note, header, board, footer, trigger_post_id, reason, created_at, state_schema
+  id, css, note, header, board, footer, state_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -224,10 +193,10 @@ func (q *Queries) SeedSiteVersion(ctx context.Context) (SiteVersion, error) {
 		&i.Header,
 		&i.Board,
 		&i.Footer,
-		&i.TriggerPostID,
+		&i.StateSchema,
+		&i.TurnID,
 		&i.Reason,
 		&i.CreatedAt,
-		&i.StateSchema,
 	)
 	return i, err
 }

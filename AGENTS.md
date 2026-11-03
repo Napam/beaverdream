@@ -7,6 +7,10 @@ prefer simple, readable code over production hardening.
 ## Ground rules
 
 - Use `tmp/` for scratch files and test output. It is gitignored.
+- The schema lives in one rewritten migration, `000001_init.sql`, not an
+  additive 000002. Goose will not re-run an applied version, so after a schema
+  change delete `data/sqlite.db*` and let the server recreate it. Never edit an
+  applied migration on a board you want to keep.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`
@@ -17,22 +21,55 @@ prefer simple, readable code over production hardening.
 
 ## Shape of the app
 
-- `posts` is the truth. `site_versions` is the render, append-only; the current
-  site is `MAX(id)`. `mutation_runs` stores the full conversation per mutation
-  so `/admin` can replay it. `site_state` holds the model-declared shared
-  values, and its schema travels on the version row. `user_overrides` holds the
-  per-visitor versions of the page, keyed by `version_id` and name.
+- `turns` is the room: one ordered row for every post, every webmaster turn and
+  every server event (heal, undo, restore, clear). `id` is the conversation
+  order. The `posts` view exposes only `kind = 'post'`; the board reads posts
+  through it, so model text (said, notes, changes) cannot reach the page by
+  accident. `site_versions` is the render, append-only; the current site is
+  `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
+  holds the compacted history: the newest row is one message standing in for
+  everything through `through_turn_id`. `site_state` holds the model-declared
+  shared values, and its schema travels on the version row. `user_overrides`
+  holds the per-visitor versions of the page, keyed by `version_id` and name.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
-  `override.go` (per-visitor pages), `tools.go` (tool execution and validation),
-  `mutate.go` (the loop, prompts, tool schemas).
+  `override.go` (per-visitor pages), `room.go` (the turn type, the room log and
+  the change summary), `tools.go` (tool execution and validation), `mutate.go`
+  (the loop, prompts, tool schemas).
 - `cmd/serve/handlers` owns HTTP: `pages.go` (board, post, version),
   `overrides.go` (visitor pages, version writes), `admin.go` (auth, inject,
-  restore), `handlers.go` (mutation wrapper, cap, config).
+  restore), `handlers.go` (mutation wrapper, room log, cap, config).
 - GET requests never call the model. Only a post or an admin instruction
   mutates the site.
 
 ## Rules that must not break
 
+- The webmaster turn is reserved before its prompt is built, with
+  `status = 'running'`. That id is what separates what the turn saw from posts
+  that arrived while it ran: those get higher ids and appear after it in the
+  next log. When the turn finishes, the version (if any) and the finished turn
+  are written in one transaction. A crash leaves a running turn; `New` marks it
+  as an error so it is never read back.
+- The room log is words and field names only: `#id author: body`, one line per
+  webmaster turn with its `said` and `changes`, and one line per server event.
+  Never put markup, notes, tool calls or a render in it. The current page is
+  already in the prompt, and replaying historical tool calls would mutate the
+  world again. The trigger posts are skipped in the log because NEW POST shows
+  them whole.
+- Compaction is one-way. When the uncompacted history reaches 128k estimated
+  tokens (four runes per token) or a 10k-turn backstop, the server replaces it
+  with one summary message and starts a fresh log after that point. The
+  thresholds are `Config.CompactAfterTokens` and `Config.CompactAfterTurns`;
+  tests set them low. The summary chains from the previous one, so old detail
+  fades by design. Never summarize a running or failed turn, never put markup
+  in the summary, and never let a failed summary block the mutation: the same
+  turns are retried next time.
+- Out-of-band changes are turns, not silent edits. Heal, undo, restore and
+  clear each record an event turn in the same transaction as the version they
+  carry. The webmaster's notes survive heal and failed turns; reset deletes
+  them with the room.
+- Keeping the page is a real turn. `done` with no edits writes no version and
+  records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
+  no-op: the plain-board rule lives in the prompt, not in code.
 - The board region must keep the literal `{{posts}}` placeholder; the server
   substitutes the escaped post list. `SiteDoc` appends the posts if the
   placeholder is missing. Never let posts be stored inside model-controlled
@@ -78,15 +115,16 @@ prefer simple, readable code over production hardening.
   pending, and the timeout starts after the lock. Reset therefore cannot run a
   batch of posts it just deleted. Tests wait for the version or run to land.
 - A model error must leave the current version alone. `Changed` is forced false
-  and no version row is written, but the failed run is still recorded.
+  and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.
-- A quiet board heals back to the seed by copying it forward as a new row. It
-  keeps posts, clears shared state and visitor overrides, takes `h.mu`, and
-  never calls the model. The admin panel can heal immediately.
-- Reset is the one destructive action: it keeps the oldest version, restores the
-  seed posts from `seed_posts`, deletes later versions (with their overrides),
-  mutation runs and shared state, and rewinds the id sequences. It takes
-  `h.mu`, so it cannot race a mutation.
+- A quiet board heals back to the seed by copying it forward as a new row and
+  recording a heal turn. It keeps posts and the webmaster's notes, clears shared
+  state and visitor overrides, takes `h.mu`, and never calls the model. The
+  admin panel can heal immediately.
+- Reset is the one destructive action: it keeps the oldest version, deletes
+  every turn (posts, webmaster turns, events, notes) with the compacted
+  summaries, later versions (with their overrides) and shared state, and
+  rewinds the id sequences. It takes `h.mu`, so it cannot race a mutation.
 
 ## Frontend
 
@@ -106,6 +144,7 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   usually via `.env` (gitignored, `.env.example` is the template). Real
   environment variables win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
-  models can take `OPENAI_REASONING_EFFORT` (Muse Spark: `minimal`).
+  models take `OPENAI_REASONING_EFFORT`; the dev task uses
+  `deepseek-v4.1-flash` with `none`.
 - The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy
   `6931`.

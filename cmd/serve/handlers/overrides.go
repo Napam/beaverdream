@@ -71,22 +71,31 @@ func (h *Handlers) visitorOverride(
 	return &override
 }
 
-// createVersion stores a version and the overrides that belong to it in one
-// transaction. A version without its overrides would silently give everyone
-// the normal page.
-func (h *Handlers) createVersion(
+// inTx runs fn with one transaction's queries. The whole callback must succeed
+// or nothing lands.
+func (h *Handlers) inTx(ctx context.Context, fn func(*sqlc.Queries) error) error {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(h.queries.WithTx(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+// insertVersion is createVersion inside a transaction the caller already owns.
+func insertVersion(
 	ctx context.Context,
+	q *sqlc.Queries,
 	params sqlc.CreateSiteVersionParams,
 	overrides map[string]webmaster.Override,
 ) (sqlc.SiteVersion, error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return sqlc.SiteVersion{}, fmt.Errorf("begin version: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	queries := h.queries.WithTx(tx)
-	version, err := queries.CreateSiteVersion(ctx, params)
+	version, err := q.CreateSiteVersion(ctx, params)
 	if err != nil {
 		return sqlc.SiteVersion{}, fmt.Errorf("store site version: %w", err)
 	}
@@ -95,7 +104,7 @@ func (h *Handlers) createVersion(
 		if err != nil {
 			return sqlc.SiteVersion{}, err
 		}
-		if err := queries.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
+		if err := q.CreateUserOverride(ctx, sqlc.CreateUserOverrideParams{
 			VersionID: version.ID,
 			Name:      override.Name,
 			NameKey:   key,
@@ -104,32 +113,47 @@ func (h *Handlers) createVersion(
 			return sqlc.SiteVersion{}, fmt.Errorf("store visitor override: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return sqlc.SiteVersion{}, fmt.Errorf("commit version: %w", err)
-	}
 	return version, nil
 }
 
-// carryVersion copies a version forward with its visitor overrides. Undo,
-// restore and heal all use it, so history moves as one piece.
+// carryVersion copies a version forward with its visitor overrides, and records
+// the event as a turn. Undo, restore and heal all use it, so history moves as
+// one piece and the webmaster can read what happened.
 func (h *Handlers) carryVersion(
 	ctx context.Context,
 	source sqlc.SiteVersion,
-	reason string,
+	kind string,
+	author string,
+	body string,
 ) (sqlc.SiteVersion, error) {
 	overrides, err := h.overridesFor(ctx, source.ID)
 	if err != nil {
 		return sqlc.SiteVersion{}, err
 	}
-	return h.createVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:         source.Css,
-		Note:        source.Note,
-		Header:      source.Header,
-		Board:       source.Board,
-		Footer:      source.Footer,
-		StateSchema: normalizeStateSchema(source.StateSchema),
-		Reason:      reason,
-	}, overrides)
+	var version sqlc.SiteVersion
+	err = h.inTx(ctx, func(q *sqlc.Queries) error {
+		turn, err := q.CreateTurn(ctx, sqlc.CreateTurnParams{
+			Kind:   kind,
+			Author: author,
+			Body:   body,
+		})
+		if err != nil {
+			return fmt.Errorf("record event turn: %w", err)
+		}
+		created, err := insertVersion(ctx, q, sqlc.CreateSiteVersionParams{
+			Css:         source.Css,
+			Note:        source.Note,
+			Header:      source.Header,
+			Board:       source.Board,
+			Footer:      source.Footer,
+			StateSchema: normalizeStateSchema(source.StateSchema),
+			TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
+			Reason:      body,
+		}, overrides)
+		version = created
+		return err
+	})
+	return version, err
 }
 
 // sortedOverrides is the admin page's view: stable order, no map in the

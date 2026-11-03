@@ -388,3 +388,53 @@ func TestSiteDocServesModelMarkupInline(t *testing.T) {
 		t.Fatal("page is still wrapped in an iframe")
 	}
 }
+
+// A failed or discarded mutation must not leave changes in the map the caller
+// passed in. The change summary would then diff a map against itself.
+func TestEditorDoesNotTouchCallerOverrides(t *testing.T) {
+	dave := Override{Name: "dave", CSS: ptr(":root{--bg:#000}")}
+	site := Site{
+		Board:     PostsPlaceholder,
+		Overrides: map[string]Override{"dave": dave},
+	}
+	ed := newEditor(site)
+	ed.authors = []string{"kit"}
+	if got := ed.run("set_user_override", args(t, map[string]any{
+		"name": "kit",
+		"css":  ":root{--bg:#fff}",
+	})); got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if got := ed.run("set_user_override", args(t, map[string]any{
+		"name": "dave",
+		"css":  ":root{--bg:#f00}",
+	})); got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+
+	if len(site.Overrides) != 1 {
+		t.Fatalf("caller map grew: %+v", site.Overrides)
+	}
+	if *site.Overrides["dave"].CSS != ":root{--bg:#000}" {
+		t.Errorf("caller override was rewritten: %+v", site.Overrides["dave"])
+	}
+}
+
+func TestDoneStoresNotes(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("done", args(t, map[string]any{
+		"reason": "not now.",
+		"notes":  "dave promised to come back. kit owes me one.",
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	if ed.notes == nil || !strings.Contains(*ed.notes, "kit owes me one") {
+		t.Fatalf("notes = %v", ed.notes)
+	}
+	if !ed.done || ed.dirty {
+		t.Fatalf("done = %v, dirty = %v", ed.done, ed.dirty)
+	}
+}
+
+func ptr(value string) *string { return &value }

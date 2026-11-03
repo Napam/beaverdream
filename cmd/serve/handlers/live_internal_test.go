@@ -1,24 +1,11 @@
 package handlers
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 )
-
-func TestBatchBodyKeepsEveryPostAndAuthor(t *testing.T) {
-	got := batchBody([]sqlc.Post{
-		{ID: 4, Author: "kit", Body: "one"},
-		{ID: 5, Author: "", Body: "two"},
-	})
-	for _, want := range []string{"#4 kit: one", "#5 anon: two"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("batch body is missing %q: %s", want, got)
-		}
-	}
-}
 
 func TestPostAuthorsDeduplicates(t *testing.T) {
 	got := postAuthors([]sqlc.Post{

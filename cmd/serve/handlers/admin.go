@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -55,9 +57,9 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not load the site", http.StatusInternalServerError)
 		return
 	}
-	runs, err := h.queries.ListMutationRuns(ctx, 20)
+	runs, err := h.queries.ListWebmasterTurns(ctx, 20)
 	if err != nil {
-		h.logger.Error("Failed to list mutation runs", slog.Any("error", err))
+		h.logger.Error("Failed to list webmaster turns", slog.Any("error", err))
 		http.Error(w, "Could not load history", http.StatusInternalServerError)
 		return
 	}
@@ -94,11 +96,25 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("Failed to load visitor overrides", slog.Any("error", err))
 	}
 
+	summaryText := ""
+	var summaryThrough int64
+	summary, err := h.queries.GetLatestSummary(ctx)
+	switch {
+	case err == nil:
+		summaryText = summary.Text
+		summaryThrough = summary.ThroughTurnID
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		h.logger.Warn("Failed to load compacted memory", slog.Any("error", err))
+	}
+
 	if err := pages.AdminPage(
 		site,
 		sortedOverrides(overrides),
 		views,
 		versions,
+		summaryText,
+		summaryThrough,
 		r.URL.Query().Get("msg"),
 		h.cfg.AdminToken,
 	).Render(ctx, w); err != nil {
@@ -128,7 +144,7 @@ func (h *Handlers) AdminStatus(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	today, err := h.queries.CountMutationsSince(r.Context(), utcDayStart())
+	today, err := h.queries.CountWebmasterTurnsSince(r.Context(), utcDayStart())
 	if err != nil {
 		h.logger.Error("Failed to count mutations", slog.Any("error", err))
 	}
@@ -180,6 +196,8 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 	restored, err := h.carryVersion(
 		r.Context(),
 		previous,
+		webmaster.TurnUndo,
+		"admin",
 		fmt.Sprintf("undid version %d", current.ID),
 	)
 	if err != nil {
@@ -239,7 +257,8 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			h.logger.Error("Failed to store admin post", slog.Any("error", err))
 		} else {
-			trigger = &post
+			converted := createdPost(post)
+			trigger = &converted
 		}
 	}
 
@@ -284,6 +303,8 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 	restored, err := h.carryVersion(
 		r.Context(),
 		version,
+		webmaster.TurnRestore,
+		"admin",
 		fmt.Sprintf("restored version %d", id),
 	)
 	if err != nil {
@@ -336,15 +357,29 @@ func (h *Handlers) ClearOverride(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(overrides, key)
 
-	cleared, err := h.createVersion(ctx, sqlc.CreateSiteVersionParams{
-		Css:         current.Css,
-		Note:        current.Note,
-		Header:      current.Header,
-		Board:       current.Board,
-		Footer:      current.Footer,
-		StateSchema: normalizeStateSchema(current.StateSchema),
-		Reason:      fmt.Sprintf("cleared the page for %s", name),
-	}, overrides)
+	var cleared sqlc.SiteVersion
+	err = h.inTx(ctx, func(q *sqlc.Queries) error {
+		turn, err := q.CreateTurn(ctx, sqlc.CreateTurnParams{
+			Kind:   webmaster.TurnClear,
+			Author: "admin",
+			Body:   fmt.Sprintf("gave %s the normal page", name),
+		})
+		if err != nil {
+			return fmt.Errorf("record clear turn: %w", err)
+		}
+		created, err := insertVersion(ctx, q, sqlc.CreateSiteVersionParams{
+			Css:         current.Css,
+			Note:        current.Note,
+			Header:      current.Header,
+			Board:       current.Board,
+			Footer:      current.Footer,
+			StateSchema: normalizeStateSchema(current.StateSchema),
+			TurnID:      sql.NullInt64{Int64: turn.ID, Valid: true},
+			Reason:      fmt.Sprintf("cleared the page for %s", name),
+		}, overrides)
+		cleared = created
+		return err
+	})
 	if err != nil {
 		h.logger.Error("Failed to clear the visitor override", slog.Any("error", err))
 		http.Error(w, "Could not clear the override", http.StatusInternalServerError)

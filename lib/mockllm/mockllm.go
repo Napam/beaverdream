@@ -76,6 +76,12 @@ func completions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mock failure requested", http.StatusInternalServerError)
 		return
 	}
+	// The summarizer asks for prose, not tools. A fixed line keeps the
+	// compaction path deterministic without modelling a second mind.
+	if strings.Contains(joined, "summarize this stretch of the room") {
+		writeTextCompletion(w, "the room changed look twice. dave and kit asked for it.")
+		return
+	}
 
 	calls := decide(joined, hasToolResult(req.Messages))
 	if req.Stream != nil && *req.Stream {
@@ -322,6 +328,26 @@ func mustJSON(v any) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+func writeTextCompletion(w http.ResponseWriter, content string) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      "chatcmpl-mock",
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": content,
+			},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]int{
+			"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+		},
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

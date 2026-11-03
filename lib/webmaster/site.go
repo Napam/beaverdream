@@ -30,18 +30,18 @@ const PostsPlaceholder = "{{posts}}"
 // Note is kept from older versions. It is no longer rendered or edited, but
 // seed matching still compares it, so it travels with the version.
 type Site struct {
-	Version           int64
-	CSS               string
-	Note              string
-	Header            string
-	Board             string
-	Footer            string
-	StateSchema       string
-	State             map[string]json.RawMessage
-	Overrides         map[string]Override
-	Name              string
-	Plain             bool
-	ChangesSincePlain int
+	Version          int64
+	CSS              string
+	Note             string
+	Header           string
+	Board            string
+	Footer           string
+	StateSchema      string
+	State            map[string]json.RawMessage
+	Overrides        map[string]Override
+	Name             string
+	Plain            bool
+	ChangesSinceHeal int
 }
 
 // Post is one message on the board.
@@ -69,10 +69,7 @@ const BaseCSS = `
 }
 *{box-sizing:border-box}
 html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto;transition:background-color .5s,color .5s}
-html.bd-leaving body{opacity:0;transition:opacity .2s}
-html.bd-entering body{animation:bdFadeIn .25s ease-out}
-@keyframes bdFadeIn{from{opacity:0}to{opacity:1}}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.6;padding:var(--pad);font-size:16px;max-width:48rem;margin:0 auto}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 h1,h2,h3{line-height:1.25;margin:0 0 .4em}
@@ -206,10 +203,6 @@ const liveScript = `<script>
   function restoreState() {
     try {
       if (location.search.indexOf('v=') !== -1) {
-        document.documentElement.classList.add('bd-entering')
-        setTimeout(function () {
-          document.documentElement.classList.remove('bd-entering')
-        }, 300)
         if (window.history && history.replaceState) {
           history.replaceState(null, '', location.pathname + location.hash)
         }
@@ -266,8 +259,7 @@ const liveScript = `<script>
     }
     reloading = true
     saveState(next)
-    document.documentElement.classList.add('bd-leaving')
-    setTimeout(function () { reload(next) }, 200)
+    reload(next)
   }
 
   function tick() {

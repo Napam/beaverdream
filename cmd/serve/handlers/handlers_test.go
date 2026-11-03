@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -71,6 +72,15 @@ func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sq
 	)
 	t.Cleanup(h.Close)
 	return h, queries
+}
+
+func setupCompaction(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
+	t.Helper()
+	return setupWithConfig(t, handlers.Config{
+		AdminToken:         testAdminToken,
+		CompactAfterTokens: 2500,
+		CompactAfterTurns:  40,
+	})
 }
 
 func withURLParam(req *http.Request, key, value string) *http.Request {
@@ -169,8 +179,8 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 5 {
-		t.Fatalf("posts = %d, want 4 seed posts and the new one", len(posts))
+	if len(posts) != 1 {
+		t.Fatalf("posts = %d, want only the new one", len(posts))
 	}
 	latest := posts[len(posts)-1]
 	if latest.Body != "make it matrix" {
@@ -195,7 +205,7 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 		t.Errorf("new board lost the placeholder: %q", after.Board)
 	}
 
-	runs, err := queries.ListMutationRuns(ctx, 10)
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -205,8 +215,11 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if runs[0].Status != "changed" {
 		t.Errorf("status = %q, want changed", runs[0].Status)
 	}
-	if !runs[0].TriggerPostID.Valid {
-		t.Error("run is not linked to the post that caused it")
+	if runs[0].ID <= latest.ID {
+		t.Error("the webmaster turn did not come after the post it answered")
+	}
+	if !runs[0].VersionID.Valid {
+		t.Error("the turn is not linked to the version it produced")
 	}
 	if !strings.Contains(runs[0].Messages, "set_css") {
 		t.Error("run does not keep the tool calls")
@@ -222,7 +235,7 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 		t.Fatalf("first status = %d", first.Code)
 	}
 	waitFor(t, "the first rewrite", func() bool {
-		runs, err := queries.ListMutationRuns(ctx, 10)
+		runs, err := queries.ListWebmasterTurns(ctx, 10)
 		return err == nil && len(runs) == 1
 	})
 
@@ -234,12 +247,12 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 6 || posts[len(posts)-1].Body != "two" {
+	if len(posts) != 2 || posts[len(posts)-1].Body != "two" {
 		t.Fatalf("throttled post was lost: %+v", posts)
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	runs, err := queries.ListMutationRuns(ctx, 10)
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -263,7 +276,7 @@ func TestAdminMutateDoesNotCreatePost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 4 {
+	if len(posts) != 0 {
 		t.Fatalf("admin instruction changed the posts: %d", len(posts))
 	}
 
@@ -305,8 +318,8 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 			t.Errorf("page is missing %q", want)
 		}
 	}
-	if strings.Index(body, "No.4") > strings.Index(body, "No.1") {
-		t.Error("posts are not newest first")
+	if !strings.Contains(body, "no posts yet") {
+		t.Error("empty board does not say it has no posts")
 	}
 	if strings.Contains(body, "rewrite") {
 		t.Error("seed page gives away the gimmick")
@@ -474,7 +487,7 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 4 {
+	if len(posts) != 0 {
 		t.Fatalf("post without identity was stored: %+v", posts)
 	}
 }
@@ -1239,7 +1252,7 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 4 {
+	if len(posts) != 0 {
 		t.Errorf("heal changed the posts: %d", len(posts))
 	}
 	state, err := queries.ListSiteState(ctx)
@@ -1284,7 +1297,7 @@ func TestUndoLastAtTheSeedDoesNothing(t *testing.T) {
 	}
 }
 
-func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
+func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -1309,11 +1322,8 @@ func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 4 {
-		t.Fatalf("posts after reset = %d, want the 4 seed posts", len(posts))
-	}
-	if posts[0].Body != "first" || posts[1].Author != "kit" {
-		t.Errorf("reset did not restore the seed posts: %+v", posts)
+	if len(posts) != 0 {
+		t.Fatalf("posts after reset = %d, want an empty board", len(posts))
 	}
 
 	site, err := queries.CurrentSite(ctx)
@@ -1327,7 +1337,7 @@ func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
 		t.Errorf("current version is not the seed: %q", site.Note)
 	}
 
-	runs, err := queries.ListMutationRuns(ctx, 10)
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -1350,8 +1360,8 @@ func TestResetBoardRestoresSeedPostsAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create post: %v", err)
 	}
-	if fresh.ID != 5 {
-		t.Errorf("next post id = %d, want 5", fresh.ID)
+	if fresh.ID != 1 {
+		t.Errorf("next post id = %d, want 1", fresh.ID)
 	}
 }
 
@@ -1375,7 +1385,7 @@ func TestResetBoardRequiresToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 5 {
+	if len(posts) != 1 {
 		t.Fatalf("unauthenticated reset changed the board: %d posts", len(posts))
 	}
 }
@@ -1401,12 +1411,12 @@ func TestModelFailureLeavesSiteAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list posts: %v", err)
 	}
-	if len(posts) != 5 {
+	if len(posts) != 1 {
 		t.Fatalf("post was lost: %d posts", len(posts))
 	}
 
 	waitFor(t, "the failed run", func() bool {
-		runs, err := queries.ListMutationRuns(ctx, 10)
+		runs, err := queries.ListWebmasterTurns(ctx, 10)
 		return err == nil && len(runs) == 1 && runs[0].Status == "error"
 	})
 
@@ -1418,11 +1428,422 @@ func TestModelFailureLeavesSiteAlone(t *testing.T) {
 		t.Fatalf("version advanced on a failed mutation: %d -> %d", before.ID, after.ID)
 	}
 
-	runs, err := queries.ListMutationRuns(ctx, 10)
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
 	if runs[0].ErrorText == "" {
 		t.Error("failed run has no error text")
+	}
+}
+
+// The whole point of the room log: the second turn can read what the first
+// turn said and did, instead of starting from a bare snapshot.
+func TestSecondTurnReadsTheFirst(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	first := postFormAs(t, h.CreatePost, "/posts", url.Values{
+		"body": {"make it matrix"},
+	}, "dave")
+	if first.Code != http.StatusSeeOther {
+		t.Fatalf("first post status = %d", first.Code)
+	}
+	waitFor(t, "the first rewrite", func() bool {
+		site, err := queries.CurrentSite(ctx)
+		return err == nil && site.ID > 1
+	})
+
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 || turns[0].Status != "changed" {
+		t.Fatalf("first turn = %+v", turns)
+	}
+	if turns[0].Said == "" || turns[0].Changes == "" {
+		t.Fatalf("first turn did not record its words or change: %+v", turns[0])
+	}
+
+	second := postFormAs(t, h.CreatePost, "/posts", url.Values{
+		"body": {"make it pink"},
+	}, "kit")
+	if second.Code != http.StatusSeeOther {
+		t.Fatalf("second post status = %d", second.Code)
+	}
+	waitFor(t, "the second rewrite", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		return err == nil && len(turns) == 2 && turns[0].Status == "changed"
+	})
+
+	turns, err = queries.ListWebmasterTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(turns[0].Messages), &messages); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	if len(messages) < 2 || messages[1].Role != "user" {
+		t.Fatalf("second turn has no user prompt: %+v", messages)
+	}
+	prompt := messages[1].Content
+
+	if !strings.Contains(prompt, "ROOM LOG AFTER THAT, oldest first:") {
+		t.Errorf("second prompt has no room log:\n%s", prompt)
+	}
+	if strings.Index(prompt, "ROOM LOG AFTER THAT") > strings.Index(prompt, "CURRENT STYLESHEET:") {
+		t.Errorf("the room log comes after the page:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "#1 dave: make it matrix") {
+		t.Errorf("second prompt forgot the first post:\n%s", prompt)
+	}
+	want := `you (v2): "` + turns[1].Said + `"`
+	if !strings.Contains(prompt, want) {
+		t.Errorf("second prompt does not show the first turn %q:\n%s", want, prompt)
+	}
+	if !strings.Contains(prompt, "["+turns[1].Changes+"]") {
+		t.Errorf("second prompt does not show what the first turn changed:\n%s", prompt)
+	}
+}
+
+func TestHealRecordsATurn(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	rec := postForm(t, h.HealBoard, "/admin/heal?token="+testAdminToken, url.Values{})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("heal status = %d", rec.Code)
+	}
+
+	rows, err := queries.ListRoomLog(ctx, sqlc.ListRoomLogParams{
+		ID:    0,
+		ID_2:  1 << 60,
+		Limit: 100,
+	})
+	if err != nil {
+		t.Fatalf("list room log: %v", err)
+	}
+	found := false
+	for _, row := range rows {
+		if row.Kind == webmaster.TurnHeal {
+			found = true
+			if row.Body == "" {
+				t.Error("heal turn has no explanation for the webmaster")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("heal left no turn: %+v", rows)
+	}
+}
+
+func TestNoopTurnIsKeptAndLeavesThePage(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	before, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop please"}})
+
+	waitFor(t, "the kept turn", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		return err == nil && len(turns) == 1 && turns[0].Status == "kept"
+	})
+	after, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if after.ID != before.ID {
+		t.Errorf("a kept turn wrote version %d", after.ID)
+	}
+}
+
+// Mirrors the handler's message threshold so these tests do not depend on an
+// unexported constant across packages.
+const compactionTurns = 40
+
+// Compaction is the opencode shape: once the history gets big, replace it
+// with one summary, then build a new log after that point.
+func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
+	h, queries := setupCompaction(t)
+	ctx := context.Background()
+
+	const posts = compactionTurns + 5
+	for i := 1; i <= posts; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i) + " with enough words to look real",
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("admin mutate status = %d", rec.Code)
+	}
+
+	summary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("no summary was written: %v", err)
+	}
+	if summary.ThroughTurnID != posts {
+		t.Errorf("summary covers through turn %d, want %d", summary.ThroughTurnID, posts)
+	}
+	if summary.Text == "" {
+		t.Error("summary is empty")
+	}
+
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(turns[0].Messages), &messages); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	prompt := messages[1].Content
+
+	if !strings.Contains(prompt, "COMPACTED HISTORY:") {
+		t.Errorf("prompt has no compacted history:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, summary.Text) {
+		t.Errorf("prompt does not carry the summary text:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "(nothing since the compacted history)") {
+		t.Errorf("prompt still repeats compacted turns:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "#1 dave:") {
+		t.Errorf("compacted post is still in the room log:\n%s", prompt)
+	}
+}
+
+// Under the message threshold but over the token estimate: long posts still
+// force a compaction.
+func TestCompactionTriggersOnTokenEstimate(t *testing.T) {
+	h, queries := setupCompaction(t)
+	ctx := context.Background()
+
+	const posts = compactionTurns - 5
+	for i := 1; i <= posts; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   strings.Repeat("x", 1000),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("admin mutate status = %d", rec.Code)
+	}
+	if _, err := queries.GetLatestSummary(ctx); err != nil {
+		t.Fatalf("token estimate did not trigger compaction: %v", err)
+	}
+}
+
+func TestResetClearsCompactedMemory(t *testing.T) {
+	h, queries := setupCompaction(t)
+	ctx := context.Background()
+
+	for i := 1; i <= compactionTurns+5; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if _, err := queries.GetLatestSummary(ctx); err != nil {
+		t.Fatalf("no summary before reset: %v", err)
+	}
+
+	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
+	if reset.Code != http.StatusSeeOther {
+		t.Fatalf("reset status = %d", reset.Code)
+	}
+	if summary, err := queries.GetLatestSummary(ctx); err == nil {
+		t.Errorf("summary survived the reset: %+v", summary)
+	}
+}
+
+// The default thresholds must actually fire. This failed when the trigger was
+// measured on the capped summarizer chunk instead of the whole history.
+func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	const posts = 2000
+	for i := 1; i <= posts; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   strings.Repeat("x", 400),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("admin mutate status = %d", rec.Code)
+	}
+
+	summary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("default thresholds never compacted: %v", err)
+	}
+	if summary.ThroughTurnID == 0 {
+		t.Errorf("summary covers no turns: %+v", summary)
+	}
+}
+
+// Notes are the webmaster's memory, not part of the page. A failed turn must
+// carry them forward, including the turn row that starts empty.
+func TestFailedTurnKeepsThePreviousNotes(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	if _, err := queries.CreateTurn(ctx, sqlc.CreateTurnParams{
+		Kind:   webmaster.TurnWebmaster,
+		Author: "webmaster",
+		Body:   "seed turn",
+	}); err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("list turns: %v %+v", err, turns)
+	}
+	if err := queries.FinishTurn(ctx, sqlc.FinishTurnParams{
+		Said:     "a good turn",
+		Status:   "changed",
+		Notes:    "dave promised to come back. kit owes me one.",
+		Messages: "[]",
+		ID:       turns[0].ID,
+	}); err != nil {
+		t.Fatalf("finish turn: %v", err)
+	}
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockfail"}})
+	waitFor(t, "the failed turn", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		return err == nil && len(turns) == 2 && turns[0].Status == "error"
+	})
+
+	notes, err := queries.LatestNotes(ctx)
+	if err != nil {
+		t.Fatalf("latest notes: %v", err)
+	}
+	if !strings.Contains(notes, "kit owes me one") {
+		t.Errorf("failed turn wiped the notes: %q", notes)
+	}
+}
+
+// A reset between storing a post and running it deletes the post and rewinds
+// the ids. The worker must not answer the deleted post, even when a new post
+// has taken its id.
+func TestResetDropsAQueuedPostThatReusedItsID(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	stale, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "make it pink",
+	})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+
+	reset := postForm(t, h.ResetBoard, "/admin/reset?token="+testAdminToken, url.Values{})
+	if reset.Code != http.StatusSeeOther {
+		t.Fatalf("reset status = %d", reset.Code)
+	}
+
+	fresh, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "a different post",
+	})
+	if err != nil {
+		t.Fatalf("create fresh post: %v", err)
+	}
+	if fresh.ID != stale.ID {
+		t.Fatalf("fresh post id = %d, want the reused id %d", fresh.ID, stale.ID)
+	}
+
+	h.QueuePost(sqlc.Post(stale))
+	h.RunPending()
+
+	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("the worker answered a deleted post: %+v", turns)
+	}
+}
+
+// A queued post that still matches its stored row is answered.
+func TestRunPendingAnswersAStoredPost(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "make it pink",
+	})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	h.QueuePost(sqlc.Post(post))
+	h.RunPending()
+
+	waitFor(t, "the rewrite", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		return err == nil && len(turns) == 1
+	})
+}
+
+// When the page alone is over the budget, summarizing the log cannot help, so
+// nothing is compacted.
+func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
+	h, queries := setupWithConfig(t, handlers.Config{
+		AdminToken:         testAdminToken,
+		CompactAfterTokens: 10,
+		CompactAfterTurns:  5,
+	})
+	ctx := context.Background()
+
+	for i := 1; i <= 20; i++ {
+		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+	}
+	rec := postForm(t, h.AdminMutate, "/admin/mutate?token="+testAdminToken, url.Values{
+		"instruction": {"make it pink"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("admin mutate status = %d", rec.Code)
+	}
+	if summary, err := queries.GetLatestSummary(ctx); err == nil {
+		t.Errorf("compacted although the page fills the budget: %+v", summary)
 	}
 }

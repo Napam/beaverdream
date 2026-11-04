@@ -51,7 +51,7 @@ func TestSwapKind(t *testing.T) {
 
 func TestHubCoalescesTopics(t *testing.T) {
 	h := newHub()
-	sub, cancel := h.subscribe()
+	sub, cancel := h.subscribe(topicAll)
 	defer cancel()
 
 	h.publish(topicPosts)
@@ -77,5 +77,31 @@ func TestHubCoalescesTopics(t *testing.T) {
 	h.publish(topicAll)
 	if got := sub.take(); got != 0 {
 		t.Fatal("a cancelled subscriber still receives topics")
+	}
+}
+
+// A board stream does not ask for drafts, so a streaming round many times a
+// second never wakes it.
+func TestHubWakesOnlyForWantedTopics(t *testing.T) {
+	h := newHub()
+	board, cancelBoard := h.subscribe(topicAll)
+	defer cancelBoard()
+	admin, cancelAdmin := h.subscribe(topicAll | topicDraft)
+	defer cancelAdmin()
+
+	h.publish(topicDraft)
+
+	select {
+	case <-board.wake:
+		t.Fatal("a draft woke a board stream")
+	default:
+	}
+	select {
+	case <-admin.wake:
+	default:
+		t.Fatal("a draft did not wake the admin stream")
+	}
+	if got := admin.take(); got != topicDraft {
+		t.Fatalf("admin topics = %b, want the draft", got)
 	}
 }

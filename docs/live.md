@@ -16,9 +16,11 @@ Every write path publishes a topic after it commits:
 - restore, undo, heal, inject and reset
 - the worker, when a queued post starts and when a run ends
 
-A topic is a bit in a mask: posts, site, busy, state, journal, turns. Turns is
-a finished webmaster run, version or not; only the admin panel reads it. A
-topic carries no
+A topic is a bit in a mask: posts, site, busy, state, journal, turns, draft.
+Turns is a finished webmaster run, version or not; only the admin panel reads
+it. Draft is the round the model is writing, published at most every 100 ms;
+a stream subscribes to the topics it reads, and only admin streams ask for
+draft, so a streaming round never wakes a board. A topic carries no
 data, so a stream cannot apply an event twice or out of order; it only learns
 that something changed and reads the current state. A subscriber keeps the
 mask of what changed since it last looked, so a burst coalesces into one sync.
@@ -158,12 +160,19 @@ Each page has its own stream, `GET /admin/live?page=...`, plus `&turn=N` on a
 held turn. The mount sits inside `#admin-body` with an id per page and opens
 the stream with `requestCancellation: 'cleanup'`, so navigating removes the
 mount, closes the old stream and opens the new page's. Every stream patches
-`#admin-live`, the status card, which moves with every round. The overview's
+`#admin-live`, the status card, which names the round and what it is doing
+(waiting, thinking, replying, writing a call, running the round's tools) as
+the model streams. The overview's
 stream patches `#admin-metrics` and `#admin-memory` when a run ends, and
 `#admin-budget` with posts, state and journal rows too, because the page it
 measures carries them. The turns stream patches `#admin-history` when a run
-ends, including a run that kept the page or failed, and `#admin-turn` only
-while it follows the newest; a held turn stays as it was loaded. The site
+ends, including a run that kept the page or failed, and `#admin-turn` while it
+follows the newest or holds the running turn; any other held turn stays as it
+was loaded. A running turn's inspector shows the prompt, every finished round
+in full and `#admin-draft`, the round being written; a draft patches that
+element alone, so a fast stream never resends the prompt. A held turn's mount
+carries `live=1` when the render showed it in flight, so a turn that lands
+before the stream connects still gets its last patch. The site
 stream patches `#admin-version` and `#admin-versions` on a new version and
 `#admin-feeds` on state and journal writes.
 
@@ -228,7 +237,8 @@ in SQLite and the stream reads everything after its cursor once per beat.
   prepended and replaced, resume from a cursor, a stylesheet swap, a markup
   reload, a missing cursor, shared state, journal rows and the 204 without a
   name.
-- `cmd/serve/handlers/swap_test.go` covers `swapKind` and the hub's coalescing.
+- `cmd/serve/handlers/swap_test.go` covers `swapKind`, the hub's coalescing and
+  a board stream that a draft never wakes.
 - `lib/webmaster/live_test.go` runs the live script in node or bun: reload,
   typing wait, stale reload, posts, stylesheet, state.
 - `lib/webmaster/journal_runtime_test.go` runs the journal runtime in node or
@@ -239,5 +249,6 @@ in SQLite and the stream reads everything after its cursor once per beat.
 - `cmd/serve/handlers/admin_live_test.go` covers each page's stream and its
   patches, a held turn the stream leaves alone, the turn page, the remembered
   login, the origin gate, the host split, signing out, and an action that
-  patches `#admin-body` instead of redirecting. The cookie and password rules
-  are in `handlers_test.go`.
+  patches `#admin-body` instead of redirecting, and a model stream held halfway
+  whose draft reaches `#admin-draft`. The cookie and password rules are in
+  `handlers_test.go`.

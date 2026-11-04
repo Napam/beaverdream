@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -32,6 +33,9 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	case pages.PageOverview, pages.PageSite:
 	case pages.PageTurns:
 		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
+		// The page says whether it rendered the turn in flight, so a turn
+		// that lands before this stream connects still replaces it.
+		panel.Live = r.URL.Query().Get("live") == "1"
 	default:
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -39,12 +43,15 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe before the first sync, so a change that lands during it is
 	// pushed after it instead of lost.
-	sub, cancel := h.hub.subscribe()
+	sub, cancel := h.hub.subscribe(topicAll | topicDraft)
 	defer cancel()
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
-	if err := h.syncAdmin(ctx, sse, panel, csrf, topicAll); err != nil {
+	// wasLive remembers that the last patch showed the running turn live, so
+	// a picked turn gets one more patch when it finishes and is stored.
+	wasLive := panel.Live
+	if err := h.syncAdmin(ctx, sse, panel, csrf, &wasLive, topicAll); err != nil {
 		return
 	}
 
@@ -61,7 +68,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-sub.wake:
-			if err := h.syncAdmin(ctx, sse, panel, csrf, sub.take()); err != nil {
+			if err := h.syncAdmin(ctx, sse, panel, csrf, &wasLive, sub.take()); err != nil {
 				return
 			}
 		}
@@ -76,9 +83,11 @@ func (h *Handlers) syncAdmin(
 	sse *datastar.ServerSentEventGenerator,
 	panel pages.Panel,
 	csrf string,
+	wasLive *bool,
 	t topic,
 ) error {
-	if t&(topicBusy|topicPosts|topicSite) != 0 {
+	// The status card names what the round is doing, so a draft moves it.
+	if t&(topicBusy|topicPosts|topicSite|topicDraft) != 0 {
 		if err := h.patchAdmin(
 			ctx,
 			sse,
@@ -106,9 +115,19 @@ func (h *Handlers) syncAdmin(
 			}
 		}
 	case pages.PageTurns:
-		if t&(topicSite|topicTurns|topicBusy) != 0 {
-			if err := h.patchAdminTurns(ctx, sse, panel.Turn); err != nil {
+		switch {
+		case t&(topicSite|topicTurns|topicBusy) != 0:
+			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive); err != nil {
 				return err
+			}
+		case t&topicDraft != 0:
+			// Only the round being written changed. It has its own element,
+			// so a draft does not resend the prompt and every finished round.
+			run := h.runProgress()
+			if run != nil && liveInspector(panel.Turn, run) {
+				if err := h.patchAdmin(ctx, sse, "admin-draft", pages.AdminDraft(run)); err != nil {
+					return err
+				}
 			}
 		}
 	case pages.PageSite:
@@ -198,7 +217,7 @@ func (h *Handlers) patchAdminMetrics(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 ) error {
-	turns, _, err := h.adminTurns(ctx, -1, nil, false)
+	turns, _, err := h.adminTurns(ctx, -1, nil)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
@@ -207,19 +226,30 @@ func (h *Handlers) patchAdminMetrics(
 }
 
 // patchAdminTurns brings the turn list forward, and the inspector when it
-// follows the newest. One read covers both, so a reset cannot leave deleted
-// runs on a second admin tab. A picked turn stays as it was loaded.
+// follows the newest or holds the running turn, plus once more when that
+// turn is stored. One read covers both, so a reset cannot leave deleted runs
+// on a second admin tab. Any other picked turn stays as it was loaded.
 func (h *Handlers) patchAdminTurns(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 	picked int64,
+	wasLive *bool,
 ) error {
-	pick := int64(0)
-	if picked > 0 {
-		pick = -1
-	}
 	run := h.runProgress()
-	turns, latest, err := h.adminTurns(ctx, pick, run, picked == 0)
+	live := liveInspector(picked, run)
+	inspect := live || *wasLive
+	*wasLive = live
+	pick := int64(-1)
+	if inspect {
+		pick = picked
+	}
+	turns, latest, err := h.adminTurns(ctx, pick, run)
+	if errors.Is(err, errNoTurn) {
+		// A reset can delete the held turn between reads. Show the list
+		// without it instead of leaving the tab stale.
+		inspect = false
+		turns, latest, err = h.adminTurns(ctx, -1, run)
+	}
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
@@ -232,19 +262,18 @@ func (h *Handlers) patchAdminTurns(
 	); err != nil {
 		return err
 	}
-	if picked > 0 {
+	if !inspect {
 		return nil
 	}
-	// The newest turn's only neighbour is the one before it.
-	var older int64
-	if len(turns) > 1 {
-		older = turns[1].Run.ID
+	var older, newer int64
+	if latest != nil {
+		older, newer = pages.TurnNeighbours(turns, latest.Row.Run.ID)
 	}
 	return h.patchAdmin(
 		ctx,
 		sse,
 		"admin-turn",
-		pages.AdminTurn(latest, true, older, 0, run),
+		pages.AdminTurn(latest, picked == 0, older, newer, run),
 	)
 }
 

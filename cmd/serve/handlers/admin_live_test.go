@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -590,16 +591,19 @@ func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
 	for _, want := range []string{
 		"in flight",
 		"round 2 with the model",
+		"waiting for the model",
+		`id="admin-draft"`,
+		"what the model read",
+		"mockbadedit show some progress",
 		"round 1",
 		"rejected",
 		"old text not found",
+		// The finished round shows its whole call, arguments included.
+		"no such text",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the running inspector is missing %q", want)
 		}
-	}
-	if strings.Contains(body, "what the model read") {
-		t.Error("the running inspector shows a stored conversation")
 	}
 
 	stop()
@@ -608,7 +612,7 @@ func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 	body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
-	if strings.Contains(body, "in flight") {
+	if strings.Contains(body, "in flight") || strings.Contains(body, `id="admin-draft"`) {
 		t.Error("the finished inspector still shows the live view")
 	}
 	if !strings.Contains(body, "what the model read") {
@@ -661,4 +665,115 @@ func TestAdminLivePushesARunningRound(t *testing.T) {
 		"what the model read",
 		"mockbadedit stream progress",
 	})
+}
+
+// heldEdit answers the first model call with a stream frozen halfway through
+// an edit until stop is called; every later call passes through to the mock.
+// The caller registers stop as cleanup after setup, so a held call can never
+// block the test server's close.
+func heldEdit(t *testing.T) (func(http.Handler) http.Handler, func()) {
+	t.Helper()
+	release := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(release) }) }
+	var calls atomic.Int32
+	wrap := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) > 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			chunk := func(delta string) {
+				_, _ = io.WriteString(w, `data: {"id":"x","object":"chat.completion.chunk",`+
+					`"model":"m","choices":[{"index":0,"delta":`+delta+`}]}`+"\n\n")
+				flusher.Flush()
+			}
+			chunk(`{"role":"assistant","reasoning_content":"pondering the heading"}`)
+			chunk(`{"tool_calls":[{"index":0,"id":"c1","type":"function",` +
+				`"function":{"name":"edit","arguments":"{\"target\":\"css\",\"old\":\"\",\"new\":\"h1{color:"}}]}`)
+			<-release
+			chunk(`{"tool_calls":[{"index":0,"function":{"arguments":"red}\"}"}}]}`)
+			_, _ = io.WriteString(
+				w,
+				`data: {"id":"x","object":"chat.completion.chunk","model":"m",`+
+					`"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n",
+			)
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		})
+	}
+	return wrap, stop
+}
+
+// waitForRunningTurn waits for the worker to reserve a turn, then returns it.
+// The reservation lands before the prompt is built, so the row exists while
+// the model call is still held.
+func waitForRunningTurn(t *testing.T, queries *sqlc.Queries) int64 {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		turns, err := queries.ListWebmasterTurns(context.Background(), 5)
+		if err != nil {
+			t.Fatalf("list turns: %v", err)
+		}
+		for _, run := range turns {
+			if run.Status == "running" {
+				return run.ID
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no turn started running")
+	return 0
+}
+
+// The round being written reaches the turns page while it streams: its
+// reasoning, the call it is writing and the arguments as far as they came,
+// in the draft element alone. The stored turn replaces it when it lands.
+func TestAdminLiveStreamsTheDraft(t *testing.T) {
+	wrap, stop := heldEdit(t)
+	h, _ := setupWithModel(t, handlers.Config{AdminToken: testAdminToken}, wrap)
+	t.Cleanup(stop)
+	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live.next(t, []string{`id="admin-turn"`, "No turns yet"})
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"paint the heading"}})
+	// Each sync sends the status card before the draft.
+	live.next(t, []string{`id="admin-live"`, "writing edit"})
+	// The draft gets its own patch. A slow stream can also fold it into a
+	// whole inspector render first, so the selector is what is checked.
+	live.next(t, []string{
+		"selector #admin-draft",
+		"writing edit",
+		"pondering the heading",
+		"h1{color:",
+	}, "what the model read")
+
+	stop()
+	live.next(t, []string{`id="admin-turn"`, "what the model read", "h1{color:red}"}, "in flight")
+}
+
+// A turn opened by its id is live like the newest one: the inspector shows it
+// in flight, and the page gets one more patch with the stored conversation
+// when the turn lands.
+func TestAdminLiveHoldsARunningTurn(t *testing.T) {
+	wrap, stop := heldEdit(t)
+	h, queries := setupWithModel(t, handlers.Config{AdminToken: testAdminToken}, wrap)
+	t.Cleanup(stop)
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"paint the heading"}})
+	id := waitForRunningTurn(t, queries)
+	// live=1 is what the page sends when it rendered the turn in flight.
+	live := openAdminLive(
+		t,
+		h,
+		"page=turns&turn="+strconv.FormatInt(id, 10)+"&live=1",
+		testAdminToken,
+	)
+	live.next(t, []string{`id="admin-turn"`, "in flight"})
+
+	stop()
+	live.next(t, []string{`id="admin-turn"`, "h1{color:red}"}, "in flight")
+	live.quiet(t, "in flight", 200*time.Millisecond)
 }

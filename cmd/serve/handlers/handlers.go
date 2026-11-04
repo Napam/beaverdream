@@ -41,6 +41,9 @@ const (
 	// mutationTimeout bounds one model call sequence. A reasoning model at
 	// high effort can think for a long time per round, and many rounds add up.
 	mutationTimeout = 2 * time.Hour
+	// draftEvery bounds how often a streaming round repaints the admin panel.
+	// A fast model sends dozens of chunks a second; the panel needs a few.
+	draftEvery = 100 * time.Millisecond
 )
 
 // Config holds the environment knobs the handlers enforce.
@@ -68,15 +71,20 @@ type Config struct {
 }
 
 // runState is what the live endpoint and the admin panel show while a
-// mutation is in flight. Rounds holds the completions that have finished, so
-// the turn inspector can show them before the conversation is stored.
+// mutation is in flight. Messages is the conversation so far, the prompt and
+// every finished round, and Draft is the round the model is writing now, so
+// the turn inspector can follow the turn before it is stored. /version is
+// public and carries this as JSON, so model text stays out of it.
 type runState struct {
-	Kind    string                 `json:"kind"`
-	Authors []string               `json:"authors,omitempty"`
-	Round   int                    `json:"round"`
-	Since   time.Time              `json:"since"`
-	TurnID  int64                  `json:"turn_id,omitempty"`
-	Rounds  []webmaster.RoundStats `json:"-"`
+	Kind       string              `json:"kind"`
+	Authors    []string            `json:"authors,omitempty"`
+	Round      int                 `json:"round"`
+	Since      time.Time           `json:"since"`
+	TurnID     int64               `json:"turn_id,omitempty"`
+	RoundSince time.Time           `json:"-"`
+	Messages   []webmaster.Message `json:"-"`
+	Draft      *webmaster.Draft    `json:"-"`
+	RoundDone  bool                `json:"-"`
 }
 
 // Handlers serves the board and the admin panel.
@@ -111,6 +119,8 @@ type Handlers struct {
 	journalBucket map[string]*journalBucket
 	// alertSeen collapses repeated browser errors into one event each.
 	alertSeen map[string]time.Time
+	// draftQueued is true while a draft publish waits out draftEvery.
+	draftQueued bool
 	// cancelRun stops the model call in flight; stopped counts the resets
 	// that have not finished yet, so overlapping resets keep work paused.
 	// Both guarded by liveMu.
@@ -176,6 +186,8 @@ func New(
 	}
 	mutator.OnRound = h.setRunningRound
 	mutator.OnRoundDone = h.logRoundDone
+	mutator.OnDraft = h.setDraft
+	mutator.OnMessage = h.addRunMessage
 	h.workerWG.Add(1)
 	go func() {
 		defer h.workerWG.Done()
@@ -992,7 +1004,8 @@ func postAuthors(posts []sqlc.Post) []string {
 // beginRun, endRun and the snapshot helpers keep the live state in one place.
 func (h *Handlers) beginRun(kind string, authors []string) {
 	h.liveMu.Lock()
-	h.running = &runState{Kind: kind, Authors: authors, Round: 1, Since: time.Now()}
+	now := time.Now()
+	h.running = &runState{Kind: kind, Authors: authors, Round: 1, Since: now, RoundSince: now}
 	h.lastError = ""
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
@@ -1065,6 +1078,9 @@ func (h *Handlers) setRunningRound(round int) {
 	h.liveMu.Lock()
 	if h.running != nil {
 		h.running.Round = round
+		h.running.RoundSince = time.Now()
+		h.running.Draft = nil
+		h.running.RoundDone = false
 	}
 	h.liveMu.Unlock()
 	h.logger.Info("Mutation round started", slog.Int("round", round))
@@ -1083,28 +1099,66 @@ func (h *Handlers) setRunningTurn(id int64) {
 	h.hub.publish(topicTurns)
 }
 
-// finishRunningTurn drops the live rounds once the conversation is stored,
-// and tells the turns page to read the stored turn. It runs before
-// compaction, so the inspector does not wait on the summarizer.
+// finishRunningTurn drops the live conversation once it is stored, and tells
+// the turns page to read the stored turn. It runs before compaction, so the
+// inspector does not wait on the summarizer.
 func (h *Handlers) finishRunningTurn() {
 	h.liveMu.Lock()
 	if h.running != nil {
 		h.running.TurnID = 0
-		h.running.Rounds = nil
+		h.running.Messages = nil
+		h.running.Draft = nil
+		h.running.RoundDone = false
 	}
 	h.liveMu.Unlock()
 	h.hub.publish(topicTurns)
 }
 
-func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
+// addRunMessage keeps the conversation as it grows: the prompt first, then
+// each finished round, which replaces the draft it grew from. The turns page
+// shows it in full before the turn is stored.
+func (h *Handlers) addRunMessage(message webmaster.Message) {
 	h.liveMu.Lock()
 	if h.running != nil {
-		h.running.Rounds = append(h.running.Rounds, stats)
+		h.running.Messages = append(h.running.Messages, message)
+		if message.Role == "assistant" {
+			h.running.Draft = nil
+			h.running.RoundDone = true
+		}
 	}
 	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
+}
+
+// setDraft keeps the round being written and repaints the admin panel at
+// most once per draftEvery. The publish waits out the interval and then
+// carries the newest draft, so the last chunk before a pause is never lost.
+func (h *Handlers) setDraft(draft webmaster.Draft) {
+	h.liveMu.Lock()
+	if h.running == nil {
+		h.liveMu.Unlock()
+		return
+	}
+	h.running.Draft = &draft
+	queue := !h.draftQueued
+	h.draftQueued = true
+	h.liveMu.Unlock()
+	if !queue {
+		return
+	}
+	time.AfterFunc(draftEvery, func() {
+		h.liveMu.Lock()
+		h.draftQueued = false
+		h.liveMu.Unlock()
+		h.hub.publish(topicDraft)
+	})
+}
+
+func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 	attrs := []any{
 		slog.Int("round", stats.Round),
 		slog.Int64("ms", stats.Elapsed.Milliseconds()),
+		slog.Int64("first_token_ms", stats.FirstToken.Milliseconds()),
 		slog.Int64("prompt_tokens", stats.PromptTokens),
 		slog.Int64("cached_tokens", stats.CachedTokens),
 		slog.Int64("completion_tokens", stats.CompletionTokens),
@@ -1122,10 +1176,6 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 		attrs = append(attrs, slog.Bool("resampled", true))
 	}
 	h.logger.Info("Mutation round finished", attrs...)
-	// The round's card can show before the turn is stored. Busy is enough:
-	// the turns page watches it, and the row itself was announced when it was
-	// reserved.
-	h.hub.publish(topicBusy)
 }
 
 // setVersion records the current version. A new one is published, so open
@@ -1176,13 +1226,20 @@ func (h *Handlers) runProgress() *pages.RunProgress {
 	if h.running == nil || h.running.TurnID == 0 {
 		return nil
 	}
-	return &pages.RunProgress{
-		TurnID:  h.running.TurnID,
-		Round:   h.running.Round,
-		Since:   h.running.Since,
-		Authors: append([]string(nil), h.running.Authors...),
-		Rounds:  append([]webmaster.RoundStats(nil), h.running.Rounds...),
+	run := &pages.RunProgress{
+		TurnID:     h.running.TurnID,
+		Round:      h.running.Round,
+		Since:      h.running.Since,
+		RoundSince: h.running.RoundSince,
+		Authors:    append([]string(nil), h.running.Authors...),
+		Messages:   append([]webmaster.Message(nil), h.running.Messages...),
+		RoundDone:  h.running.RoundDone,
 	}
+	if h.running.Draft != nil {
+		draft := *h.running.Draft
+		run.Draft = &draft
+	}
+	return run
 }
 
 // oldestPendingID is the lowest id among queued posts, or zero.

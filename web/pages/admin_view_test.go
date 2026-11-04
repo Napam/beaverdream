@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
@@ -209,41 +210,72 @@ func TestNewTurnDetailSkipsResampledRounds(t *testing.T) {
 	}
 }
 
-// A round that finished before the turn was stored shows what it cost and
-// what each call returned, with the same rejection tone as a stored round.
-func TestRunProgressLaysOutFinishedRounds(t *testing.T) {
-	run := RunProgress{
-		TurnID: 4,
-		Round:  2,
-		Rounds: []webmaster.RoundStats{{
-			Round:            1,
-			PromptTokens:     120,
-			CachedTokens:     80,
-			CompletionTokens: 12,
-			Tools:            []string{"edit", "done"},
-			Rejected:         1,
-			Outcomes: []string{
-				"edit: rejected: old text not found",
-				"done: not finished: a call above was rejected",
-			},
-		}},
+// The round in flight shows what it is doing and its calls as far as they
+// have arrived, with string arguments unescaped.
+func TestRunProgressLaysOutTheDraft(t *testing.T) {
+	run := RunProgress{Round: 2, RoundSince: time.Now()}
+	if got := run.LiveDraft(); got.Phase != "waiting for the model" || got.Round != 2 {
+		t.Fatalf("draft before the first chunk = %+v", got)
 	}
-	rounds := run.LiveRounds()
-	if len(rounds) != 1 {
-		t.Fatalf("rounds = %d", len(rounds))
+
+	run.Draft = &webmaster.Draft{Round: 2, Reasoning: "make it red"}
+	if got := run.LiveDraft().Phase; got != "thinking" {
+		t.Errorf("phase while reasoning = %q", got)
 	}
-	calls := rounds[0].Calls
-	if len(calls) != 2 {
-		t.Fatalf("calls = %d", len(calls))
+	run.Draft = nil
+	run.RoundDone = true
+	if got := run.LiveDraft().Phase; got != "running tools" {
+		t.Errorf("phase between rounds = %q", got)
 	}
-	if calls[0].Name != "edit" || !calls[0].Rejected ||
-		calls[0].Result != "rejected: old text not found" {
-		t.Errorf("edit call = %+v", calls[0])
+	run.RoundDone = false
+	run.Draft = &webmaster.Draft{Round: 2, Reasoning: "make it red"}
+	run.Draft.Calls = []webmaster.ToolCall{{
+		ID:        "c1",
+		Name:      "edit",
+		Arguments: `{"target":"css","old":"","new":"h1{\n  color: re`,
+	}}
+	draft := run.LiveDraft()
+	if draft.Phase != "writing edit" {
+		t.Errorf("phase while calling = %q", draft.Phase)
 	}
-	if calls[1].Name != "done" || calls[1].Rejected || !calls[1].Deferred {
-		t.Errorf("done call = %+v", calls[1])
+	if len(draft.Calls) != 1 {
+		t.Fatalf("calls = %+v", draft.Calls)
 	}
-	if rounds[0].Stats.PromptTokens != 120 {
-		t.Errorf("stats = %+v", rounds[0].Stats)
+	args := draft.Calls[0].Args
+	if len(args) != 3 || args[0].Value != "css" || args[2].Value != "h1{\n  color: re" ||
+		!args[2].Block {
+		t.Errorf("args = %+v, want the new text unescaped as far as it came", args)
+	}
+}
+
+// Arguments can be cut anywhere. Every cut reads as the fields so far, never
+// as raw JSON, and a half-sent escape is held back.
+func TestStreamingArgsReadsEveryCut(t *testing.T) {
+	whole := `{"target": "board", "old": "a\"b", "keys": [{"name":"x"}], "new": "line\none \u00e9"}`
+	for cut := 0; cut <= len(whole); cut++ {
+		for _, arg := range streamingArgs(whole[:cut]) {
+			if arg.Key == "arguments" {
+				t.Fatalf("cut %d read as raw: %q", cut, whole[:cut])
+			}
+			if strings.HasSuffix(arg.Value, "\\") {
+				t.Fatalf("cut %d kept a half escape: %q", cut, arg.Value)
+			}
+		}
+	}
+	got := streamingArgs(whole)
+	want := []string{"board", `a"b`, `[{"name":"x"}]`, "line\none é"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %+v", got)
+	}
+	for i, value := range want {
+		if got[i].Value != value {
+			t.Errorf("arg %s = %q, want %q", got[i].Key, got[i].Value, value)
+		}
+	}
+	if raw := streamingArgs(`[1,2`); len(raw) != 1 || raw[0].Key != "arguments" {
+		t.Errorf("non-object arguments = %+v, want them raw", raw)
+	}
+	if bad := streamingArgs(`{"new":"a\qb"}`); len(bad) != 1 || bad[0].Value != `a\qb` {
+		t.Errorf("broken escape = %+v, want the raw text", bad)
 	}
 }

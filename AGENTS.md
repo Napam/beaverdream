@@ -34,7 +34,8 @@ prefer simple, readable code over production hardening.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
-  (the loop, prompts, tool schemas).
+  (the loop, prompts, tool schemas), `stream.go` (one streamed round and its
+  drafts).
 - `cmd/serve/handlers` owns HTTP: `live.go` (the stream and its projection),
   `hub.go` (topics and subscribers), `pages.go` (board, post, version),
   `versions.go` (version writes, carry forward), `admin.go` (auth, pages,
@@ -102,7 +103,9 @@ prefer simple, readable code over production hardening.
   turn's edits caused it and rounds remain, `done` is deferred once with the
   reason; calling `done` again keeps the page. It never rewrites markup.
 - Every completion sends `tool_choice: required`; `done` is the only way to
-  end a turn with words.
+  end a turn with words. Every round streams, with `include_usage`, or the
+  stream reports no tokens. The loop still acts only on the whole reply; the
+  chunks exist so the admin can watch. The summarizer does not stream.
 - A round whose tool arguments are not JSON, or carry the provider's own tool
   markup, is a broken sample, not an edit to fix. It is resampled without
   being appended to the conversation, because replaying the markup puts it
@@ -233,9 +236,18 @@ prefer simple, readable code over production hardening.
   place (a plain request renders the whole page), so no redirect needs a
   secret. Each page opens its own stream for its own panels. A turn's
   conversation is only stored when it finishes, so the turns page shows the
-  rounds the running turn has finished from memory, then the stored version
-  replaces them. When `ADMIN_TOKEN` is empty the server generates one and logs
-  the password.
+  running turn from memory: the prompt and every finished round in full as
+  `Mutator.OnMessage` hears them, and the round being written as
+  `#admin-draft`, which `OnDraft` fills chunk by chunk. A draft publishes
+  `topicDraft` at most every 100 ms and patches only `#admin-draft` and the
+  status card, never the whole inspector; the card names the phase (waiting,
+  thinking, replying, writing a call, running its tools). Board streams do
+  not subscribe to it. The stored turn replaces the live view when it lands,
+  and a held turn that was running gets that one last patch: its mount
+  carries `live=1`, so the patch also lands when the turn finished before the
+  stream connected. `runState` rides on the public
+  `/version` JSON, so its messages and draft never marshal. When
+  `ADMIN_TOKEN` is empty the server generates one and logs the password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining
@@ -275,9 +287,14 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   paths. `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.
+  A streamed request gets the same reply cut into small chunks with a short
+  line of reasoning first (`mockllm.Streamed`; test fakes that write a whole
+  completion wrap themselves in it). `task dev.mock-llm` pauses 15 ms per
+  chunk so a turn is slow enough to watch; tests use no pause.
   The mock reports rough usage, four request bytes per prompt token with the
   system message counted as cached, so the admin charts have numbers.
-- Each model round logs `Mutation round finished` with its time, prompt,
+- Each model round logs `Mutation round finished` with its time, time to the
+  first token, prompt,
   cached and completion tokens, the size of the reply and the reasoning, its
   `finish_reason`, the tools it called, how many were rejected, one clipped
   `outcome` line per call, and the `done_deferred` reason when a done was

@@ -205,7 +205,7 @@ func (h *Handlers) loadAdmin(
 	}
 	switch panel.Page {
 	case pages.PageOverview:
-		turns, _, err := h.adminTurns(ctx, -1, nil, false)
+		turns, _, err := h.adminTurns(ctx, -1, nil)
 		if err != nil {
 			return view, err
 		}
@@ -217,20 +217,21 @@ func (h *Handlers) loadAdmin(
 		view.Budget = h.adminBudget(ctx, site)
 		view.Summary, view.SummaryThrough = h.adminSummary(ctx)
 	case pages.PageTurns:
-		// The list always shows the running turn's live rounds. Only the page
-		// that follows the newest shows a live inspector; a picked turn stays
-		// as it was loaded. One snapshot covers the list row and the live
-		// rounds, so they cannot disagree.
+		// The list always shows the running turn's progress. The inspector
+		// is live when it follows the newest or holds the running turn; any
+		// other picked turn stays as it was loaded. One snapshot covers the
+		// list row and the inspector, so they cannot disagree.
 		run := h.runProgress()
-		following := panel.Turn == 0
-		turns, detail, err := h.adminTurns(ctx, panel.Turn, run, following)
+		live := liveInspector(panel.Turn, run)
+		turns, detail, err := h.adminTurns(ctx, panel.Turn, run)
 		if err != nil {
 			return view, err
 		}
 		view.Turns = turns
 		view.Turn = detail
-		if following {
+		if live {
 			view.Run = run
+			view.Panel.Live = true
 		}
 	case pages.PageSite:
 		versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
@@ -280,13 +281,12 @@ const (
 // adminTurns loads the newest turns as list rows, and one turn in full for the
 // inspector: the newest when pick is 0, the picked one otherwise, none when
 // pick is negative. Each conversation is decoded once, for its round stats.
-// A turn still running has no stored conversation yet, so its finished rounds
-// are folded in from memory.
+// A turn still running has no stored conversation yet, so its conversation so
+// far comes from memory.
 func (h *Handlers) adminTurns(
 	ctx context.Context,
 	pick int64,
 	live *pages.RunProgress,
-	foldDetail bool,
 ) ([]pages.TurnRow, *pages.TurnDetail, error) {
 	runs, err := h.queries.ListWebmasterTurns(ctx, adminTurnCount)
 	if err != nil {
@@ -315,42 +315,29 @@ func (h *Handlers) adminTurns(
 		d := pages.NewTurnDetail(run, h.turnMessages(run), webmaster.ToolsRunes())
 		detail = &d
 	}
-	h.addRunningRounds(rows, detail, live, foldDetail)
+	addLiveTurn(rows, detail, live)
 	return rows, detail, nil
 }
 
-// addRunningRounds folds the running turn's finished rounds into its row and
-// its inspector, so both show progress before the conversation is stored. A
-// final row already has its own rounds and must not get them twice.
-func (h *Handlers) addRunningRounds(
+// addLiveTurn lays the running turn out from its conversation so far, in the
+// row and the inspector, so both show progress before it is stored. A row
+// that is no longer running has its own stored conversation and keeps it.
+func addLiveTurn(
 	rows []pages.TurnRow,
 	detail *pages.TurnDetail,
 	live *pages.RunProgress,
-	foldDetail bool,
 ) {
 	if live == nil {
 		return
 	}
 	for i := range rows {
 		if rows[i].Run.ID == live.TurnID && rows[i].Run.Status == "running" {
-			addRounds(&rows[i], live.Rounds)
+			rows[i] = pages.NewTurnRow(rows[i].Run, live.Messages)
 		}
 	}
-	if foldDetail && detail != nil && detail.Row.Run.ID == live.TurnID &&
+	if detail != nil && detail.Row.Run.ID == live.TurnID &&
 		detail.Row.Run.Status == "running" {
-		addRounds(&detail.Row, live.Rounds)
-	}
-}
-
-// addRounds adds a running turn's rounds to a row. The stored row has none
-// until the turn finishes.
-func addRounds(row *pages.TurnRow, rounds []webmaster.RoundStats) {
-	for _, stats := range rounds {
-		row.Rounds++
-		row.PromptTokens += stats.PromptTokens
-		row.CachedTokens += stats.CachedTokens
-		row.CompletionTokens += stats.CompletionTokens
-		row.Rejected += stats.Rejected
+		*detail = pages.NewTurnDetail(detail.Row.Run, live.Messages, webmaster.ToolsRunes())
 	}
 }
 
@@ -443,11 +430,24 @@ func (h *Handlers) adminLiveView(ctx context.Context) pages.LiveView {
 			authors = "the board"
 		}
 		view.State = "running"
-		view.Detail = fmt.Sprintf("%s by %s (round %d)", running.Kind, authors, running.Round)
+		view.Detail = fmt.Sprintf(
+			"%s by %s (round %d, %s)",
+			running.Kind,
+			authors,
+			running.Round,
+			pages.RunPhase(running.Draft, running.RoundDone),
+		)
 	case pending > 0:
 		view.State = "queued"
 	}
 	return view
+}
+
+// liveInspector reports whether the turns page with picked held follows the
+// running turn: it follows the newest when nothing is picked, or the running
+// turn was picked.
+func liveInspector(picked int64, run *pages.RunProgress) bool {
+	return picked == 0 || (run != nil && run.TurnID == picked)
 }
 
 // adminFeeds is what the panel shows of the journal and shared state.

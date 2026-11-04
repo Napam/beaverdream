@@ -7,7 +7,6 @@ package mockllm
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -22,7 +21,6 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Stream   *bool         `json:"stream"`
 	Messages []chatMessage `json:"messages"`
 }
 
@@ -43,8 +41,15 @@ type theme struct {
 	header string
 }
 
-// Handler serves chat completions and a model list.
+// Handler serves chat completions and a model list. A request that asks for a
+// stream gets the same reply in chunks.
 func Handler() http.Handler {
+	return SlowHandler(0)
+}
+
+// SlowHandler is Handler with a pause before each streamed chunk, so a turn
+// takes long enough to watch.
+func SlowHandler(delay time.Duration) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -55,7 +60,7 @@ func Handler() http.Handler {
 	// Unknown GET paths would otherwise get a 405 from the POST pattern.
 	mux.HandleFunc("GET /", http.NotFound)
 	mux.HandleFunc("POST /", completions)
-	return mux
+	return SlowStreamed(mux.ServeHTTP, delay)
 }
 
 func completions(w http.ResponseWriter, r *http.Request) {
@@ -89,10 +94,6 @@ func completions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	calls := decide(joined, hasToolResult(req.Messages))
-	if req.Stream != nil && *req.Stream {
-		writeStream(w, calls)
-		return
-	}
 	reply, err := json.Marshal(calls)
 	if err != nil {
 		http.Error(w, "encode calls", http.StatusInternalServerError)
@@ -106,9 +107,10 @@ func completions(w http.ResponseWriter, r *http.Request) {
 		"choices": []any{map[string]any{
 			"index": 0,
 			"message": map[string]any{
-				"role":       "assistant",
-				"content":    "",
-				"tool_calls": calls,
+				"role":              "assistant",
+				"content":           "",
+				"reasoning_content": thinking(calls),
+				"tool_calls":        calls,
 			},
 			"finish_reason": "tool_calls",
 		}},
@@ -386,53 +388,15 @@ func (t theme) calls() []toolCall {
 	return calls
 }
 
-// writeStream emits the same calls as data-only SSE chunks, so a client that
-// asks for streaming still works.
-func writeStream(w http.ResponseWriter, calls []toolCall) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-
+// thinking is the mock's reasoning, a line naming what it is about to call,
+// so the admin panel has thoughts to show as they stream.
+func thinking(calls []toolCall) string {
+	names := make([]string, len(calls))
 	for i, call := range calls {
-		chunk := map[string]any{
-			"id":      "chatcmpl-mock",
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"model":   model,
-			"choices": []any{map[string]any{
-				"index": 0,
-				"delta": map[string]any{
-					"tool_calls": []any{map[string]any{
-						"index":    i,
-						"id":       call.ID,
-						"type":     call.Type,
-						"function": call.Function,
-					}},
-				},
-				"finish_reason": nil,
-			}},
-		}
-		data, _ := json.Marshal(chunk)
-		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		names[i] = call.Function.Name
 	}
-
-	final, _ := json.Marshal(map[string]any{
-		"id":      "chatcmpl-mock",
-		"object":  "chat.completion.chunk",
-		"created": time.Now().Unix(),
-		"model":   model,
-		"choices": []any{map[string]any{
-			"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls",
-		}},
-	})
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", final)
-	_, _ = io.WriteString(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	return "The newest post is in front of me. I will call " +
+		strings.Join(names, ", then ") + "."
 }
 
 func hasToolResult(messages []chatMessage) bool {

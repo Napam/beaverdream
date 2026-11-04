@@ -83,6 +83,124 @@ func editBytes(res Result) int {
 	return total
 }
 
+// The round streams. A watcher hears the prompt first, then the reply growing
+// chunk by chunk, then each finished round, and the drafts add up to exactly
+// what the turn stores.
+func TestMutateStreamsTheRound(t *testing.T) {
+	m, closeServer := testMutator(t)
+	defer closeServer()
+	var drafts []Draft
+	var heard []Message
+	m.OnDraft = func(d Draft) { drafts = append(drafts, d) }
+	m.OnMessage = func(msg Message) { heard = append(heard, msg) }
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "make it look like the matrix"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(heard) != len(res.Messages) || heard[0].Role != "system" || heard[1].Role != "user" {
+		t.Fatalf("heard %d messages, stored %d, want the same and the prompt first",
+			len(heard), len(res.Messages))
+	}
+
+	var first []Draft
+	for _, d := range drafts {
+		if d.Round == 1 {
+			first = append(first, d)
+		}
+	}
+	if len(first) < 10 {
+		t.Fatalf("round 1 sent %d drafts, want it to grow in many small pieces", len(first))
+	}
+	if first[0].Reasoning == "" || len(first[0].Calls) != 0 {
+		t.Errorf("first draft = %+v, want the reasoning before any call", first[0])
+	}
+	last := first[len(first)-1]
+	stored := res.Messages[2]
+	if last.Reasoning != stored.Reasoning {
+		t.Errorf("drafted reasoning %q, stored %q", last.Reasoning, stored.Reasoning)
+	}
+	if len(last.Calls) != len(stored.ToolCalls) ||
+		last.Calls[0].Arguments != stored.ToolCalls[0].Arguments {
+		t.Errorf("drafted calls %+v do not add up to the stored calls", last.Calls)
+	}
+	for i := 1; i < len(first); i++ {
+		if len(first[i].Calls) > 0 && len(first[i-1].Calls) > 0 &&
+			!strings.HasPrefix(first[i].Calls[0].Arguments, first[i-1].Calls[0].Arguments) {
+			t.Fatal("a draft rewrote arguments an earlier draft had shown")
+		}
+	}
+	if res.Rounds[0].PromptTokens == 0 || res.Rounds[0].FirstToken <= 0 {
+		t.Errorf("round stats = %+v, want usage and a first token time", res.Rounds[0])
+	}
+}
+
+// A provider that sends reasoning_content, even null, gets it back beside the
+// tool call. DeepSeek's thinking mode rejects the next request without it.
+func TestMutateEchoesStreamedReasoning(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		chunk := func(delta string) {
+			_, _ = io.WriteString(
+				w,
+				`data: {"id":"x","object":"chat.completion.chunk","model":"m",`+
+					`"choices":[{"index":0,"delta":`+delta+`}]}`+"\n\n",
+			)
+			flusher.Flush()
+		}
+		finish := func() {
+			_, _ = io.WriteString(
+				w,
+				`data: {"id":"x","object":"chat.completion.chunk","model":"m",`+
+					`"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n",
+			)
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		}
+		if len(bodies) == 1 {
+			chunk(`{"role":"assistant","reasoning_content":null}`)
+			chunk(`{"tool_calls":[{"index":0,"id":"c1","type":"function",` +
+				`"function":{"name":"edit","arguments":"{\"target\":\"css\",\"old\":\"\",` +
+				`\"new\":\"h1{color:red}\"}"}}]}`)
+		} else {
+			chunk(`{"role":"assistant","reasoning_content":"that is enough"}`)
+			chunk(`{"tool_calls":[{"index":0,"id":"c2","type":"function",` +
+				`"function":{"name":"done","arguments":"{\"reason\":\"kept\"}"}}]}`)
+		}
+		finish()
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Author: "dave", Body: "paint it"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if !res.Done {
+		t.Fatal("the done round did not end the turn")
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("requests = %d, want 2", len(bodies))
+	}
+	if !strings.Contains(bodies[1], `"reasoning_content"`) {
+		t.Error("the next request dropped reasoning_content that arrived as null")
+	}
+}
+
 // A small change is a small answer: the edit and done in one response, with
 // arguments a fraction of a whole rewrite.
 func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
@@ -263,7 +381,7 @@ func TestMutateRecordsRoundStats(t *testing.T) {
 // DeepSeek reports cache hits in its own usage field. It counts when the
 // OpenAI field is missing.
 func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":0,"model":"m",`+
 			`"choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant",`+
@@ -358,7 +476,7 @@ func TestMutateStopsOnAProseReply(t *testing.T) {
 // A reply that stopped at the output cap never got far enough to call a tool.
 // The reason says so instead of blaming the round budget.
 func TestMutateNamesTheOutputCap(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"cap","object":"chat.completion","model":"m",` +
 			`"choices":[{"index":0,"message":{"role":"assistant","content":""},` +
@@ -680,7 +798,7 @@ const brokenArguments = `{"target">footer</｜DSML｜: "`
 // markup never enters the conversation.
 func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
 	var requests [][]byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, body)
 		if len(requests) == 1 {
@@ -744,7 +862,7 @@ func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
 // rejection without the markup.
 func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 	var requests [][]byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, body)
 		if len(requests) == 1 {
@@ -797,7 +915,7 @@ func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 // broken-arguments cap.
 func TestMutateNamesASchemaMismatch(t *testing.T) {
 	rounds := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		rounds++
 		if rounds == 1 {
 			writeToolCall(w, "edit", `{"target":5}`)
@@ -835,7 +953,7 @@ func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
 	arguments := `{"target":"css","old":"","new":"h1{color:red}` + providerToolMarkup + `"}`
 	var requests [][]byte
 	rounds := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, body)
 		rounds++
@@ -883,7 +1001,7 @@ func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
 // A provider that answers with broken arguments round after round gets a few
 // resamples, not the whole round budget.
 func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		writeToolCall(w, "edit", `{"target":`)
 	}))
 	defer srv.Close()
@@ -913,7 +1031,7 @@ func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
 // with it; without it the model loses the thread of its own tool format.
 func TestMutateReplaysDeepSeekReasoning(t *testing.T) {
 	var requests [][]byte
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		requests = append(requests, body)
 		if len(requests) == 1 {

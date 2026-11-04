@@ -52,7 +52,7 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe before the first sync, so a change that lands during it is
 	// pushed after it instead of lost.
-	sub, cancel := h.hub.subscribe()
+	sub, cancel := h.hub.subscribe(topicAll)
 	defer cancel()
 
 	sse := datastar.NewSSE(w, r)

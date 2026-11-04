@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -18,7 +19,7 @@ import (
 func scriptedMutator(t *testing.T, script ...[][2]string) (*Mutator, *int) {
 	t.Helper()
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
 		if calls >= len(script) {
 			http.Error(w, "script ran out", http.StatusBadRequest)
 			return

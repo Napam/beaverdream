@@ -125,6 +125,9 @@ const (
 type Panel struct {
 	Page string
 	Turn int64
+	// Live is true when the render showed a turn still in flight, so the
+	// stream patches the inspector once even if the turn lands first.
+	Live bool
 }
 
 // Path is where the page lives. A login form posts back to it, so a reload
@@ -147,6 +150,9 @@ func (p Panel) LivePath() string {
 	path := "/admin/live?page=" + p.Page
 	if p.Turn > 0 {
 		path += "&turn=" + i64(p.Turn)
+	}
+	if p.Live {
+		path += "&live=1"
 	}
 	return path
 }
@@ -713,39 +719,88 @@ templ turnInspector(d TurnDetail, run *RunProgress) {
 }
 
 // turnRunning is the inspector before the conversation is stored. It shows
-// the rounds as they finish, with what each one cost and what its tools
-// returned, then the stored version replaces it when the turn lands.
+// what the model read, every finished round in full, and the round being
+// written as it streams. The stored turn replaces it when the turn lands.
 templ turnRunning(d TurnDetail, run *RunProgress) {
 	if run == nil || run.TurnID != d.Row.Run.ID {
 		<div class={ adminCard }>
 			<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
 		</div>
 	} else {
-		<div class={ adminCard + " flex flex-col gap-1" }>
-			<div class="flex flex-wrap items-center gap-2">
-				<span class={ adminLabel }>in flight</span>
-				if len(run.Rounds) >= run.Round {
-					<span class={ adminChip }>round { itoa(run.Round) } done, storing</span>
-				} else {
-					<span class={ adminChip }>round { itoa(run.Round) } with the model</span>
-				}
-				<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
-				if len(run.Authors) > 0 {
-					<span class={ adminChip }>{ strings.Join(run.Authors, ", ") }</span>
-				}
-			</div>
-			if len(run.Rounds) == 0 {
-				<p class="text-sm text-gray-500 dark:text-neutral-400">Waiting for the first round. Its cost and calls show here as soon as it returns.</p>
-			} else {
-				<p class="text-sm text-gray-500 dark:text-neutral-400">
-					{ plural(len(run.Rounds), "round") } done. The conversation and the prompt sections are stored when the turn ends.
-				</p>
+		<div class={ adminCard + " flex flex-wrap items-center gap-2" }>
+			<span class={ adminLabel }>in flight</span>
+			<span class={ adminChip }>round { itoa(run.Round) } with the model</span>
+			<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
+			if len(run.Authors) > 0 {
+				<span class={ adminChip }>{ strings.Join(run.Authors, ", ") }</span>
 			}
 		</div>
-		for _, round := range run.LiveRounds() {
+		if len(d.Context) > 0 {
+			@turnContext(d)
+		}
+		if len(d.Rounds) > 0 {
+			@turnGrowth(d)
+		}
+		for _, round := range d.Rounds {
 			@roundCard(round)
 		}
+		@AdminDraft(run)
 	}
+}
+
+// AdminDraft is the round the model is writing, patched on its own as chunks
+// arrive so a draft never resends the prompt or the finished rounds. Each
+// growing block stays pinned to its newest line unless scrolled up.
+templ AdminDraft(run *RunProgress) {
+	{{ draft := run.LiveDraft() }}
+	<div id="admin-draft" class={ adminCard + " flex flex-col gap-3 border-sky-300 dark:border-sky-900" }>
+		<div class="flex flex-wrap items-center gap-2">
+			<span class="size-2 animate-pulse rounded-full bg-sky-500"></span>
+			<span class="font-semibold text-gray-900 dark:text-neutral-100">round { itoa(draft.Round) }</span>
+			<span class={ adminChip }>{ draft.Phase }</span>
+			<span class={ adminChip }>started { draft.Since.UTC().Format("15:04:05") } UTC</span>
+		</div>
+		if draft.Reasoning != "" {
+			<div>
+				<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">reasoning · { short(int64(utf8.RuneCountInString(draft.Reasoning))) } chars</p>
+				@pinned(draft.Reasoning)
+			</div>
+		}
+		if strings.TrimSpace(draft.Content) != "" {
+			<div>
+				<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">reply</p>
+				@pinned(draft.Content)
+			</div>
+		}
+		for _, call := range draft.Calls {
+			<div class="flex flex-col gap-2 rounded-md border border-sky-300/60 p-3 dark:border-sky-900">
+				<div class="flex flex-wrap items-baseline gap-2">
+					<span class="font-mono text-sm font-semibold text-gray-900 dark:text-neutral-100">{ call.Name }</span>
+					if call.ID != "" {
+						<span class="font-mono text-[11px] text-gray-400 dark:text-neutral-600">{ call.ID }</span>
+					}
+				</div>
+				for _, arg := range call.Args {
+					if arg.Block {
+						<div>
+							<p class="font-mono text-[11px] text-gray-500 dark:text-neutral-500">{ arg.Key } · { short(int64(utf8.RuneCountInString(arg.Value))) } chars</p>
+							@pinned(arg.Value)
+						</div>
+					} else {
+						<p class="text-sm"><span class="font-mono text-xs text-gray-500 dark:text-neutral-500">{ arg.Key }</span> <span class="font-mono text-xs text-gray-800 dark:text-neutral-200">{ arg.Value }</span></p>
+					}
+				}
+			</div>
+		}
+	</div>
+}
+
+// pinned is a block of growing text. The reversed column keeps its scroll at
+// the newest line while text arrives, and leaves it alone once scrolled up.
+templ pinned(text string) {
+	<div class="mt-1 flex max-h-96 flex-col-reverse overflow-auto rounded-md">
+		<pre class={ adminPre + " overflow-visible" }>{ text }</pre>
+	</div>
 }
 
 templ turnHeader(d TurnDetail) {
@@ -897,6 +952,9 @@ templ roundCard(round RoundView) {
 		<div class="flex flex-wrap items-center gap-2">
 			<span class="font-semibold text-gray-900 dark:text-neutral-100">round { itoa(round.Stats.Round) }</span>
 			<span class={ adminChip }>{ millis(round.Stats.Elapsed.Milliseconds()) }</span>
+			if round.Stats.FirstToken > 0 {
+				<span class={ adminChip }>first token { millis(round.Stats.FirstToken.Milliseconds()) }</span>
+			}
 			<span class={ adminChip }>{ short(round.Stats.PromptTokens) } in · { short(round.Stats.CachedTokens) } cached</span>
 			<span class={ adminChip }>{ short(round.Stats.CompletionTokens) } out</span>
 			if round.Stats.FinishReason != "" {

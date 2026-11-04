@@ -17,6 +17,9 @@ const (
 	// topicTurns is a finished webmaster run, with or without a new version.
 	// Only the admin panel reads it.
 	topicTurns
+	// topicDraft is the round the model is writing, many times a second.
+	// It stays out of topicAll: only an admin stream asks for it.
+	topicDraft
 
 	topicAll = topicPosts | topicSite | topicBusy | topicState | topicJournal | topicTurns
 )
@@ -31,6 +34,7 @@ type hub struct {
 
 type subscriber struct {
 	mu      sync.Mutex
+	want    topic
 	pending topic
 	wake    chan struct{}
 }
@@ -39,9 +43,10 @@ func newHub() *hub {
 	return &hub{subs: make(map[*subscriber]struct{})}
 }
 
-// subscribe registers a stream. The caller must call the returned cancel.
-func (h *hub) subscribe() (*subscriber, func()) {
-	sub := &subscriber{wake: make(chan struct{}, 1)}
+// subscribe registers a stream for the topics in want. The caller must call
+// the returned cancel.
+func (h *hub) subscribe(want topic) (*subscriber, func()) {
+	sub := &subscriber{want: want, wake: make(chan struct{}, 1)}
 	h.mu.Lock()
 	h.subs[sub] = struct{}{}
 	h.mu.Unlock()
@@ -56,8 +61,11 @@ func (h *hub) publish(t topic) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for sub := range h.subs {
+		if sub.want&t == 0 {
+			continue
+		}
 		sub.mu.Lock()
-		sub.pending |= t
+		sub.pending |= t & sub.want
 		sub.mu.Unlock()
 		select {
 		case sub.wake <- struct{}{}:

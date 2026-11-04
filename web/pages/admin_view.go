@@ -121,38 +121,194 @@ type TurnDetail struct {
 }
 
 // RunProgress is a turn still in flight. Its conversation is stored when the
-// turn ends, so the inspector shows the rounds the server has finished from
-// memory, and the stored version replaces them when it lands.
+// turn ends, so the inspector shows the prompt and every finished round from
+// memory, and Draft is the round the model is writing now. The stored turn
+// replaces all of it when it lands.
 type RunProgress struct {
-	TurnID  int64
-	Round   int
-	Since   time.Time
-	Authors []string
-	Rounds  []webmaster.RoundStats
+	TurnID     int64
+	Round      int
+	Since      time.Time
+	RoundSince time.Time
+	Authors    []string
+	Messages   []webmaster.Message
+	Draft      *webmaster.Draft
+	// RoundDone is true between a round's last chunk and the next round's
+	// start, while its tools run.
+	RoundDone bool
 }
 
-// LiveRounds lays the finished rounds out as the inspector's cards. Only the
-// round stats and their clipped outcomes exist before the turn is stored, so
-// each call shows its name, result and rejection tone but no arguments.
-func (r RunProgress) LiveRounds() []RoundView {
-	rounds := make([]RoundView, 0, len(r.Rounds))
-	for _, stats := range r.Rounds {
-		round := RoundView{Stats: stats}
-		for _, line := range stats.Outcomes {
-			name, result, ok := strings.Cut(line, ": ")
-			if !ok {
-				name, result = "", line
-			}
-			round.Calls = append(round.Calls, CallView{
-				Name:     name,
-				Result:   result,
-				Rejected: strings.HasPrefix(result, "rejected:"),
-				Deferred: strings.HasPrefix(result, "not finished:"),
-			})
-		}
-		rounds = append(rounds, round)
+// DraftView is the round being written, laid out the way a finished round is,
+// with arguments read as far as they have arrived.
+type DraftView struct {
+	Round     int
+	Phase     string
+	Since     time.Time
+	Reasoning string
+	Content   string
+	Calls     []CallView
+}
+
+// LiveDraft lays out the round in flight. Before its first chunk it is an
+// empty draft for the current round, still waiting for the model.
+func (r RunProgress) LiveDraft() DraftView {
+	view := DraftView{
+		Round: r.Round,
+		Phase: RunPhase(r.Draft, r.RoundDone),
+		Since: r.RoundSince,
 	}
-	return rounds
+	if r.Draft == nil {
+		return view
+	}
+	if r.Draft.Round > 0 {
+		view.Round = r.Draft.Round
+	}
+	view.Reasoning = r.Draft.Reasoning
+	view.Content = r.Draft.Content
+	for _, call := range r.Draft.Calls {
+		view.Calls = append(view.Calls, CallView{
+			Name: call.Name,
+			ID:   call.ID,
+			Args: streamingArgs(call.Arguments),
+		})
+	}
+	return view
+}
+
+// RunPhase names what a round is doing from what it has sent so far: waiting,
+// reasoning, a reply, a tool call, or the tools after it.
+func RunPhase(draft *webmaster.Draft, roundDone bool) string {
+	switch {
+	case draft == nil && roundDone:
+		return "running tools"
+	case draft == nil:
+		return "waiting for the model"
+	case len(draft.Calls) > 0:
+		return "writing " + draft.Calls[len(draft.Calls)-1].Name
+	case draft.Content != "":
+		return "replying"
+	case draft.Reasoning != "":
+		return "thinking"
+	}
+	return "waiting for the model"
+}
+
+// streamingArgs reads tool arguments that are still arriving: a JSON object
+// cut off anywhere. Each string value shows unescaped as far as it got, so
+// CSS being written reads like CSS. Anything else it cannot follow shows raw.
+func streamingArgs(raw string) []ArgView {
+	whole := []ArgView{{Key: "arguments", Value: raw, Block: true}}
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	if s[0] != '{' {
+		return whole
+	}
+	var args []ArgView
+	i := 1
+	for {
+		i = skipSpace(s, i)
+		if i < len(s) && s[i] == ',' {
+			i = skipSpace(s, i+1)
+		}
+		if i >= len(s) || s[i] == '}' {
+			return args
+		}
+		if s[i] != '"' {
+			return whole
+		}
+		key, next, closed := readPartialString(s, i)
+		if !closed {
+			return args
+		}
+		i = skipSpace(s, next)
+		if i >= len(s) {
+			return args
+		}
+		if s[i] != ':' {
+			return whole
+		}
+		i = skipSpace(s, i+1)
+		if i >= len(s) {
+			return append(args, ArgView{Key: key})
+		}
+		if s[i] == '"' {
+			value, next, closed := readPartialString(s, i)
+			args = append(args, ArgView{
+				Key:   key,
+				Value: value,
+				Block: strings.Contains(value, "\n") || len(value) > 80,
+			})
+			if !closed {
+				return args
+			}
+			i = next
+			continue
+		}
+		end := scanValue(s, i)
+		value := s[i:end]
+		args = append(args, ArgView{Key: key, Value: value, Block: len(value) > 80})
+		i = end
+	}
+}
+
+func skipSpace(s string, i int) int {
+	for i < len(s) && strings.ContainsRune(" \t\r\n", rune(s[i])) {
+		i++
+	}
+	return i
+}
+
+// readPartialString decodes the JSON string that opens at s[i]. closed is
+// false when the string is cut off; the value is then what arrived, without
+// a half-sent escape.
+func readPartialString(s string, i int) (string, int, bool) {
+	var value string
+	for j := i + 1; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '"':
+			if err := json.Unmarshal([]byte(s[i:j+1]), &value); err == nil {
+				return value, j + 1, true
+			}
+			// A closed string with a broken escape is the sample an admin
+			// wants to see, not an empty value.
+			return s[i+1 : j], j + 1, true
+		}
+	}
+	// The longest escape is six bytes, \uXXXX, so one of these cuts closes.
+	for cut := len(s); cut > i && cut >= len(s)-6; cut-- {
+		if json.Unmarshal([]byte(s[i:cut]+`"`), &value) == nil {
+			return value, len(s), false
+		}
+	}
+	return "", len(s), false
+}
+
+// scanValue finds the end of a value that is not a string: up to the comma
+// or brace that closes it, or the end of what has arrived.
+func scanValue(s string, i int) int {
+	depth := 0
+	for ; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			_, next, _ := readPartialString(s, i)
+			i = next - 1
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return i
 }
 
 // NewTurnDetail lays out a turn's conversation for the inspector. toolsRunes
@@ -525,14 +681,14 @@ func pickedRow(id, picked int64, newest bool) string {
 	return "border-transparent"
 }
 
-// turnNeighbours are the turns one step older and newer than the one shown,
-// or zero at either end. The list is newest first.
-func (v AdminView) turnNeighbours() (older, newer int64) {
+// TurnNeighbours are the turns one step older and newer than id in a list
+// that is newest first, or zero at either end. id 0 means the newest turn.
+func TurnNeighbours(turns []TurnRow, id int64) (older, newer int64) {
 	at := 0
-	if v.Panel.Turn > 0 {
+	if id > 0 {
 		at = -1
-		for i, row := range v.Turns {
-			if row.Run.ID == v.Panel.Turn {
+		for i, row := range turns {
+			if row.Run.ID == id {
 				at = i
 				break
 			}
@@ -541,13 +697,18 @@ func (v AdminView) turnNeighbours() (older, newer int64) {
 	if at < 0 {
 		return 0, 0
 	}
-	if at+1 < len(v.Turns) {
-		older = v.Turns[at+1].Run.ID
+	if at+1 < len(turns) {
+		older = turns[at+1].Run.ID
 	}
 	if at > 0 {
-		newer = v.Turns[at-1].Run.ID
+		newer = turns[at-1].Run.ID
 	}
 	return older, newer
+}
+
+// turnNeighbours are the turns one step older and newer than the one shown.
+func (v AdminView) turnNeighbours() (older, newer int64) {
+	return TurnNeighbours(v.Turns, v.Panel.Turn)
 }
 
 func turnTitle(row TurnRow) string {

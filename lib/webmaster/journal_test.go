@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -180,7 +181,7 @@ func fakeModel(t *testing.T, rounds [][]fakeToolCall) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
 	next := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		mu.Lock()
 		index := next

@@ -38,6 +38,12 @@ type Mutator struct {
 	// slow mutation can be told apart from a slow model, and a long answer
 	// from a slow one.
 	OnRoundDone func(stats RoundStats)
+	// OnDraft reports the round being written each time the stream adds to
+	// it: reasoning, reply text and tool call arguments as they arrive.
+	OnDraft func(draft Draft)
+	// OnMessage reports each entry as it joins the turn's record, the prompt
+	// first, so a watcher can show the conversation before it is stored.
+	OnMessage func(message Message)
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
@@ -108,6 +114,9 @@ type RoundStats struct {
 	// log can tell a model that thought long from one that wrote a lot.
 	ReplyRunes     int `json:"reply_runes,omitempty"`
 	ReasoningRunes int `json:"reasoning_runes,omitempty"`
+	// FirstToken is how long the model took to send its first words, so a
+	// slow start can be told apart from a long answer.
+	FirstToken time.Duration `json:"first_token_ns,omitempty"`
 	// FinishReason is the completion's own word for why it stopped: "length"
 	// means it ran into the output cap, "stop" means it chose to stop.
 	FinishReason string `json:"finish_reason,omitempty"`
@@ -149,10 +158,9 @@ func (m *Mutator) MutatePosts(
 	sys := systemPrompt()
 	usr, sections := userPromptSections(current, room, triggers)
 
-	res := Result{Site: current, Messages: []Message{
-		{Role: "system", Content: sys},
-		{Role: "user", Content: usr, Sections: sections},
-	}}
+	res := Result{Site: current}
+	m.record(&res, Message{Role: "system", Content: sys})
+	m.record(&res, Message{Role: "user", Content: usr, Sections: sections})
 
 	messages := []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(sys),
@@ -176,47 +184,53 @@ func (m *Mutator) MutatePosts(
 			m.OnRound(round + 1)
 		}
 		roundStart := time.Now()
-		resp, err := m.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:           openai.ChatModel(m.model),
-			Messages:        messages,
-			Tools:           toolParams(),
-			ToolChoice:      toolChoiceRequired,
+		reply, err := m.complete(ctx, openai.ChatCompletionNewParams{
+			Model:      openai.ChatModel(m.model),
+			Messages:   messages,
+			Tools:      toolParams(),
+			ToolChoice: toolChoiceRequired,
+			// Without include_usage a stream reports no tokens at all.
+			StreamOptions: openai.ChatCompletionStreamOptionsParam{
+				IncludeUsage: openai.Bool(true),
+			},
 			MaxTokens:       openai.Int(maxOutputTokens),
 			Temperature:     openai.Float(0.8),
 			ReasoningEffort: m.effort,
-		})
-		stats := RoundStats{Round: round + 1, Elapsed: time.Since(roundStart)}
+		}, round+1)
+		stats := RoundStats{
+			Round:      round + 1,
+			Elapsed:    time.Since(roundStart),
+			FirstToken: reply.FirstToken,
+		}
 		if err != nil {
 			m.reportRound(&res, stats)
 			return res, fmt.Errorf("chat completion: %w", err)
 		}
-		stats.PromptTokens = resp.Usage.PromptTokens
-		stats.CachedTokens = cachedTokens(resp.Usage)
-		stats.CompletionTokens = resp.Usage.CompletionTokens
-		if len(resp.Choices) == 0 {
+		stats.PromptTokens = reply.Usage.PromptTokens
+		stats.CachedTokens = cachedTokens(reply.Usage)
+		stats.CompletionTokens = reply.Usage.CompletionTokens
+		if !reply.Choices {
 			emptyRound = round + 1
 			m.reportRound(&res, stats)
 			break
 		}
 
-		reply := resp.Choices[0].Message
-		stats.FinishReason = resp.Choices[0].FinishReason
-		reasoning, hasReasoning := reasoningOf(reply)
+		stats.FinishReason = reply.FinishReason
 		entry := Message{
 			Role:      "assistant",
 			Content:   reply.Content,
-			Reasoning: reasoning,
+			Reasoning: reply.Reasoning,
 		}
 		stats.ReplyRunes = utf8.RuneCountInString(strings.TrimSpace(reply.Content))
-		stats.ReasoningRunes = utf8.RuneCountInString(reasoning)
-		if len(reply.ToolCalls) == 0 {
+		stats.ReasoningRunes = utf8.RuneCountInString(reply.Reasoning)
+		if len(reply.Calls) == 0 {
 			proseRound = round + 1
 			if stats.FinishReason == "length" {
 				truncatedRound = round + 1
 			}
 			m.reportRound(&res, stats)
 			entry.Stats = &stats
-			res.Messages = append(res.Messages, entry)
+			m.record(&res, entry)
 			break
 		}
 
@@ -232,21 +246,16 @@ func (m *Mutator) MutatePosts(
 				OfString: openai.String(content),
 			},
 		}
-		if hasReasoning {
+		if reply.HasReasoning {
 			// A provider that returns reasoning_content needs it back beside
 			// every tool call; DeepSeek's thinking mode rejects the next
 			// request without it. Providers that do not return it never see
 			// the field.
-			assistant.SetExtraFields(map[string]any{"reasoning_content": reasoning})
+			assistant.SetExtraFields(map[string]any{"reasoning_content": reply.Reasoning})
 		}
 		ed.rejected = 0
 		ed.badArguments = 0
-		for _, call := range reply.ToolCalls {
-			record := ToolCall{
-				ID:        call.ID,
-				Name:      call.Function.Name,
-				Arguments: call.Function.Arguments,
-			}
+		for _, record := range reply.Calls {
 			assistant.ToolCalls = append(assistant.ToolCalls, toolCallParam(record))
 			record.Result = ed.run(record.Name, record.Arguments)
 			entry.ToolCalls = append(entry.ToolCalls, record)
@@ -302,7 +311,7 @@ func (m *Mutator) MutatePosts(
 		}
 		m.reportRound(&res, stats)
 
-		res.Messages = append(res.Messages, entry)
+		m.record(&res, entry)
 		// A completion where no call parsed is not an edit to fix. Do not put
 		// it in the conversation: the next request repeats the one before it,
 		// with a fresh sample. The turn's own record keeps the broken round so
@@ -405,6 +414,14 @@ func (m *Mutator) reportRound(res *Result, stats RoundStats) {
 	res.Rounds = append(res.Rounds, stats)
 	if m.OnRoundDone != nil {
 		m.OnRoundDone(stats)
+	}
+}
+
+// record adds one entry to the turn's conversation and tells the listener.
+func (m *Mutator) record(res *Result, message Message) {
+	res.Messages = append(res.Messages, message)
+	if m.OnMessage != nil {
+		m.OnMessage(message)
 	}
 }
 
@@ -1206,18 +1223,4 @@ func writePage(b *promptBuilder, site Site) {
 	}
 	fmt.Fprintf(&b.Builder, "CHANGES SINCE THE LAST HEAL: %d\n", site.ChangesSinceHeal)
 	b.close()
-}
-
-// reasoningOf pulls "reasoning_content" out of an OpenAI-compatible reply. It
-// is not part of the official schema, so it lands in the extra fields.
-func reasoningOf(msg openai.ChatCompletionMessage) (string, bool) {
-	field, ok := msg.JSON.ExtraFields["reasoning_content"]
-	if !ok {
-		return "", false
-	}
-	var content string
-	if err := json.Unmarshal([]byte(field.Raw()), &content); err != nil {
-		return "", false
-	}
-	return content, true
 }

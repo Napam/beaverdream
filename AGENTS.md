@@ -103,6 +103,14 @@ prefer simple, readable code over production hardening.
   reason; calling `done` again keeps the page. It never rewrites markup.
 - Every completion sends `tool_choice: required`; `done` is the only way to
   end a turn with words.
+- A round whose tool arguments are not JSON, or carry the provider's own tool
+  markup, is a broken sample, not an edit to fix. It is resampled without
+  being appended to the conversation, because replaying the markup puts it
+  back in the prompt and the model copies it; five such rounds end the turn.
+  Valid JSON of the wrong shape is an ordinary rejection. A provider that
+  returns `reasoning_content` gets it back with every assistant tool call,
+  since its thinking mode requires it; without it the model loses the tool
+  format.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.

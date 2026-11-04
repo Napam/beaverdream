@@ -19,6 +19,11 @@ import (
 // stylesheet needs much less, and an unused cap costs nothing.
 const maxOutputTokens = 131072
 
+// maxBrokenArgumentRounds stops a provider that answers round after round
+// with tool calls whose arguments are not JSON. Such a round is not a wrong
+// edit the model can see and fix: the call arrived as raw tool markup.
+const maxBrokenArgumentRounds = 5
+
 // Mutator asks the model to rewrite the site.
 type Mutator struct {
 	client    openai.Client
@@ -112,6 +117,9 @@ type RoundStats struct {
 	// Deferred is the reason a done call was pushed back into another round.
 	// Empty when the round was not paused.
 	Deferred string `json:"deferred,omitempty"`
+	// Resampled is set when no call in the round had JSON arguments, so the
+	// round was dropped from the conversation and asked for again.
+	Resampled bool `json:"resampled,omitempty"`
 }
 
 // Mutate asks the model to rewrite the site in response to one trigger. The
@@ -153,6 +161,10 @@ func (m *Mutator) MutatePosts(
 
 	hiddenWarned := false
 	journalWarned := false
+	// Rounds that arrived entirely as unparseable arguments. They are
+	// resampled, never appended to the conversation; the cap is a backstop.
+	brokenArgumentRounds := 0
+	stoppedBadArguments := false
 	// Where the loop stopped when it did not stop on done. A model that
 	// answers without a tool call ends the turn in one round no matter how
 	// large the budget is, so the reason has to name the round, not the budget.
@@ -189,7 +201,7 @@ func (m *Mutator) MutatePosts(
 
 		reply := resp.Choices[0].Message
 		stats.FinishReason = resp.Choices[0].FinishReason
-		reasoning := reasoningOf(reply)
+		reasoning, hasReasoning := reasoningOf(reply)
 		entry := Message{
 			Role:      "assistant",
 			Content:   reply.Content,
@@ -208,12 +220,27 @@ func (m *Mutator) MutatePosts(
 			break
 		}
 
+		content := reply.Content
+		if strings.Contains(content, providerToolMarkup) {
+			// The model's prose can leak the same native markup as its
+			// arguments. Keep it in the stored message, but not in the next
+			// prompt.
+			content = ""
+		}
 		assistant := openai.ChatCompletionAssistantMessageParam{
 			Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-				OfString: openai.String(reply.Content),
+				OfString: openai.String(content),
 			},
 		}
+		if hasReasoning {
+			// A provider that returns reasoning_content needs it back beside
+			// every tool call; DeepSeek's thinking mode rejects the next
+			// request without it. Providers that do not return it never see
+			// the field.
+			assistant.SetExtraFields(map[string]any{"reasoning_content": reasoning})
+		}
 		ed.rejected = 0
+		ed.badArguments = 0
 		for _, call := range reply.ToolCalls {
 			record := ToolCall{
 				ID:        call.ID,
@@ -226,6 +253,8 @@ func (m *Mutator) MutatePosts(
 			stats.Tools = append(stats.Tools, record.Name)
 		}
 		stats.Rejected = ed.rejected
+		allBroken := ed.badArguments == len(entry.ToolCalls)
+		stats.Resampled = allBroken
 		entry.Stats = &stats
 
 		// A response that calls done next to a rejected call would end the
@@ -274,6 +303,18 @@ func (m *Mutator) MutatePosts(
 		m.reportRound(&res, stats)
 
 		res.Messages = append(res.Messages, entry)
+		// A completion where no call parsed is not an edit to fix. Do not put
+		// it in the conversation: the next request repeats the one before it,
+		// with a fresh sample. The turn's own record keeps the broken round so
+		// the admin still shows what arrived.
+		if allBroken {
+			brokenArgumentRounds++
+			if brokenArgumentRounds >= maxBrokenArgumentRounds {
+				stoppedBadArguments = true
+				break
+			}
+			continue
+		}
 		messages = append(
 			messages,
 			openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant},
@@ -298,6 +339,12 @@ func (m *Mutator) MutatePosts(
 		res.Changes = DescribeChanges(current, ed.site)
 	}
 	res.Changed = res.Changes != ""
+	if stoppedBadArguments && res.Reason == "" {
+		res.Reason = fmt.Sprintf(
+			"the model kept sending tool arguments that were not JSON, so the turn stopped after %d broken rounds",
+			brokenArgumentRounds,
+		)
+	}
 	// A reply that ran into the output cap is usually half a thought, so the
 	// cap is worth naming even when some prose made it out.
 	if res.Reason == "" && truncatedRound > 0 {
@@ -365,10 +412,18 @@ func (m *Mutator) reportRound(res *Result, stats RoundStats) {
 func (m *Mutator) MaxRounds() int { return m.maxRounds }
 
 // outcomeLine is one tool call as a single log line: the name, then what the
-// editor said back, flattened and clipped so the log stays readable.
+// editor said back, flattened and clipped so the log stays readable. A call
+// with broken arguments also shows the start of what arrived, since the
+// provider's markup is the clue.
 func outcomeLine(call ToolCall) string {
 	result := strings.Join(strings.Fields(call.Result), " ")
-	return call.Name + ": " + clip(result, 120)
+	line := call.Name + ": " + clip(result, 120)
+	if strings.HasPrefix(call.Result, "rejected: arguments") ||
+		strings.Contains(call.Result, "tool markup") {
+		arguments := strings.Join(strings.Fields(call.Arguments), " ")
+		line += " arguments=" + clip(arguments, 60)
+	}
+	return line
 }
 
 // cachedTokens reads the prompt cache hits. OpenAI reports them under
@@ -393,12 +448,20 @@ func cachedTokens(usage openai.CompletionUsage) int64 {
 // its results. Built from the accumulated fields rather than the raw JSON,
 // which some OpenAI-compatible servers leave empty.
 func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam {
+	arguments := call.Arguments
+	if !json.Valid([]byte(arguments)) || strings.Contains(arguments, providerToolMarkup) {
+		// A provider can return its native tool markup here instead of JSON.
+		// Replaying that text would put the markup in the next prompt, where
+		// the model copies it and the turn spirals. The result still says the
+		// call was rejected, and the stored call keeps what really arrived.
+		arguments = "{}"
+	}
 	return openai.ChatCompletionMessageToolCallUnionParam{
 		OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 			ID: call.ID,
 			Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
 				Name:      call.Name,
-				Arguments: call.Arguments,
+				Arguments: arguments,
 			},
 		},
 	}
@@ -1071,14 +1134,14 @@ func writePage(b *promptBuilder, site Site) {
 
 // reasoningOf pulls "reasoning_content" out of an OpenAI-compatible reply. It
 // is not part of the official schema, so it lands in the extra fields.
-func reasoningOf(msg openai.ChatCompletionMessage) string {
+func reasoningOf(msg openai.ChatCompletionMessage) (string, bool) {
 	field, ok := msg.JSON.ExtraFields["reasoning_content"]
 	if !ok {
-		return ""
+		return "", false
 	}
 	var content string
 	if err := json.Unmarshal([]byte(field.Raw()), &content); err != nil {
-		return ""
+		return "", false
 	}
-	return content
+	return content, true
 }

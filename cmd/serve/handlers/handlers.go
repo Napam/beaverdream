@@ -999,6 +999,9 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 	if stats.Deferred != "" {
 		attrs = append(attrs, slog.String("done_deferred", stats.Deferred))
 	}
+	if stats.Resampled {
+		attrs = append(attrs, slog.Bool("resampled", true))
+	}
 	h.logger.Info("Mutation round finished", attrs...)
 }
 

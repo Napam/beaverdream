@@ -839,7 +839,7 @@ templ turnGrowth(d TurnDetail) {
 				</div>
 			}
 		</div>
-		<p class={ adminMuted }>Reasoning is not sent back, so it never grows the request.</p>
+		<p class={ adminMuted }>Reasoning goes back with each tool call when the provider returns it, so it counts too.</p>
 	</div>
 }
 
@@ -859,6 +859,9 @@ templ roundCard(round RoundView) {
 		</div>
 		if round.Stats.Deferred != "" {
 			<p class="rounded-md border border-amber-400/40 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">done deferred: { round.Stats.Deferred }</p>
+		}
+		if round.Stats.Resampled {
+			<p class="rounded-md border border-rose-400/40 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-300">resampled: no call in this round had JSON arguments, so the model never saw it</p>
 		}
 		if round.Reasoning != "" {
 			<details data-preserve-attr="open">

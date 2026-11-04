@@ -22,6 +22,11 @@ const (
 	maxNotesLen    = 1000
 )
 
+// providerToolMarkup is DeepSeek's native tool-call delimiter, U+FF5C on each
+// side of DSML. A provider can leak it into the arguments; no call has a
+// reason to carry it, and applying it would put the markup in the page.
+const providerToolMarkup = "\uff5cDSML\uff5c"
+
 // StateKey is one model-declared shared value. Op decides how a visitor may
 // change it; the handler owns the actual application.
 type StateKey struct {
@@ -49,6 +54,9 @@ type editor struct {
 	// rejected counts rejected calls. The loop resets it before each
 	// response.
 	rejected int
+	// badArguments counts calls whose arguments did not parse, so the loop
+	// can tell a round of broken tool markup from a round of wrong edits.
+	badArguments int
 }
 
 func newEditor(site Site) *editor {
@@ -67,7 +75,24 @@ func (e *editor) run(name, arguments string) string {
 	return result
 }
 
+// argumentsRejected is what a call whose arguments did not parse gets back.
+// Broken JSON is a provider failure, so it counts toward the loop's cap: an
+// all-bad round is resampled, and a broken call in a mixed round is replayed
+// as an empty object. Valid JSON of the wrong shape is a normal model mistake
+// the model can fix from the message.
+func (e *editor) argumentsRejected(arguments string, err error) string {
+	if json.Valid([]byte(arguments)) {
+		return "rejected: arguments do not match the schema (" + err.Error() + ")"
+	}
+	e.badArguments++
+	return "rejected: arguments are not valid JSON and were dropped; send them again as one JSON object"
+}
+
 func (e *editor) apply(name, arguments string) string {
+	if strings.Contains(arguments, providerToolMarkup) {
+		e.badArguments++
+		return "rejected: the call carried tool markup, not plain JSON, and was dropped; send it again as one JSON object"
+	}
 	switch name {
 	case "set_site":
 		var in struct {
@@ -77,7 +102,7 @@ func (e *editor) apply(name, arguments string) string {
 			Footer *string `json:"footer"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
+			return e.argumentsRejected(arguments, err)
 		}
 		if in.CSS == nil && in.Header == nil && in.Board == nil && in.Footer == nil {
 			return "rejected: set_site needs at least one field"
@@ -130,7 +155,7 @@ func (e *editor) apply(name, arguments string) string {
 			New    string `json:"new"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
+			return e.argumentsRejected(arguments, err)
 		}
 		return e.edit(in.Target, in.Old, in.New)
 
@@ -139,7 +164,7 @@ func (e *editor) apply(name, arguments string) string {
 			Keys []stateKeyInput `json:"keys"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
+			return e.argumentsRejected(arguments, err)
 		}
 		schema, err := cleanStateSchema(in.Keys)
 		if err != nil {
@@ -154,7 +179,7 @@ func (e *editor) apply(name, arguments string) string {
 			Keys []journalKeyInput `json:"keys"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
-			return "rejected: arguments are not valid JSON"
+			return e.argumentsRejected(arguments, err)
 		}
 		// An omitted rule or max keeps the declared value. Otherwise adding a
 		// second key would silently reset the first one and replay its rows.
@@ -198,7 +223,9 @@ func (e *editor) apply(name, arguments string) string {
 			Reason string  `json:"reason"`
 			Notes  *string `json:"notes"`
 		}
-		_ = json.Unmarshal([]byte(arguments), &in)
+		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
+			return e.argumentsRejected(arguments, err)
+		}
 		e.done = true
 		e.reason = truncateRunes(strings.TrimSpace(in.Reason), 200)
 		if in.Notes != nil {

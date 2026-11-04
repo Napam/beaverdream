@@ -26,7 +26,7 @@ func storedTurn() (sqlc.ListWebmasterTurnsRow, []webmaster.Message) {
 		}},
 		{
 			Role:      "assistant",
-			Reasoning: "thinking that is never sent back",
+			Reasoning: "thinking that goes back with the call",
 			ToolCalls: []webmaster.ToolCall{
 				{
 					Name:      "edit",
@@ -77,7 +77,7 @@ func TestNewTurnRowSumsRounds(t *testing.T) {
 }
 
 // The inspector shows the prompt by its recorded sections, and each round
-// carries what earlier rounds appended, never the reasoning.
+// carries what earlier rounds appended, reasoning included.
 func TestNewTurnDetailLaysOutTheConversation(t *testing.T) {
 	run, messages := storedTurn()
 	d := NewTurnDetail(run, messages, 50)
@@ -107,7 +107,7 @@ func TestNewTurnDetailLaysOutTheConversation(t *testing.T) {
 			base,
 		)
 	}
-	carried := 0
+	carried := len(messages[2].Reasoning)
 	for _, call := range messages[2].ToolCalls {
 		carried += len(call.Name) + len(call.Arguments) + len(call.Result)
 	}
@@ -195,5 +195,16 @@ func TestTurnNeighboursStopsAtTheEnds(t *testing.T) {
 	view.Panel.Turn = 3
 	if older, newer := view.turnNeighbours(); older != 0 || newer != 0 {
 		t.Errorf("a turn off the list: older = %d, newer = %d", older, newer)
+	}
+}
+
+// A resampled round never reached the next request, so it adds nothing to
+// what the next round carried.
+func TestNewTurnDetailSkipsResampledRounds(t *testing.T) {
+	run, messages := storedTurn()
+	messages[2].Stats.Resampled = true
+	d := NewTurnDetail(run, messages, 50)
+	if d.Rounds[1].Carried != 0 {
+		t.Errorf("round 2 carried %d, want 0 after a resampled round", d.Rounds[1].Carried)
 	}
 }

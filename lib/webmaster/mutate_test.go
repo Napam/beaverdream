@@ -3,6 +3,7 @@ package webmaster
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -616,4 +617,358 @@ func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
 	if !strings.HasSuffix(prompt, "Do not write commentary outside tool calls.") {
 		t.Error("the closing instruction is not last")
 	}
+}
+
+// testCall is one tool call a scripted completion makes.
+type testCall struct {
+	name      string
+	arguments string
+}
+
+// writeCompletion answers one completion with these calls and, when set, the
+// reasoning the provider reports alongside them.
+func writeCompletion(w http.ResponseWriter, reasoning string, calls ...testCall) {
+	toolCalls := make([]any, len(calls))
+	for i, call := range calls {
+		toolCalls[i] = map[string]any{
+			"id":   fmt.Sprintf("call_%d", i+1),
+			"type": "function",
+			"function": map[string]any{
+				"name":      call.name,
+				"arguments": call.arguments,
+			},
+		}
+	}
+	message := map[string]any{
+		"role":       "assistant",
+		"content":    "",
+		"tool_calls": toolCalls,
+	}
+	if reasoning != "" {
+		message["reasoning_content"] = reasoning
+	}
+	reply, _ := json.Marshal(map[string]any{
+		"id":      "chatcmpl-test",
+		"object":  "chat.completion",
+		"created": 0,
+		"model":   "m",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       message,
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":     1,
+			"completion_tokens": 1,
+			"total_tokens":      2,
+		},
+	})
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(reply)
+}
+
+func writeToolCall(w http.ResponseWriter, name, arguments string) {
+	writeCompletion(w, "", testCall{name: name, arguments: arguments})
+}
+
+// brokenArguments is the shape a provider returns when it leaks its native
+// tool markup into the arguments instead of JSON.
+const brokenArguments = `{"target">footer</｜DSML｜: "`
+
+// A round whose calls all failed to parse is sampled again, not replayed: the
+// next request looks exactly like the one before it, so the provider's broken
+// markup never enters the conversation.
+func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
+	var requests [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			writeToolCall(w, "edit", brokenArguments)
+			return
+		}
+		writeToolCall(w, "done", `{"reason":"left it alone"}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("completions = %d, want 2", len(requests))
+	}
+	var second struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(requests[1], &second); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if len(second.Messages) != 2 {
+		t.Errorf(
+			"the resampled request has %d messages, want system and user",
+			len(second.Messages),
+		)
+	}
+	if strings.Contains(string(requests[1]), "DSML") {
+		t.Error("the next prompt carries the provider's tool markup")
+	}
+	if !res.Done {
+		t.Error("done after the broken round was not accepted")
+	}
+	// The turn still records what arrived, for the admin, and marks the round
+	// as one the model never saw.
+	if len(res.Messages) != 4 {
+		t.Fatalf("stored messages = %d, want the broken round and the done", len(res.Messages))
+	}
+	if !res.Rounds[0].Resampled || res.Messages[2].Stats.Resampled != true {
+		t.Error("the broken round is not marked as resampled")
+	}
+	stored := res.Messages[2].ToolCalls[0]
+	if stored.Arguments != brokenArguments {
+		t.Errorf("stored arguments = %q, want what arrived", stored.Arguments)
+	}
+	if !strings.Contains(stored.Result, "tool markup") {
+		t.Errorf("result = %q, want a markup rejection", stored.Result)
+	}
+}
+
+// A round with one good call and one broken one keeps the good edit and
+// replays the broken call as an empty object, so the model reads the
+// rejection without the markup.
+func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
+	var requests [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			writeCompletion(
+				w,
+				"",
+				testCall{
+					name:      "edit",
+					arguments: `{"target":"css","old":"","new":"h1{color:red}"}`,
+				},
+				testCall{name: "edit", arguments: brokenArguments},
+			)
+			return
+		}
+		writeToolCall(w, "done", `{"reason":"touched the css"}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("completions = %d, want 2", len(requests))
+	}
+	if strings.Contains(string(requests[1]), "DSML") {
+		t.Error("the next prompt carries the provider's tool markup")
+	}
+	if !strings.Contains(string(requests[1]), `"arguments":"{}"`) {
+		t.Error("the broken call was not replayed as an empty object")
+	}
+	if !res.Changed || !strings.Contains(res.Site.CSS, "color:red") {
+		t.Errorf("the good edit was dropped: changed %v, css %q", res.Changed, res.Site.CSS)
+	}
+	calls := res.Messages[2].ToolCalls
+	if len(calls) != 2 || calls[0].Result != "ok" ||
+		!strings.Contains(calls[1].Result, "tool markup") {
+		t.Errorf("stored calls = %+v", calls)
+	}
+}
+
+// Valid JSON of the wrong shape is a normal model mistake, not provider
+// corruption, so it is named as a schema error and does not count toward the
+// broken-arguments cap.
+func TestMutateNamesASchemaMismatch(t *testing.T) {
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rounds++
+		if rounds == 1 {
+			writeToolCall(w, "edit", `{"target":5}`)
+			return
+		}
+		writeToolCall(w, "done", `{"reason":"nothing to do"}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if got := res.Messages[2].ToolCalls[0].Result; !strings.HasPrefix(
+		got,
+		"rejected: arguments do not match the schema",
+	) {
+		t.Errorf("result = %q, want a schema mismatch", got)
+	}
+	if !res.Done || len(res.Rounds) != 2 {
+		t.Errorf("done %v after %d rounds, want done in round 2", res.Done, len(res.Rounds))
+	}
+}
+
+// Tool markup inside otherwise valid JSON is still provider corruption. The
+// call is dropped, never applied to the page, and a mixed round must not
+// replay it either: the markup would go straight back into the next prompt.
+func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
+	arguments := `{"target":"css","old":"","new":"h1{color:red}` + providerToolMarkup + `"}`
+	var requests [][]byte
+	rounds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests = append(requests, body)
+		rounds++
+		if rounds == 1 {
+			writeCompletion(
+				w,
+				"",
+				testCall{
+					name:      "edit",
+					arguments: `{"target":"css","old":"","new":"h1{color:blue}"}`,
+				},
+				testCall{name: "edit", arguments: arguments},
+			)
+			return
+		}
+		writeToolCall(w, "done", `{"reason":"dropped the markup"}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if !strings.Contains(res.Site.CSS, "color:blue") ||
+		strings.Contains(res.Site.CSS, providerToolMarkup) {
+		t.Errorf("css = %q, want the good edit and no markup", res.Site.CSS)
+	}
+	if strings.Contains(string(requests[1]), "DSML") {
+		t.Error("the next prompt carries the provider's tool markup")
+	}
+	if !strings.Contains(string(requests[1]), `"arguments":"{}"`) {
+		t.Error("the markup call was not replayed as an empty object")
+	}
+	if got := res.Messages[2].ToolCalls[1].Result; !strings.Contains(got, "tool markup") {
+		t.Errorf("result = %q, want a markup rejection", got)
+	}
+}
+
+// A provider that answers with broken arguments round after round gets a few
+// resamples, not the whole round budget.
+func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeToolCall(w, "edit", `{"target":`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 10, "")
+
+	res, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(res.Rounds) != maxBrokenArgumentRounds {
+		t.Errorf("rounds = %d, want %d", len(res.Rounds), maxBrokenArgumentRounds)
+	}
+	if !strings.Contains(res.Reason, "not JSON") {
+		t.Errorf("reason = %q, want it to name the broken arguments", res.Reason)
+	}
+	if res.Done || res.Changed {
+		t.Errorf("done %v, changed %v, want the page untouched", res.Done, res.Changed)
+	}
+}
+
+// DeepSeek's thinking mode needs the reasoning behind a tool call sent back
+// with it; without it the model loses the thread of its own tool format.
+func TestMutateReplaysDeepSeekReasoning(t *testing.T) {
+	var requests [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		requests = append(requests, body)
+		if len(requests) == 1 {
+			writeCompletion(
+				w,
+				"the css needs a heading color",
+				testCall{
+					name:      "edit",
+					arguments: `{"target":"css","old":"","new":"h1{color:red}"}`,
+				},
+			)
+			return
+		}
+		writeCompletion(
+			w,
+			"done",
+			testCall{name: "done", arguments: `{"reason":"colored the heading"}`},
+		)
+	}))
+	defer srv.Close()
+	m := New(
+		openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")),
+		"deepseek-v4.1-flash",
+		3,
+		"",
+	)
+
+	if _, err := m.Mutate(
+		context.Background(),
+		Site{Board: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("completions = %d, want 2", len(requests))
+	}
+	var second struct {
+		Messages []struct {
+			Role             string            `json:"role"`
+			ReasoningContent string            `json:"reasoning_content"`
+			ToolCalls        []json.RawMessage `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(requests[1], &second); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	for _, msg := range second.Messages {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			if msg.ReasoningContent != "the css needs a heading color" {
+				t.Errorf("reasoning_content = %q, want the round's reasoning", msg.ReasoningContent)
+			}
+			return
+		}
+	}
+	t.Error("the next request has no assistant tool call")
 }

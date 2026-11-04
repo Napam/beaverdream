@@ -162,9 +162,14 @@ func NewTurnDetail(
 			if message.Stats != nil {
 				round.Stats = *message.Stats
 			}
-			// The next round carries this reply and every result. Reasoning
-			// is not sent back.
-			carried += utf8.RuneCountInString(message.Content)
+			// The next round carries this reply, its reasoning when the
+			// provider returned one, and every result. A resampled round
+			// never reached the next request at all.
+			replayed := message.Stats == nil || !message.Stats.Resampled
+			if replayed {
+				carried += utf8.RuneCountInString(message.Content) +
+					utf8.RuneCountInString(message.Reasoning)
+			}
 			for _, call := range message.ToolCalls {
 				round.Calls = append(round.Calls, CallView{
 					Name:     call.Name,
@@ -174,9 +179,11 @@ func NewTurnDetail(
 					Rejected: strings.HasPrefix(call.Result, "rejected:"),
 					Deferred: strings.HasPrefix(call.Result, "not finished:"),
 				})
-				carried += utf8.RuneCountInString(call.Name) +
-					utf8.RuneCountInString(call.Arguments) +
-					utf8.RuneCountInString(call.Result)
+				if replayed {
+					carried += utf8.RuneCountInString(call.Name) +
+						utf8.RuneCountInString(call.Arguments) +
+						utf8.RuneCountInString(call.Result)
+				}
 			}
 			detail.Rounds = append(detail.Rounds, round)
 		}

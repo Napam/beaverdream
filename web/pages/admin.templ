@@ -177,6 +177,9 @@ type AdminView struct {
 	Board string
 	// Stream is the data-init that opens this page's stream.
 	Stream string
+	// Run is the turn in flight, for the inspector to show before the
+	// conversation is stored. Nil when nothing runs.
+	Run *RunProgress
 }
 
 // adminSignals are the page's local signals: which code tab of the current
@@ -333,7 +336,7 @@ templ turnsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
 		@AdminHistory(view.Turns, view.Panel.Turn)
-		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer)
+		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run)
 	</div>
 }
 
@@ -611,7 +614,11 @@ templ AdminHistory(turns []TurnRow, picked int64) {
 								{ short(row.PromptTokens) } in
 							}
 						</span>
-						<span class="w-12 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">{ millis(row.Run.DurationMs) }</span>
+						<span class="w-12 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
+							if row.Run.Status != "running" {
+								{ millis(row.Run.DurationMs) }
+							}
+						</span>
 					</a>
 				</li>
 			}
@@ -633,7 +640,7 @@ templ statusBadge(status string) {
 // AdminTurn is the inspector, with the turns either side of it. Following the
 // newest, the stream patches it when a run ends; a picked turn stays as it was
 // loaded.
-templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64) {
+templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64, run *RunProgress) {
 	<div id="admin-turn">
 		if detail == nil {
 			<div class={ adminCard }>
@@ -652,7 +659,7 @@ templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64) {
 					<a href="/admin/turns" data-on:click={ navTo("/admin/turns") } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
 				}
 			</div>
-			@turnInspector(*detail)
+			@turnInspector(*detail, run)
 		}
 	</div>
 }
@@ -684,13 +691,11 @@ templ stepTurn(id int64, older bool) {
 	}
 }
 
-templ turnInspector(d TurnDetail) {
+templ turnInspector(d TurnDetail, run *RunProgress) {
 	<div class="flex flex-col gap-4">
 		@turnHeader(d)
 		if d.Row.Run.Status == "running" {
-			<div class={ adminCard }>
-				<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
-			</div>
+			@turnRunning(d, run)
 		} else if !d.Stored {
 			<div class={ adminCard }>
 				<p class="text-sm text-gray-500 dark:text-neutral-400">No conversation was stored for this turn.</p>
@@ -707,6 +712,42 @@ templ turnInspector(d TurnDetail) {
 	</div>
 }
 
+// turnRunning is the inspector before the conversation is stored. It shows
+// the rounds as they finish, with what each one cost and what its tools
+// returned, then the stored version replaces it when the turn lands.
+templ turnRunning(d TurnDetail, run *RunProgress) {
+	if run == nil || run.TurnID != d.Row.Run.ID {
+		<div class={ adminCard }>
+			<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
+		</div>
+	} else {
+		<div class={ adminCard + " flex flex-col gap-1" }>
+			<div class="flex flex-wrap items-center gap-2">
+				<span class={ adminLabel }>in flight</span>
+				if len(run.Rounds) >= run.Round {
+					<span class={ adminChip }>round { itoa(run.Round) } done, storing</span>
+				} else {
+					<span class={ adminChip }>round { itoa(run.Round) } with the model</span>
+				}
+				<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
+				if len(run.Authors) > 0 {
+					<span class={ adminChip }>{ strings.Join(run.Authors, ", ") }</span>
+				}
+			</div>
+			if len(run.Rounds) == 0 {
+				<p class="text-sm text-gray-500 dark:text-neutral-400">Waiting for the first round. Its cost and calls show here as soon as it returns.</p>
+			} else {
+				<p class="text-sm text-gray-500 dark:text-neutral-400">
+					{ plural(len(run.Rounds), "round") } done. The conversation and the prompt sections are stored when the turn ends.
+				</p>
+			}
+		</div>
+		for _, round := range run.LiveRounds() {
+			@roundCard(round)
+		}
+	}
+}
+
 templ turnHeader(d TurnDetail) {
 	<div class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -719,7 +760,9 @@ templ turnHeader(d TurnDetail) {
 			<span class="ml-auto font-mono text-xs text-gray-500 dark:text-neutral-500">{ clock(d.Row.Run.CreatedAt) } UTC</span>
 		</div>
 		<div class="flex flex-wrap gap-2">
-			<span class={ adminChip }>{ millis(d.Row.Run.DurationMs) }</span>
+			if d.Row.Run.Status != "running" {
+				<span class={ adminChip }>{ millis(d.Row.Run.DurationMs) }</span>
+			}
 			<span class={ adminChip }>{ plural(d.Row.Rounds, "round") }</span>
 			<span class={ adminChip }>{ short(d.Row.PromptTokens) } in · { ratio(d.Row.CachedTokens, d.Row.PromptTokens) } cached</span>
 			<span class={ adminChip }>{ short(d.Row.CompletionTokens) } out</span>
@@ -727,11 +770,17 @@ templ turnHeader(d TurnDetail) {
 				<span class={ adminChip + " text-red-700 dark:text-red-400" }>{ plural(d.Row.Rejected, "rejected call") }</span>
 			}
 		</div>
-		<div class="grid gap-3 md:grid-cols-3">
-			@labelled("answered", d.Row.Trigger)
-			@labelled("said", d.Row.Run.Said)
-			@labelled("changed", d.Row.Run.Changes)
-		</div>
+		if d.Row.Run.Status == "running" {
+			if d.Row.Trigger != "" {
+				@labelled("answered", d.Row.Trigger)
+			}
+		} else {
+			<div class="grid gap-3 md:grid-cols-3">
+				@labelled("answered", d.Row.Trigger)
+				@labelled("said", d.Row.Run.Said)
+				@labelled("changed", d.Row.Run.Changes)
+			</div>
+		}
 		if d.Row.Run.ErrorText != "" {
 			<pre class={ adminPre + " bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400" }>{ d.Row.Run.ErrorText }</pre>
 		}

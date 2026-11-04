@@ -106,7 +106,7 @@ func (h *Handlers) syncAdmin(
 			}
 		}
 	case pages.PageTurns:
-		if t&(topicSite|topicTurns) != 0 {
+		if t&(topicSite|topicTurns|topicBusy) != 0 {
 			if err := h.patchAdminTurns(ctx, sse, panel.Turn); err != nil {
 				return err
 			}
@@ -198,7 +198,7 @@ func (h *Handlers) patchAdminMetrics(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 ) error {
-	turns, _, err := h.adminTurns(ctx, -1)
+	turns, _, err := h.adminTurns(ctx, -1, nil, false)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
@@ -218,7 +218,8 @@ func (h *Handlers) patchAdminTurns(
 	if picked > 0 {
 		pick = -1
 	}
-	turns, latest, err := h.adminTurns(ctx, pick)
+	run := h.runProgress()
+	turns, latest, err := h.adminTurns(ctx, pick, run, picked == 0)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
@@ -239,7 +240,12 @@ func (h *Handlers) patchAdminTurns(
 	if len(turns) > 1 {
 		older = turns[1].Run.ID
 	}
-	return h.patchAdmin(ctx, sse, "admin-turn", pages.AdminTurn(latest, true, older, 0))
+	return h.patchAdmin(
+		ctx,
+		sse,
+		"admin-turn",
+		pages.AdminTurn(latest, true, older, 0, run),
+	)
 }
 
 // patchAdminBudget brings the compaction budget forward.

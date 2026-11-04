@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -548,4 +550,115 @@ func TestAdminRedirectsToItsOwnPort(t *testing.T) {
 	if got := h.BoardURL(req); got != "http://172.29.101.116:6930/" {
 		t.Errorf("board URL = %q", got)
 	}
+}
+
+// A turn in flight shows its finished rounds on the turns page before the
+// conversation is stored, then the stored turn replaces them when it lands.
+func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(release) }) }
+	h, queries := setupWithModel(
+		t,
+		handlers.Config{AdminToken: testAdminToken},
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) >= 2 {
+					<-release
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+	)
+	// After the server's cleanup, so a fatal before stop cannot leave a held
+	// call blocking httptest.Server.Close.
+	t.Cleanup(stop)
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockbadedit show some progress"}})
+
+	// The first round is rejected and its done deferred, so the worker asks
+	// again. That second call is held here, with round one already recorded.
+	var body string
+	waitFor(t, "the running turn's first round", func() bool {
+		if calls.Load() < 2 {
+			return false
+		}
+		body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+		return strings.Contains(body, "in flight")
+	})
+	for _, want := range []string{
+		"in flight",
+		"round 2 with the model",
+		"round 1",
+		"rejected",
+		"old text not found",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the running inspector is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "what the model read") {
+		t.Error("the running inspector shows a stored conversation")
+	}
+
+	stop()
+	waitFor(t, "the turn to finish", func() bool {
+		turns, err := queries.ListWebmasterTurns(context.Background(), 1)
+		return err == nil && len(turns) == 1 && turns[0].Status != "running"
+	})
+	body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	if strings.Contains(body, "in flight") {
+		t.Error("the finished inspector still shows the live view")
+	}
+	if !strings.Contains(body, "what the model read") {
+		t.Error("the finished inspector did not replace the live rounds")
+	}
+	// The stored turn has two rounds. Folding the live ones in as well would
+	// double the count while the finish transaction and endRun overlap.
+	if !strings.Contains(body, "2 rounds") || strings.Contains(body, "4 rounds") {
+		t.Error("the finished turn counted its rounds twice")
+	}
+}
+
+// The turns stream carries a round as soon as it finishes, then the stored
+// turn when the run lands, so the page never waits for the whole conversation.
+func TestAdminLivePushesARunningRound(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	var once sync.Once
+	stop := func() { once.Do(func() { close(release) }) }
+	h, _ := setupWithModel(
+		t,
+		handlers.Config{AdminToken: testAdminToken},
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) >= 2 {
+					<-release
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+	)
+	// After the server's cleanup, so a fatal before stop cannot leave a held
+	// call blocking httptest.Server.Close.
+	t.Cleanup(stop)
+	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live.next(t, []string{`id="admin-turn"`, "No turns yet"})
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockbadedit stream progress"}})
+	live.next(t, []string{
+		`id="admin-turn"`,
+		"in flight",
+		"round 1",
+		"rejected",
+		"old text not found",
+	})
+
+	stop()
+	live.next(t, []string{
+		`id="admin-turn"`,
+		"what the model read",
+		"mockbadedit stream progress",
+	})
 }

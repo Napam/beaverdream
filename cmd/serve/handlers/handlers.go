@@ -15,6 +15,7 @@ import (
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/Napam/beaverdream/web/pages"
 )
 
 const (
@@ -67,12 +68,15 @@ type Config struct {
 }
 
 // runState is what the live endpoint and the admin panel show while a
-// mutation is in flight.
+// mutation is in flight. Rounds holds the completions that have finished, so
+// the turn inspector can show them before the conversation is stored.
 type runState struct {
-	Kind    string    `json:"kind"`
-	Authors []string  `json:"authors,omitempty"`
-	Round   int       `json:"round"`
-	Since   time.Time `json:"since"`
+	Kind    string                 `json:"kind"`
+	Authors []string               `json:"authors,omitempty"`
+	Round   int                    `json:"round"`
+	Since   time.Time              `json:"since"`
+	TurnID  int64                  `json:"turn_id,omitempty"`
+	Rounds  []webmaster.RoundStats `json:"-"`
 }
 
 // Handlers serves the board and the admin panel.
@@ -338,6 +342,7 @@ func (h *Handlers) mutateHeld(
 	if err != nil {
 		return webmaster.Result{}, fmt.Errorf("start turn: %w", err)
 	}
+	h.setRunningTurn(turn.ID)
 
 	postIDs := make([]int64, 0, len(triggers))
 	authors := make([]string, 0, len(triggers))
@@ -494,6 +499,9 @@ func (h *Handlers) mutateHeld(
 		status = "error"
 	} else {
 		finished = true
+		// The conversation is stored now, so the inspector can drop the live
+		// rounds before compaction runs.
+		h.finishRunningTurn()
 		if versionID.Valid {
 			h.setVersion(versionID.Int64)
 			if oldest, ok := oldestPostTime(triggerPosts); ok {
@@ -982,7 +990,37 @@ func (h *Handlers) setRunningRound(round int) {
 	h.hub.publish(topicBusy)
 }
 
+// setRunningTurn names the stored turn this run is writing, and tells the
+// turns page. The row exists from here on, so its inspector can show the
+// rounds as they finish.
+func (h *Handlers) setRunningTurn(id int64) {
+	h.liveMu.Lock()
+	if h.running != nil {
+		h.running.TurnID = id
+	}
+	h.liveMu.Unlock()
+	h.hub.publish(topicTurns)
+}
+
+// finishRunningTurn drops the live rounds once the conversation is stored,
+// and tells the turns page to read the stored turn. It runs before
+// compaction, so the inspector does not wait on the summarizer.
+func (h *Handlers) finishRunningTurn() {
+	h.liveMu.Lock()
+	if h.running != nil {
+		h.running.TurnID = 0
+		h.running.Rounds = nil
+	}
+	h.liveMu.Unlock()
+	h.hub.publish(topicTurns)
+}
+
 func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
+	h.liveMu.Lock()
+	if h.running != nil {
+		h.running.Rounds = append(h.running.Rounds, stats)
+	}
+	h.liveMu.Unlock()
 	attrs := []any{
 		slog.Int("round", stats.Round),
 		slog.Int64("ms", stats.Elapsed.Milliseconds()),
@@ -1003,6 +1041,10 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 		attrs = append(attrs, slog.Bool("resampled", true))
 	}
 	h.logger.Info("Mutation round finished", attrs...)
+	// The round's card can show before the turn is stored. Busy is enough:
+	// the turns page watches it, and the row itself was announced when it was
+	// reserved.
+	h.hub.publish(topicBusy)
 }
 
 // setVersion records the current version. A new one is published, so open
@@ -1049,6 +1091,22 @@ func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
 		running = &copied
 	}
 	return h.version, len(h.pending), running, h.lastError
+}
+
+// runProgress is the live turn for the inspector, or nil when nothing runs.
+func (h *Handlers) runProgress() *pages.RunProgress {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	if h.running == nil || h.running.TurnID == 0 {
+		return nil
+	}
+	return &pages.RunProgress{
+		TurnID:  h.running.TurnID,
+		Round:   h.running.Round,
+		Since:   h.running.Since,
+		Authors: append([]string(nil), h.running.Authors...),
+		Rounds:  append([]webmaster.RoundStats(nil), h.running.Rounds...),
+	}
 }
 
 // oldestPendingID is the lowest id among queued posts, or zero.

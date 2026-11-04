@@ -205,7 +205,7 @@ func (h *Handlers) loadAdmin(
 	}
 	switch panel.Page {
 	case pages.PageOverview:
-		turns, _, err := h.adminTurns(ctx, -1)
+		turns, _, err := h.adminTurns(ctx, -1, nil, false)
 		if err != nil {
 			return view, err
 		}
@@ -217,12 +217,21 @@ func (h *Handlers) loadAdmin(
 		view.Budget = h.adminBudget(ctx, site)
 		view.Summary, view.SummaryThrough = h.adminSummary(ctx)
 	case pages.PageTurns:
-		turns, detail, err := h.adminTurns(ctx, panel.Turn)
+		// The list always shows the running turn's live rounds. Only the page
+		// that follows the newest shows a live inspector; a picked turn stays
+		// as it was loaded. One snapshot covers the list row and the live
+		// rounds, so they cannot disagree.
+		run := h.runProgress()
+		following := panel.Turn == 0
+		turns, detail, err := h.adminTurns(ctx, panel.Turn, run, following)
 		if err != nil {
 			return view, err
 		}
 		view.Turns = turns
 		view.Turn = detail
+		if following {
+			view.Run = run
+		}
 	case pages.PageSite:
 		versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
 		if err != nil {
@@ -271,9 +280,13 @@ const (
 // adminTurns loads the newest turns as list rows, and one turn in full for the
 // inspector: the newest when pick is 0, the picked one otherwise, none when
 // pick is negative. Each conversation is decoded once, for its round stats.
+// A turn still running has no stored conversation yet, so its finished rounds
+// are folded in from memory.
 func (h *Handlers) adminTurns(
 	ctx context.Context,
 	pick int64,
+	live *pages.RunProgress,
+	foldDetail bool,
 ) ([]pages.TurnRow, *pages.TurnDetail, error) {
 	runs, err := h.queries.ListWebmasterTurns(ctx, adminTurnCount)
 	if err != nil {
@@ -302,7 +315,43 @@ func (h *Handlers) adminTurns(
 		d := pages.NewTurnDetail(run, h.turnMessages(run), webmaster.ToolsRunes())
 		detail = &d
 	}
+	h.addRunningRounds(rows, detail, live, foldDetail)
 	return rows, detail, nil
+}
+
+// addRunningRounds folds the running turn's finished rounds into its row and
+// its inspector, so both show progress before the conversation is stored. A
+// final row already has its own rounds and must not get them twice.
+func (h *Handlers) addRunningRounds(
+	rows []pages.TurnRow,
+	detail *pages.TurnDetail,
+	live *pages.RunProgress,
+	foldDetail bool,
+) {
+	if live == nil {
+		return
+	}
+	for i := range rows {
+		if rows[i].Run.ID == live.TurnID && rows[i].Run.Status == "running" {
+			addRounds(&rows[i], live.Rounds)
+		}
+	}
+	if foldDetail && detail != nil && detail.Row.Run.ID == live.TurnID &&
+		detail.Row.Run.Status == "running" {
+		addRounds(&detail.Row, live.Rounds)
+	}
+}
+
+// addRounds adds a running turn's rounds to a row. The stored row has none
+// until the turn finishes.
+func addRounds(row *pages.TurnRow, rounds []webmaster.RoundStats) {
+	for _, stats := range rounds {
+		row.Rounds++
+		row.PromptTokens += stats.PromptTokens
+		row.CachedTokens += stats.CachedTokens
+		row.CompletionTokens += stats.CompletionTokens
+		row.Rejected += stats.Rejected
+	}
 }
 
 // turnMessages decodes a stored conversation. A broken one shows as a turn

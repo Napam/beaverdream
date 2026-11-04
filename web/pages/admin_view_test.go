@@ -208,3 +208,42 @@ func TestNewTurnDetailSkipsResampledRounds(t *testing.T) {
 		t.Errorf("round 2 carried %d, want 0 after a resampled round", d.Rounds[1].Carried)
 	}
 }
+
+// A round that finished before the turn was stored shows what it cost and
+// what each call returned, with the same rejection tone as a stored round.
+func TestRunProgressLaysOutFinishedRounds(t *testing.T) {
+	run := RunProgress{
+		TurnID: 4,
+		Round:  2,
+		Rounds: []webmaster.RoundStats{{
+			Round:            1,
+			PromptTokens:     120,
+			CachedTokens:     80,
+			CompletionTokens: 12,
+			Tools:            []string{"edit", "done"},
+			Rejected:         1,
+			Outcomes: []string{
+				"edit: rejected: old text not found",
+				"done: not finished: a call above was rejected",
+			},
+		}},
+	}
+	rounds := run.LiveRounds()
+	if len(rounds) != 1 {
+		t.Fatalf("rounds = %d", len(rounds))
+	}
+	calls := rounds[0].Calls
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d", len(calls))
+	}
+	if calls[0].Name != "edit" || !calls[0].Rejected ||
+		calls[0].Result != "rejected: old text not found" {
+		t.Errorf("edit call = %+v", calls[0])
+	}
+	if calls[1].Name != "done" || calls[1].Rejected || !calls[1].Deferred {
+		t.Errorf("done call = %+v", calls[1])
+	}
+	if rounds[0].Stats.PromptTokens != 120 {
+		t.Errorf("stats = %+v", rounds[0].Stats)
+	}
+}

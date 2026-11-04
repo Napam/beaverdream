@@ -225,8 +225,11 @@ prefer simple, readable code over production hardening.
   field for scripts. Never a query parameter, and never the token in a page or
   a URL. Admin pages and actions answer Datastar with `#admin-body` patched in
   place (a plain request renders the whole page), so no redirect needs a
-  secret. Each page opens its own stream for its own panels. When
-  `ADMIN_TOKEN` is empty the server generates one and logs the password.
+  secret. Each page opens its own stream for its own panels. A turn's
+  conversation is only stored when it finishes, so the turns page shows the
+  rounds the running turn has finished from memory, then the stored version
+  replaces them. When `ADMIN_TOKEN` is empty the server generates one and logs
+  the password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining

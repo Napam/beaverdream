@@ -120,6 +120,41 @@ type TurnDetail struct {
 	Sectioned bool
 }
 
+// RunProgress is a turn still in flight. Its conversation is stored when the
+// turn ends, so the inspector shows the rounds the server has finished from
+// memory, and the stored version replaces them when it lands.
+type RunProgress struct {
+	TurnID  int64
+	Round   int
+	Since   time.Time
+	Authors []string
+	Rounds  []webmaster.RoundStats
+}
+
+// LiveRounds lays the finished rounds out as the inspector's cards. Only the
+// round stats and their clipped outcomes exist before the turn is stored, so
+// each call shows its name, result and rejection tone but no arguments.
+func (r RunProgress) LiveRounds() []RoundView {
+	rounds := make([]RoundView, 0, len(r.Rounds))
+	for _, stats := range r.Rounds {
+		round := RoundView{Stats: stats}
+		for _, line := range stats.Outcomes {
+			name, result, ok := strings.Cut(line, ": ")
+			if !ok {
+				name, result = "", line
+			}
+			round.Calls = append(round.Calls, CallView{
+				Name:     name,
+				Result:   result,
+				Rejected: strings.HasPrefix(result, "rejected:"),
+				Deferred: strings.HasPrefix(result, "not finished:"),
+			})
+		}
+		rounds = append(rounds, round)
+	}
+	return rounds
+}
+
 // NewTurnDetail lays out a turn's conversation for the inspector. toolsRunes
 // is the size of the tool definitions this build sends; older turns may have
 // sent different ones.
@@ -516,6 +551,12 @@ func (v AdminView) turnNeighbours() (older, newer int64) {
 }
 
 func turnTitle(row TurnRow) string {
+	if row.Run.Status == "running" {
+		return fmt.Sprintf("#%d %s · %s in (%s cached) · %s out · %d rounds",
+			row.Run.ID, row.Run.Status,
+			short(row.PromptTokens), short(row.CachedTokens), short(row.CompletionTokens),
+			row.Rounds)
+	}
 	return fmt.Sprintf("#%d %s · %s · %s in (%s cached) · %s out · %d rounds",
 		row.Run.ID, row.Run.Status, millis(row.Run.DurationMs),
 		short(row.PromptTokens), short(row.CachedTokens), short(row.CompletionTokens),

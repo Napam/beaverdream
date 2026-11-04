@@ -579,10 +579,15 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 								},
 								"max": map[string]any{
 									"type": "integer",
-									"description": "Rows this key keeps across all matches; older rows " +
-										"are deleted for everyone. Omit to keep the current value; a " +
-										"new key starts at 300, max 1000. At 16 updates a second " +
-										"from 5 players, 300 rows is 4 seconds.",
+									"description": fmt.Sprintf(
+										"Rows this key keeps across all matches; older rows "+
+											"are deleted for everyone. Omit to keep the current value; a "+
+											"new key starts at %d, max %d. At 16 updates a second "+
+											"from 5 players, %d rows is a few seconds of history.",
+										defaultJournalMax,
+										maxJournalRows,
+										defaultJournalMax,
+									),
 								},
 								"rules": map[string]any{
 									"type": "integer",
@@ -666,7 +671,8 @@ Tools:
   working post form.
 `
 
-const systemPromptMiddle = `- The board must always contain the literal placeholder {{posts}}, which is
+var systemPromptMiddle = fmt.Sprintf(
+	`- The board must always contain the literal placeholder {{posts}}, which is
   where the real posts are inserted. An edit that removes it is rejected.
 - To restyle a little, append rules: later rules win over earlier ones, so
   edit(css, "", ":root{--accent:#c00}") recolors the page. Prefer small edits
@@ -677,7 +683,7 @@ const systemPromptMiddle = `- The board must always contain the literal placehol
 - set_journal_schema(keys): declare append-only feeds the page writes and
   folds. Use it when a post asks for something people do together: a game, a
   chat, votes, a shared list. It is the only way to give the page real shared
-  behavior. Up to 6 keys, and every key must appear in the page.
+  behavior. Up to %d keys, and every key must appear in the page.
 - done(reason, notes): end your turn. reason is the one sentence you say to the
   room; it goes in the log and you read it back next turn. notes replaces your
   private notes to your future self. Omit notes to keep them.
@@ -788,21 +794,31 @@ Rules:
   start gentle again. You remember the old era even though the page does not.
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo or restore without asking you.
-`
+`,
+	maxJournalKeys,
+)
 
 // journalPrompt explains the one shared store the page can write to. It spells
 // out the shape and gives a working example: a small model cannot invent a
-// reducer, a seat rule and a poll from a one-line API description.
-const journalPrompt = `The journal:
+// reducer, a seat rule and a poll from a one-line API description. The numbers
+// come from the constants, so the prose cannot drift from the server.
+var journalPrompt = fmt.Sprintf(`The journal:
 - The journal is an append-only public log. You declare a key, the page appends
   small JSON payloads to it, and every visitor's page reads the rows in order
   and folds them into what it draws. That is how a page gets real shared
   behavior: a game, a chat, a vote, a shared list, a scoreboard.
 - Anyone can append anything, so the log is public and untrusted. Never put a
   secret in it. The reducer is the referee: ignore rows that are out of turn,
-  illegal or nonsense, so a bad row changes nothing for anyone.
+  illegal or nonsense. It cannot veto one thing: any visitor can open the next
+  match, which clears the board for everyone. Offer a rematch control only
+  once the game is over.
+- reduce re-folds every row in the window, so one row that makes it throw
+  stops the draw for everyone until that row is trimmed away or a new match
+  starts. Check a field's type before you use it, and never assume a payload
+  has the keys you expected.
 - Declare keys with set_journal_schema, and open each one in a page script
-  with bd.journal("KEY"). A done call whose page no longer calls bd.journal
+  with bd.journal("KEY"). bd.journal throws for a key you did not declare,
+  which stops that script. A done call whose page no longer calls bd.journal
   for a declared key is sent back once, because the rows behind it would be
   unreachable.
 - Raise rules only when old rows would mean something different to the new
@@ -813,60 +829,75 @@ const journalPrompt = `The journal:
   their writes until they do. A bump skips past any rules number stored rows
   already carry; the tool result says so.
 - Each key keeps only its newest max rows, and older rows are deleted for
-  everyone. At 16 updates a second from 5 players, 300 rows is 4 seconds. Split
-  a fast key from a slow one: motion in a key with a small max, and anything
-  that must last (seats, scores, chat) in its own key that is written rarely.
-  A tally that must last belongs in a shared state counter, not the journal.
-- The runtime is code-owned. Your page writes only reduce and render. This is
-  the shape for a game with slow seats and fast motion:
+  everyone. At 16 updates a second from 5 players, %d rows covers the last few
+  seconds. Split a fast key from a slow one: motion in a key with a small max,
+  and anything that must last (seats, scores, chat) in its own key that is
+  written rarely. A tally that must last belongs in a shared state counter, not
+  the journal.
+- The runtime is code-owned. Your page writes reduce and render, the send
+  cadence and the rematch rule. This is a game with slow seats and fast
+  motion:
 
 <script>
-var seats = bd.journal("seats")   // joins and scores: slow, max 300
+var seats = bd.journal("seats")   // joins and scores: slow, max %d
 var moves = bd.journal("moves")   // positions: fast, max 200
-var players = {}, pos = {}
+var score = { players: [], scores: {}, winner: '' }, pos = {}
+
 seats.start(function (rows) {
-  var s = {}
+  var s = { players: [], scores: {}, winner: '' }
   for (var i = 0; i < rows.length; i++) {
-    var c = rows[i].payload.color
-    if (typeof c === 'string') s[rows[i].visitor] = c   // the referee
+    var r = rows[i], p = r.payload || {}
+    if (p.join) {                                // the referee: two seats
+      if (!s.winner && s.players.length < 2 && s.players.indexOf(r.visitor) < 0) {
+        s.players.push(r.visitor)
+      }
+      continue
+    }
+    if (s.players.indexOf(r.visitor) < 0) continue
+    var n = Number(p.score)
+    if (n !== (s.scores[r.visitor] || 0) + 1) continue  // the referee: one at a time
+    s.scores[r.visitor] = n
+    if (n >= 10 && !s.winner) s.winner = r.visitor
   }
   return s
-}, function (s) { players = s })
+}, function (s) { score = s; showScore(s) })     // rematch only when s.winner
+
 moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
-    var r = rows[i]
-    var x = Number(r.payload.x), y = Number(r.payload.y)
-    if (isFinite(x) && isFinite(y)) p[r.visitor] = { x: x, y: y }  // the referee
+    var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
+    if (!isFinite(x) || !isFinite(y) || x < 0 || y < 0 || x > 100 || y > 100) continue
+    p[r.visitor] = { x: x, y: y }                // the referee: in bounds only
   }
   return p
 }, function (p) { pos = p })
-setInterval(function () {          // a local send timer, not a network poll
-  moves.append({ x: me.x, y: me.y })
-}, 60)
-function frame() { draw(pos, players); requestAnimationFrame(frame) }
+
+setInterval(function () { moves.append({ x: me.x, y: me.y }) }, 60)
+function frame() { draw(pos); requestAnimationFrame(frame) }
 requestAnimationFrame(frame)
+function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winner
 </script>
 
-  me and draw stand for your own local player and your canvas code.
+  me, draw and showScore stand for your own player, canvas and markup.
 - bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
   once; after that the server pushes every new row as it is written, so each
   open page redraws within a moment. reduce(rows) gets the rows of the current
-  match under the current rules, oldest first, plus your own row once append
-  resolves. It returns any state you like and render(state, feed) draws it.
-  Keep render cheap: it runs when rows arrive. It runs on the next frame, and
-  a hidden tab renders on a timer, so a title or sound set there still fires.
-  For animation, let render store the state and draw from a
-  requestAnimationFrame loop, easing other players toward their newest
-  position.
+  match under the current rules, oldest first, including your own once they
+  land. It returns any state you like and render(state, feed) draws it;
+  the feed is there too when you need feed.match or feed.rows. Keep render
+  cheap: it runs when rows arrive. It runs on the next frame, and a hidden tab
+  renders on a timer, so a title or sound set there still fires. For animation,
+  let render store the state and draw from a requestAnimationFrame loop,
+  easing other players toward their newest position.
   feed.append(payload) writes one row; feed.newMatch(payload) opens the next
   match. Both resolve with the stored row, or with null when the server refused
-  it (someone opened the next match first, or the visitor clicks too fast).
+  it (too many writes, a closed match, or a page that is out of date).
   They never throw for that, so no catch is needed. A row is {id, key, visitor,
-  payload, match, rules, at}. The payload must be a JSON object of at most 600
-  bytes.
-  Writes are metered per visitor and per key: about 20 a second, after a short
-  burst. Each key has its own allowance, so a click on another key is not
+  payload, match, rules, at}. at is the server's timestamp, so a player whose
+  newest row is much older than the newest row overall has probably left. The
+  payload must be a JSON object of at most %d bytes.
+  Writes are metered per visitor and per key: about %d a second, after a burst
+  of %d. Each key has its own allowance, so a click on another key is not
   dropped by a 60ms motion loop on this one. For motion, send an update every
   60ms or so and interpolate other players between updates; sending every frame
   just drops rows.
@@ -877,7 +908,7 @@ requestAnimationFrame(frame)
   server writes you a log line from the page's browser with the message. Only
   the current page reports; errors from replaced pages are dropped. Fix what
   it names.
-`
+`, defaultJournalMax, defaultJournalMax, maxJournalPayload, JournalRate, JournalBurst)
 
 const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write
   JavaScript. The viewer's name is in document.documentElement.dataset.name,

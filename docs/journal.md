@@ -93,6 +93,14 @@ illegal rows are ignored by every client, not rejected by the server.
 
 ## Known gaps
 
+- Anyone can open the next match. `newMatch` is not a row the reducer can
+  veto, so a page has to gate its control on the game being over; a visitor
+  with devtools can clear the board at any time. That is consistent with
+  sabotage being allowed, and the prompt says so.
+- A row that makes `reduce` throw stops the draw for everyone until it trims
+  out or the match ends. The runtime cannot skip a row because it only sees
+  the folded window, so the prompt tells the model to check each field's type.
+  The throw is reported once per failed draw.
 - One journal key cannot be created by a visitor, so a rematch is a boundary
   row inside a key that grows. `max` trims the oldest rows, which is fine for a
   match but would cut a long chat.

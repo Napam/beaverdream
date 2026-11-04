@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/lib/webmaster"
 )
 
 func TestPostAuthorsDeduplicates(t *testing.T) {
@@ -59,8 +60,8 @@ func TestJournalBucketKeepsUpWithAGameLoop(t *testing.T) {
 
 func TestJournalBucketBurstsThenRefills(t *testing.T) {
 	now := time.Now()
-	bucket := &journalBucket{tokens: journalBurst, at: now}
-	for i := 0; i < journalBurst; i++ {
+	bucket := &journalBucket{tokens: webmaster.JournalBurst, at: now}
+	for i := 0; i < webmaster.JournalBurst; i++ {
 		if !takeJournalToken(bucket, now) {
 			t.Fatalf("burst write %d was dropped", i+1)
 		}
@@ -77,7 +78,7 @@ func TestJournalBucketBurstsThenRefills(t *testing.T) {
 
 func TestAllowJournalWriteMetersEachVisitorAndKey(t *testing.T) {
 	h := &Handlers{}
-	for i := 0; i < journalBurst; i++ {
+	for i := 0; i < webmaster.JournalBurst; i++ {
 		if !h.allowJournalWrite("dave", "moves") {
 			t.Fatalf("burst write %d was refused", i+1)
 		}

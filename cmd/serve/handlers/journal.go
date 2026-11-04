@@ -29,12 +29,6 @@ const (
 	maxAlertsPerBurst = 5
 	alertBurstWindow  = 10 * time.Minute
 	alertRepeatWindow = 2 * time.Minute
-	// A game click is a write, so a plain cooldown would stall play. A small
-	// token bucket allows a burst, then settles at journalRate per second.
-	// Twenty a second leaves room for a 60ms game loop (about 17/s) without
-	// dropping an update when the timer drifts.
-	journalBurst = 30
-	journalRate  = 20
 )
 
 // journalBucket is one visitor's short-term write allowance for one key.
@@ -163,9 +157,6 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	// is a tab still running a replaced reducer: its payload would land under
 	// rules it does not follow, so it is refused and the page reloads.
 	rules := int64(def.Rules)
-	if rules <= 0 {
-		rules = 1
-	}
 	if in.Rules != rules {
 		writeStateError(w, http.StatusConflict, "the page is out of date")
 		return
@@ -276,9 +267,6 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 		match = 1
 	}
 	rules := int64(def.Rules)
-	if rules <= 0 {
-		rules = 1
-	}
 
 	out := make([]journalRow, len(rows))
 	for i, row := range rows {
@@ -341,7 +329,7 @@ func (h *Handlers) ClientError(w http.ResponseWriter, r *http.Request) {
 }
 
 // allowJournalWrite keeps one visitor from flooding one feed without stalling
-// a game: a burst is allowed, then it refills at journalRate per second.
+// a game: a burst is allowed, then it refills at the journal rate.
 func (h *Handlers) allowJournalWrite(visitor, key string) bool {
 	now := time.Now()
 	slot := visitor + "\x00" + key
@@ -359,7 +347,7 @@ func (h *Handlers) allowJournalWrite(visitor, key string) bool {
 	}
 	bucket, ok := h.journalBucket[slot]
 	if !ok {
-		bucket = &journalBucket{tokens: journalBurst, at: now}
+		bucket = &journalBucket{tokens: webmaster.JournalBurst, at: now}
 		h.journalBucket[slot] = bucket
 	}
 	return takeJournalToken(bucket, now)
@@ -367,10 +355,10 @@ func (h *Handlers) allowJournalWrite(visitor, key string) bool {
 
 // takeJournalToken refills a bucket and spends one token when it has one.
 func takeJournalToken(bucket *journalBucket, now time.Time) bool {
-	bucket.tokens += now.Sub(bucket.at).Seconds() * journalRate
+	bucket.tokens += now.Sub(bucket.at).Seconds() * webmaster.JournalRate
 	bucket.at = now
-	if bucket.tokens > journalBurst {
-		bucket.tokens = journalBurst
+	if bucket.tokens > webmaster.JournalBurst {
+		bucket.tokens = webmaster.JournalBurst
 	}
 	if bucket.tokens < 1 {
 		return false
@@ -419,11 +407,7 @@ func (h *Handlers) journalState(
 	}
 	state := make(map[string]webmaster.JournalState, len(schema))
 	for key, def := range schema {
-		rules := def.Rules
-		if rules <= 0 {
-			rules = 1
-		}
-		site := webmaster.JournalState{Match: 1, Rules: rules, Max: def.Max}
+		site := webmaster.JournalState{Match: 1, Rules: def.Rules, Max: def.Max}
 		if latest, err := h.queries.JournalLatest(ctx, key); err == nil {
 			if latest.CurrentMatch > 0 {
 				site.Match = int(latest.CurrentMatch)
@@ -433,7 +417,7 @@ func (h *Handlers) journalState(
 		if tail, err := h.queries.JournalTail(ctx, sqlc.JournalTailParams{
 			Key:   key,
 			Match: int64(site.Match),
-			Rules: int64(rules),
+			Rules: int64(site.Rules),
 			Limit: 3,
 		}); err == nil {
 			for i := len(tail) - 1; i >= 0; i-- {

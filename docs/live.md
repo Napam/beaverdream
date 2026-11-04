@@ -232,8 +232,10 @@ in SQLite and the stream reads everything after its cursor once per beat.
 - `lib/webmaster/live_test.go` runs the live script in node or bun: reload,
   typing wait, stale reload, posts, stylesheet, state.
 - `lib/webmaster/journal_runtime_test.go` runs the journal runtime in node or
-  bun: pushed rows, held rows, failed reads, rules changes, matches, resync,
-  refusals, the row window and one draw per frame.
+  bun: pushed rows, held rows, an append during a load, failed reads, rules
+  changes on one key, matches, an append that opens a new match, a throwing
+  reduce, a missing render, resync, refusals, the row window and one draw per
+  frame.
 - `cmd/serve/handlers/admin_live_test.go` covers each page's stream and its
   patches, a held turn the stream leaves alone, the turn page, the remembered
   login, the origin gate, the host split, signing out, and an action that

@@ -75,18 +75,20 @@ function reply(status, body) {
 const row = (id, match, rules) => ({
   id: id, key: 'moves', visitor: 'them', payload: { n: id }, match: match || 1, rules: rules || 1
 })
+const badRow = (id) => ({ ...row(id), payload: { boom: true } })
 
 // state lets a scenario change the server's answers between steps. hold
 // parks the next read until the scenario releases it.
-const state = { read: 'ok', post: 200, postError: '', hold: null }
+const state = { read: 'ok', post: 200, postError: '', postMatch: 1, hold: null }
 function server(url, method) {
   if (method === 'POST') {
-    if (state.post === 200) return reply(200, { id: 3, key: 'moves', visitor: 'me', payload: { n: 1 }, match: 1, rules: 1 })
+    if (state.post === 200) return reply(200, { id: 3, key: 'moves', visitor: 'me', payload: { n: 1 }, match: state.postMatch, rules: 1 })
     return reply(state.post, { error: state.postError })
   }
   if (state.read === 'fail') return reply(500, { error: 'could not read that' })
   if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
   if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
+  if (url.indexOf('/j/cut') >= 0) return reply(200, { match: 1, rules: 1, rows: [cutRow(1), cutRow(2)] })
   return reply(200, { match: 1, rules: 1, rows: [row(1), row(2)] })
 }
 
@@ -249,6 +251,63 @@ const steps = {
     } finally {
       document.hidden = false
     }
+  },
+  // The page's own append resolves while a read is out. It waits in held like
+  // any pushed row, survives the read landing without it, and is folded once.
+  appendDuringLoad: async () => {
+    const hold = {}
+    state.hold = hold
+    start()
+    results.push(await feed.append({ n: 1 }))
+    hold.release()
+    await settle()
+  },
+  // newMatch sends the next number. Its answer opens the new match, so the
+  // feed reads the new one whole instead of folding the row onto the old
+  // board.
+  newMatchAppend: async () => {
+    start()
+    await settle()
+    state.read = 'match'
+    state.postMatch = 2
+    results.push(await feed.newMatch({}))
+    await settle()
+  },
+  // A row that makes reduce throw reports once and leaves the last draw. A new
+  // match drops the row, so the feed recovers.
+  reduceThrows: async () => {
+    feed.start(
+      (rows) => {
+        for (const r of rows) if (r.payload && r.payload.boom) throw new Error('boom')
+        return rows.map((r) => r.id)
+      },
+      (s) => { draws.push(s) }
+    )
+    await settle()
+    window.bd._rows([badRow(5)])
+    await settle()
+    results.push(draws.length)
+    state.read = 'match'
+    window.bd._rows([row(6, 2)])
+    await settle()
+  },
+  // A rules change stops only the key whose page code is now wrong. The other
+  // key keeps folding until the live script reloads the page.
+  oneKeyStale: async () => {
+    start()
+    startCut()
+    await settle()
+    window.bd._rows([row(5, 1, 2)])
+    window.bd._rows([cutRow(11)])
+    await settle()
+    results.push([feed.stale, cut.stale])
+    results.push(cut.rows.map((r) => r.id))
+  },
+  // A feed started without render would never draw, so it is reported instead
+  // of failing silently.
+  startWithoutRender: async () => {
+    feed.start((rows) => rows.map((r) => r.id))
+    await settle()
   }
 }
 
@@ -469,6 +528,101 @@ func TestJournalRuntimeRendersInAHiddenTab(t *testing.T) {
 	}
 	if want := []int64{1, 2, 4}; !sameIDs(ids, want) {
 		t.Fatalf("rows in the hidden draw = %v, want %v", ids, want)
+	}
+}
+
+// An append that resolves while a read is out must wait in held like a pushed
+// row: the read may not include it, and it must not appear twice.
+func TestJournalRuntimeKeepsAnAppendThroughALoad(t *testing.T) {
+	got := runRuntime(t, "appendDuringLoad")
+
+	if want := []int64{1, 2, 3}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v: the append was lost or doubled", got.IDs, want)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the read landed")
+	}
+	reads := 0
+	for _, f := range got.Fetches {
+		if strings.HasSuffix(f, "since=0") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Errorf("reads = %d, want only the start (%v)", reads, got.Fetches)
+	}
+}
+
+// newMatch sends the next match number. The stream's echo opens that match,
+// so the feed reloads instead of folding the new row onto the old board.
+func TestJournalRuntimeOpensTheNextMatch(t *testing.T) {
+	got := runRuntime(t, "newMatchAppend")
+
+	if len(got.Sent) != 1 || got.Sent[0].Match != 2 {
+		t.Fatalf("sent = %+v, want one append asking for match 2", got.Sent)
+	}
+	if got.Match != 2 {
+		t.Fatalf("match = %d, want 2", got.Match)
+	}
+	if !sameIDs(got.IDs, []int64{6}) {
+		t.Fatalf("rows = %v, want only the new match's row", got.IDs)
+	}
+}
+
+// A row that makes reduce throw is reported once and leaves the last draw.
+// The next match drops it, so the feed recovers.
+func TestJournalRuntimeSurvivesAThrowingReduce(t *testing.T) {
+	got := runRuntime(t, "reduceThrows")
+
+	if len(got.Results) != 1 || string(got.Results[0]) != "1" {
+		t.Fatalf("draws after the bad row = %s, want 1: the bad row must not redraw", got.Results)
+	}
+	if len(got.Reports) != 1 || !strings.Contains(got.Reports[0].Message, "reduce(moves): boom") {
+		t.Fatalf("reports = %+v, want one reduce failure", got.Reports)
+	}
+	if want := []int64{6}; !sameIDs(got.LastDraw, want) {
+		t.Errorf("last draw = %v, want %v once the new match drops the row", got.LastDraw, want)
+	}
+	if got.Unhandled != 0 {
+		t.Errorf("unhandled rejections = %d, want 0", got.Unhandled)
+	}
+}
+
+// New rules expire only the feed whose reducer is now wrong. The other key
+// keeps folding until the live script reloads the page.
+func TestJournalRuntimeStopsOnlyTheStaleKey(t *testing.T) {
+	got := runRuntime(t, "oneKeyStale")
+
+	if len(got.Results) != 2 {
+		t.Fatalf("results = %s, want both stale flags and the other key's rows", got.Results)
+	}
+	var stale []bool
+	if err := json.Unmarshal(got.Results[0], &stale); err != nil {
+		t.Fatalf("decode stale flags: %v", err)
+	}
+	if len(stale) != 2 || !stale[0] || stale[1] {
+		t.Fatalf("stale flags = %v, want the changed key stale and the other live", stale)
+	}
+	var ids []int64
+	if err := json.Unmarshal(got.Results[1], &ids); err != nil {
+		t.Fatalf("decode ids: %v", err)
+	}
+	if want := []int64{1, 2, 11}; !sameIDs(ids, want) {
+		t.Fatalf("other key's rows = %v, want %v", ids, want)
+	}
+}
+
+// A feed started without a render function never draws, so the runtime
+// reports it instead of failing silently.
+func TestJournalRuntimeReportsAStartWithoutRender(t *testing.T) {
+	got := runRuntime(t, "startWithoutRender")
+
+	if len(got.Reports) != 1 ||
+		!strings.Contains(got.Reports[0].Message, "render is not a function") {
+		t.Fatalf("reports = %+v, want one about the missing render", got.Reports)
+	}
+	if got.Draws != 0 {
+		t.Errorf("draws = %d, want 0 without a render", got.Draws)
 	}
 }
 

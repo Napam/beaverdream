@@ -22,13 +22,12 @@ let reduce = null
 const feed = {
   start: function (r) { reduce = r },
   append: function () {},
+  newMatch: function () {},
   rows: []
 }
 global.bd = {
   visitor: 'a',
-  journal: function () { return feed },
-  keys: { moves: {} },
-  report: function () {}
+  journal: function () { return feed }
 }
 global.document = {
   getElementById: function () { return null },

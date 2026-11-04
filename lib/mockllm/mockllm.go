@@ -247,9 +247,14 @@ const GameScript = `<style>
     if (me < 0 && s.players.length < 2 && !s.winner) {
       html += '<button class="ttt-join" id="ttt-join">join</button>'
     }
+    if (me >= 0 && s.winner) {
+      html += '<button class="ttt-join" id="ttt-rematch">rematch</button>'
+    }
     box.innerHTML = html
     var join = document.getElementById('ttt-join')
     if (join) join.onclick = function () { feed.append({ join: 1 }) }
+    var rematch = document.getElementById('ttt-rematch')
+    if (rematch) rematch.onclick = function () { feed.newMatch({ join: 1 }) }
     var cells = box.querySelectorAll('.ttt-cell')
     for (var c = 0; c < cells.length; c++) {
       cells[c].onclick = function () {

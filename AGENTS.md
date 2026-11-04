@@ -177,7 +177,10 @@ prefer simple, readable code over production hardening.
   same newest `max` rows the server trims to, so a reloaded tab and a
   long-open tab fold the same history, and it folds a burst once per frame. A
   hidden tab renders on a timer, because it parks animation frames. The client
-  runtime is code-owned; the model writes `reduce` and `render` only.
+  runtime is code-owned: it owns the append, the fold, the row window, the
+  match and rules handling and the error reports. The model writes `reduce`,
+  `render`, its send cadence and when to offer the next match, so those are the
+  parts a bad page can get wrong.
   The log is public, so the reducer, not the server, rejects illegal rows.
 - A browser error is a turn, not a console line. `/x/err` records one `alert`
   turn per message per stretch, labelled as visitor-reported, and never

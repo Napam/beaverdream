@@ -15,6 +15,12 @@ const (
 	maxJournalRows    = 1000
 	defaultJournalMax = 300
 	maxJournalPayload = 600
+
+	// JournalBurst and JournalRate are one visitor's write allowance for one
+	// key: a burst of tokens, then a refill at JournalRate per second. The
+	// prompt quotes both, so they live here with the rest of the contract.
+	JournalBurst = 30
+	JournalRate  = 20
 )
 
 // JournalKey is one model-declared append-only log. Max bounds how many rows
@@ -52,14 +58,33 @@ type journalKeyInput struct {
 }
 
 // ParseJournalSchema reads the stored schema. A broken schema declares no
-// keys, so nothing is writable.
+// keys, so nothing is writable. Keys are normalized on the way out, so a
+// hand-edited zero cannot reach the trim or the rules stamp.
 func ParseJournalSchema(raw string) map[string]JournalKey {
 	schema := make(map[string]JournalKey)
 	if strings.TrimSpace(raw) == "" {
 		return schema
 	}
 	_ = json.Unmarshal([]byte(raw), &schema)
+	for name, key := range schema {
+		schema[name] = normalizeJournalKey(key)
+	}
 	return schema
+}
+
+// normalizeJournalKey fills the defaults the writer and the reader share: a
+// key with no max or rules gets the default, and the row cap applies.
+func normalizeJournalKey(key JournalKey) JournalKey {
+	if key.Max <= 0 {
+		key.Max = defaultJournalMax
+	}
+	if key.Max > maxJournalRows {
+		key.Max = maxJournalRows
+	}
+	if key.Rules <= 0 {
+		key.Rules = 1
+	}
+	return key
 }
 
 // cleanJournalSchema validates the model's journal keys and stores them as a
@@ -84,16 +109,7 @@ func cleanJournalSchema(keys []journalKeyInput) (string, error) {
 		}
 
 		key := JournalKey{Max: input.Max, Rules: input.Rules}
-		if key.Max <= 0 {
-			key.Max = defaultJournalMax
-		}
-		if key.Max > maxJournalRows {
-			key.Max = maxJournalRows
-		}
-		if key.Rules <= 0 {
-			key.Rules = 1
-		}
-		schema[name] = key
+		schema[name] = normalizeJournalKey(key)
 	}
 
 	data, err := json.Marshal(schema)
@@ -205,8 +221,8 @@ const JournalMatchClosed = "that match is not open"
 // asks the live script for a full reload instead of folding rows it does not
 // understand. A new match only reloads the feed.
 //
-// It is deliberately small. Every line here is a line the model does not have
-// to write, and the page it writes is read back on every turn.
+// It is deliberately small. Keep it that way: anything the model has to
+// reimplement is page code it reads back on every turn.
 const JournalRuntime = `<script>
 (function () {
   var tag = document.getElementById('bd-journal')
@@ -286,10 +302,6 @@ const JournalRuntime = `<script>
     this.stale = false
   }
 
-  Journal.prototype.same = function (row) {
-    return row.match === this.match && row.rules === this.rules
-  }
-
   // expire stops this feed for good and asks the live script for a full
   // reload: the server has rules this page's reducer was not written for.
   Journal.prototype.expire = function () {
@@ -306,7 +318,7 @@ const JournalRuntime = `<script>
       var row = rows[i]
       if (this.seen[row.id]) continue
       this.seen[row.id] = 1
-      if (this.same(row)) {
+      if (row.match === this.match && row.rules === this.rules) {
         this.rows.push(row)
         changed = true
       }
@@ -327,9 +339,9 @@ const JournalRuntime = `<script>
     for (var i = 0; i < drop.length; i++) delete this.seen[drop[i].id]
   }
 
-  // draw schedules one reduce and render for the next frame, so a burst of
-  // rows costs one draw instead of one per row.
-  Journal.prototype.draw = function () {
+  // queueDraw schedules one reduce and render for the next frame, so a burst
+  // of rows costs one draw instead of one per row.
+  Journal.prototype.queueDraw = function () {
     if (!this.render || this.pending) return
     var self = this
     this.pending = true
@@ -376,7 +388,7 @@ const JournalRuntime = `<script>
       }
       fresh.push(rows[j])
     }
-    if (this.add(fresh)) this.draw()
+    if (this.add(fresh)) this.queueDraw()
   }
 
   // load reads the whole feed. The rules number is not taken from the reply:
@@ -400,7 +412,7 @@ const JournalRuntime = `<script>
       self.seen = {}
       self.loaded = true
       self.add(d.rows || [])
-      self.draw()
+      self.queueDraw()
       if (held.length) self.receive(held)
     }, function () {
       var held = self.held
@@ -453,7 +465,11 @@ const JournalRuntime = `<script>
     return this.append(payload || {}, { match: this.match + 1 })
   }
 
+  // start opens the feed. Both functions are the page's job, so a missing one
+  // is reported instead of leaving a feed that never draws.
   Journal.prototype.start = function (reduce, render) {
+    if (typeof reduce !== 'function') report('start(' + this.key + '): reduce is not a function')
+    if (typeof render !== 'function') report('start(' + this.key + '): render is not a function')
     this.reduce = reduce
     this.render = render
     this.started = true
@@ -463,7 +479,6 @@ const JournalRuntime = `<script>
 
   window.bd = {
     visitor: visitor,
-    keys: keys,
     journal: function (key) {
       if (!Object.prototype.hasOwnProperty.call(keys, key)) {
         throw new Error('undeclared journal key: ' + key)
@@ -471,7 +486,6 @@ const JournalRuntime = `<script>
       if (!cache[key]) cache[key] = new Journal(key)
       return cache[key]
     },
-    report: report,
     // _rows and _resync are for the live stream. Rows carry their key; a key
     // no script opened is skipped.
     _rows: function (rows) {

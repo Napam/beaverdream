@@ -37,6 +37,44 @@ func TestCleanJournalSchema(t *testing.T) {
 	}
 }
 
+// Stored schemas are normalized on read, so a hand-edited zero cannot make
+// the server trim every row or stamp rules 0.
+func TestParseJournalSchemaNormalizesStoredKeys(t *testing.T) {
+	schema := ParseJournalSchema(`{"zero":{"max":0,"rules":0},"huge":{"max":5000,"rules":2}}`)
+
+	if schema["zero"].Max != defaultJournalMax {
+		t.Errorf("zero max = %d, want the default %d", schema["zero"].Max, defaultJournalMax)
+	}
+	if schema["zero"].Rules != 1 {
+		t.Errorf("zero rules = %d, want 1", schema["zero"].Rules)
+	}
+	if schema["huge"].Max != maxJournalRows {
+		t.Errorf("huge max = %d, want the cap %d", schema["huge"].Max, maxJournalRows)
+	}
+	if schema["huge"].Rules != 2 {
+		t.Errorf("huge rules = %d, want 2", schema["huge"].Rules)
+	}
+}
+
+// The prompt quotes the journal's limits, and each number is built from the
+// constant the server uses, so the prose cannot drift.
+func TestJournalPromptQuotesTheConstants(t *testing.T) {
+	prompt := systemPrompt()
+	for _, want := range []string{
+		fmt.Sprintf("most %d bytes", maxJournalPayload),
+		fmt.Sprintf("about %d a second", JournalRate),
+		fmt.Sprintf("of %d.", JournalBurst),
+		fmt.Sprintf("%d rows covers the last few", defaultJournalMax),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt is missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "%!") {
+		t.Error("prompt has a formatting error")
+	}
+}
+
 func TestCleanJournalSchemaRejects(t *testing.T) {
 	cases := map[string][]journalKeyInput{
 		"bad name":   {{Name: "Moves!"}},

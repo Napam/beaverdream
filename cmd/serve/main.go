@@ -280,6 +280,7 @@ func SetupAdminRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Post("/admin/site", h.AdminSite)
 	router.Get("/admin/live", h.AdminLive)
 	router.Post("/admin/mutate", h.AdminMutate)
+	router.Post("/admin/retry/{id}", h.RetryTurn)
 	router.Post("/admin/undo", h.UndoLast)
 	router.Post("/admin/heal", h.HealBoard)
 	router.Post("/admin/versions/{id}/restore", h.RestoreVersion)

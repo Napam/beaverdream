@@ -3,6 +3,13 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
+  /* Admin chrome sits tight, so the whole scale is half the stock radius. */
+  --radius-xs: 0.0625rem;
+  --radius-sm: 0.125rem;
+  --radius-md: 0.1875rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.375rem;
+
   --color-primary-50: oklch(98.4% 0.019 200.873);
   --color-primary-100: oklch(95.6% 0.045 203.388);
   --color-primary-200: oklch(91.7% 0.08 205.041);

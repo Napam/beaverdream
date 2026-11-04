@@ -707,6 +707,15 @@ func (v AdminView) turnNeighbours() (older, newer int64) {
 	return TurnNeighbours(v.Turns, v.Panel.Turn)
 }
 
+// turnAuthor is who the turn answered. Turns stored before the column held
+// that carry the constant "webmaster", which names nobody.
+func turnAuthor(row TurnRow) string {
+	if row.Run.Author == "webmaster" {
+		return ""
+	}
+	return row.Run.Author
+}
+
 func turnTitle(row TurnRow) string {
 	if row.Run.Status == "running" {
 		return fmt.Sprintf("#%d %s · %s in (%s cached) · %s out · %d rounds",

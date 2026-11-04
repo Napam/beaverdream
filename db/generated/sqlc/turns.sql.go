@@ -395,6 +395,59 @@ func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) 
 	return items, nil
 }
 
+const listPostsForTurn = `-- name: ListPostsForTurn :many
+SELECT
+  p.id, p.author, p.body, p.created_at
+FROM
+  posts p
+WHERE
+  p.id < ?1
+  AND p.id > COALESCE(
+    (
+      SELECT
+        MAX(t.id)
+      FROM
+        turns t
+      WHERE
+        t.kind = 'webmaster'
+        AND t.id < ?1
+    ),
+    0
+  )
+ORDER BY
+  p.id ASC
+`
+
+// The posts a webmaster turn answered: the ones between it and the webmaster
+// turn before it, which is the range the worker coalesced into that turn.
+func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, error) {
+	rows, err := q.db.QueryContext(ctx, listPostsForTurn, turnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Post
+	for rows.Next() {
+		var i Post
+		if err := rows.Scan(
+			&i.ID,
+			&i.Author,
+			&i.Body,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentPosts = `-- name: ListRecentPosts :many
 SELECT
   id, author, body, created_at
@@ -577,6 +630,24 @@ func (q *Queries) ListWebmasterTurns(ctx context.Context, limit int64) ([]ListWe
 		return nil, err
 	}
 	return items, nil
+}
+
+const previousWebmasterTurnID = `-- name: PreviousWebmasterTurnID :one
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  turns
+WHERE
+  kind = 'webmaster'
+  AND id < ?
+`
+
+// The webmaster turn before this one, or 0 when there is none.
+func (q *Queries) PreviousWebmasterTurnID(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, previousWebmasterTurnID, id)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const startTurn = `-- name: StartTurn :one

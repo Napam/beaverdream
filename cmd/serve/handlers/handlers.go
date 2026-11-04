@@ -303,9 +303,35 @@ func (h *Handlers) mutate(
 	instruction string,
 	triggerPost *sqlc.Post,
 ) (webmaster.Result, error) {
+	var triggers []sqlc.Post
+	if triggerPost != nil {
+		triggers = []sqlc.Post{*triggerPost}
+	}
+	return h.mutateBatch(ctx, kind, instruction, triggers)
+}
+
+// mutateBatch is mutate for a set of triggers: a coalesced burst, or the posts
+// a retried turn answered.
+func (h *Handlers) mutateBatch(
+	ctx context.Context,
+	kind string,
+	instruction string,
+	triggers []sqlc.Post,
+) (webmaster.Result, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.mutateLocked(ctx, kind, instruction, triggers)
+}
 
+// mutateLocked runs one mutation with h.mu held. A caller that has to read the
+// rows behind the triggers takes the lock itself, so a reset cannot slip
+// between the read and the run.
+func (h *Handlers) mutateLocked(
+	ctx context.Context,
+	kind string,
+	instruction string,
+	triggers []sqlc.Post,
+) (webmaster.Result, error) {
 	ctx, cancel := mutationContext(ctx)
 	defer cancel()
 	if !h.startRun(cancel) {
@@ -313,12 +339,7 @@ func (h *Handlers) mutate(
 	}
 	defer h.clearRun()
 
-	h.beginRun(kind, nil)
-
-	var triggers []sqlc.Post
-	if triggerPost != nil {
-		triggers = []sqlc.Post{*triggerPost}
-	}
+	h.beginRun(kind, postAuthors(triggers))
 	res, err := h.mutateHeld(ctx, kind, instruction, triggers)
 	h.endRun(err)
 	return res, err
@@ -351,13 +372,20 @@ func (h *Handlers) mutateHeld(
 	// Reserving the turn before reading the log is what makes the transcript
 	// honest: posts that arrive during this run get a higher id, so the next
 	// turn sees them after this one, where they belong.
+	//
+	// The author column names who the turn answers, so the admin panel can
+	// tell turns apart after they finish.
 	turnBody := ""
 	if kind == "admin" {
 		turnBody = instruction
 	}
+	authors := []string{"admin"}
+	if len(triggerPosts) > 0 {
+		authors = postAuthors(triggerPosts)
+	}
 	turn, err := h.queries.StartTurn(ctx, sqlc.StartTurnParams{
 		Kind:   webmaster.TurnWebmaster,
-		Author: "webmaster",
+		Author: strings.Join(authors, ", "),
 		Body:   turnBody,
 	})
 	if err != nil {
@@ -366,12 +394,10 @@ func (h *Handlers) mutateHeld(
 	h.setRunningTurn(turn.ID)
 
 	postIDs := make([]int64, 0, len(triggers))
-	authors := make([]string, 0, len(triggers))
 	for _, post := range triggers {
 		if post.ID > 0 {
 			postIDs = append(postIDs, post.ID)
 		}
-		authors = append(authors, post.Author)
 	}
 	startAttrs := []any{
 		slog.Int64("turn_id", turn.ID),

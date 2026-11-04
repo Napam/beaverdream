@@ -273,6 +273,13 @@ prefer simple, readable code over production hardening.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.
+- A retry of an errored turn is a new turn, never an edit of the failed row. An
+  admin instruction is retried from its stored `body`; a post-triggered turn
+  retries the posts between it and the webmaster turn before it, trimmed to
+  the newest `maxBatchPosts` like the worker, which is the batch that turn ran.
+  A retry of a retry has no posts of its own, so it walks back to the turn it
+  copied. A crash leaves no stored prompt, so the posts are read back from
+  `turns` rather than parsed out of the messages.
 - Heal puts the seed page back by copying it forward as a new row and
   recording a heal turn. It keeps posts and the webmaster's notes, clears shared
   state and the journal in the same transaction as that version, takes `h.mu`,

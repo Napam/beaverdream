@@ -41,6 +41,40 @@ ORDER BY
 LIMIT
   ?;
 
+-- name: ListPostsForTurn :many
+-- The posts a webmaster turn answered: the ones between it and the webmaster
+-- turn before it, which is the range the worker coalesced into that turn.
+SELECT
+  p.*
+FROM
+  posts p
+WHERE
+  p.id < sqlc.arg(turn_id)
+  AND p.id > COALESCE(
+    (
+      SELECT
+        MAX(t.id)
+      FROM
+        turns t
+      WHERE
+        t.kind = 'webmaster'
+        AND t.id < sqlc.arg(turn_id)
+    ),
+    0
+  )
+ORDER BY
+  p.id ASC;
+
+-- name: PreviousWebmasterTurnID :one
+-- The webmaster turn before this one, or 0 when there is none.
+SELECT
+  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+FROM
+  turns
+WHERE
+  kind = 'webmaster'
+  AND id < ?;
+
 -- name: ListPostsAfter :many
 -- The posts an open page has not shown yet, newest first, the order the board
 -- reads.

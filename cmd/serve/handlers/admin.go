@@ -591,6 +591,112 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// errNoRetryTurn is a retry whose id names no webmaster turn.
+var errNoRetryTurn = errors.New("no such webmaster turn")
+
+// RetryTurn runs an errored webmaster turn again as a new turn. An admin
+// instruction is sent as it was stored; a turn that answered posts answers the
+// same posts, found in the range the worker had coalesced into it. The failed
+// turn stays, so a retry that fails again can be retried from its page.
+func (h *Handlers) RetryTurn(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Bad turn id", http.StatusBadRequest)
+		return
+	}
+	panel := pages.Panel{Page: pages.PageTurns, Turn: id}
+
+	res, refusal, err := h.runRetry(r.Context(), id)
+	switch {
+	case errors.Is(err, errNoRetryTurn):
+		http.NotFound(w, r)
+	case err != nil:
+		h.adminDone(w, r, panel, "retry failed: "+err.Error())
+	case refusal != "":
+		h.adminDone(w, r, panel, refusal)
+	case res.Changed:
+		h.adminDone(w, r, pages.Panel{Page: pages.PageTurns}, "retried: "+res.Reason)
+	default:
+		h.adminDone(w, r, pages.Panel{Page: pages.PageTurns}, "retried, no change: "+res.Reason)
+	}
+}
+
+// runRetry reads the failed turn and its posts under h.mu, so a reset cannot
+// delete them between the read and the run. A refusal is a message for the
+// panel, not an error.
+func (h *Handlers) runRetry(
+	ctx context.Context,
+	id int64,
+) (webmaster.Result, string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	turn, err := h.queries.GetWebmasterTurn(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return webmaster.Result{}, "", errNoRetryTurn
+	}
+	if err != nil {
+		return webmaster.Result{}, "", fmt.Errorf("load turn: %w", err)
+	}
+	if turn.Status != "error" {
+		return webmaster.Result{}, "only a turn that errored can be retried", nil
+	}
+	if h.overDailyCap(ctx) {
+		return webmaster.Result{}, "daily mutation cap reached", nil
+	}
+
+	kind, instruction := "post", ""
+	var triggers []sqlc.Post
+	if strings.TrimSpace(turn.Body) != "" {
+		kind, instruction = "admin", turn.Body
+	} else {
+		triggers, err = h.postsAnsweredBy(ctx, id)
+		if err != nil {
+			return webmaster.Result{}, "", err
+		}
+		if len(triggers) == 0 {
+			return webmaster.Result{}, "nothing to retry: the turn has no instruction and no posts", nil
+		}
+	}
+
+	res, err := h.mutateLocked(ctx, kind, instruction, triggers)
+	return res, "", err
+}
+
+// postsAnsweredBy is the batch a webmaster turn answered: the posts between it
+// and the webmaster turn before it, trimmed to the newest maxBatchPosts like
+// the worker trims a burst. A turn that retried another has no posts of its
+// own, so it walks back to the turn it copied.
+func (h *Handlers) postsAnsweredBy(ctx context.Context, id int64) ([]sqlc.Post, error) {
+	for range maxRetryWalkBack {
+		posts, err := h.queries.ListPostsForTurn(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("list the turn's posts: %w", err)
+		}
+		if len(posts) > maxBatchPosts {
+			posts = posts[len(posts)-maxBatchPosts:]
+		}
+		if len(posts) > 0 {
+			return posts, nil
+		}
+		previous, err := h.queries.PreviousWebmasterTurnID(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("find the turn before it: %w", err)
+		}
+		if previous == 0 {
+			return nil, nil
+		}
+		id = previous
+	}
+	return nil, nil
+}
+
+// maxRetryWalkBack bounds the walk through retries of retries.
+const maxRetryWalkBack = 20
+
 // RestoreVersion copies an old version forward as a new one. History stays
 // append-only, so a restore is itself undoable.
 func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {

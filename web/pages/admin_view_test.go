@@ -10,6 +10,22 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
 
+// Turns made before the author column named who they answered carry the
+// constant "webmaster", which the panel must not show as a person.
+func TestTurnAuthorHidesTheOldConstant(t *testing.T) {
+	for author, want := range map[string]string{
+		"dave, kit": "dave, kit",
+		"admin":     "admin",
+		"webmaster": "",
+		"":          "",
+	} {
+		row := TurnRow{Run: sqlc.ListWebmasterTurnsRow{Author: author}}
+		if got := turnAuthor(row); got != want {
+			t.Errorf("turnAuthor(%q) = %q, want %q", author, got, want)
+		}
+	}
+}
+
 func storedTurn() (sqlc.ListWebmasterTurnsRow, []webmaster.Message) {
 	user := "COMPACTED HISTORY:\n(nothing)\n\nNEW POST #4 from dave:\nmake it pink\nThe poster is looking at this post.\n"
 	split := strings.Index(user, "NEW POST")

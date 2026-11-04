@@ -23,6 +23,7 @@ import (
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/Napam/beaverdream/web/pages"
 	"github.com/go-chi/chi/v5"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -129,6 +130,21 @@ func postAdmin(
 	req.Header.Set("X-Admin-Token", testAdminToken)
 	rec := httptest.NewRecorder()
 	h(rec, req)
+	return rec
+}
+
+// postAdminAt is postAdmin for a route that carries an {id} parameter.
+func postAdminAt(
+	t *testing.T,
+	h http.HandlerFunc,
+	path string,
+	id string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.Header.Set("X-Admin-Token", testAdminToken)
+	rec := httptest.NewRecorder()
+	h(rec, withURLParam(req, "id", id))
 	return rec
 }
 
@@ -1788,4 +1804,211 @@ func TestResetCancelsTheRunningTurn(t *testing.T) {
 		current, err := queries.CurrentSite(ctx)
 		return err == nil && current.ID == 2
 	})
+}
+
+// An errored admin turn can be run again. The retry is a new turn with the
+// same instruction; the failed turn stays in history untouched.
+func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
+		Kind:   webmaster.TurnWebmaster,
+		Author: "admin",
+		Body:   "mockedit please",
+	})
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	if err := queries.FailTurn(ctx, sqlc.FailTurnParams{
+		ErrorText: "the model fell over",
+		ID:        turn.ID,
+	}); err != nil {
+		t.Fatalf("fail turn: %v", err)
+	}
+
+	before, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+
+	id := strconv.FormatInt(turn.ID, 10)
+	rec := postAdminAt(t, h.RetryTurn, "/admin/retry/"+id, id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry: status = %d", rec.Code)
+	}
+
+	after, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site after the retry: %v", err)
+	}
+	if after.ID <= before.ID {
+		t.Fatalf("version = %d, want it past %d", after.ID, before.ID)
+	}
+
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("turns = %d, err = %v, want the failed turn and its retry", len(runs), err)
+	}
+	if runs[0].ID == turn.ID || runs[0].Status != "changed" || runs[0].Body != "mockedit please" {
+		t.Errorf("retry = %+v, want a changed turn answering the same instruction", runs[0])
+	}
+	if runs[1].ID != turn.ID || runs[1].Status != "error" {
+		t.Errorf("the failed turn changed: %+v", runs[1])
+	}
+
+	// Only an errored turn offers the button.
+	page := func(id int64) string {
+		req := httptest.NewRequest(http.MethodGet, "/admin/turns/"+strconv.FormatInt(id, 10), nil)
+		req.Header.Set("X-Admin-Token", testAdminToken)
+		rec := httptest.NewRecorder()
+		h.AdminTurn(rec, withURLParam(req, "id", strconv.FormatInt(id, 10)))
+		return rec.Body.String()
+	}
+	if !strings.Contains(page(turn.ID), "/admin/retry/"+id) {
+		t.Error("the errored turn has no retry button")
+	}
+	if strings.Contains(page(runs[0].ID), "/admin/retry/") {
+		t.Error("a turn that did not error offers a retry")
+	}
+}
+
+// A post-triggered turn answers exactly the posts it had, not the ones that
+// arrived while it ran. The board as it is now is what the retry rewrites.
+func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "mockedit make it pink",
+	}); err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
+		Kind:   webmaster.TurnWebmaster,
+		Author: "dave",
+	})
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "kit",
+		Body:   "mockpatch later",
+	}); err != nil {
+		t.Fatalf("create later post: %v", err)
+	}
+	if err := queries.FailTurn(ctx, sqlc.FailTurnParams{
+		ErrorText: "the model fell over",
+		ID:        turn.ID,
+	}); err != nil {
+		t.Fatalf("fail turn: %v", err)
+	}
+
+	before, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	id := strconv.FormatInt(turn.ID, 10)
+	rec := postAdminAt(t, h.RetryTurn, "/admin/retry/"+id, id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry: status = %d", rec.Code)
+	}
+	after, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site after the retry: %v", err)
+	}
+	if after.ID <= before.ID {
+		t.Fatalf("version = %d, want it past %d", after.ID, before.ID)
+	}
+
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("turns = %d, err = %v", len(runs), err)
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(runs[0].Messages), &messages); err != nil {
+		t.Fatalf("decode the retry's conversation: %v", err)
+	}
+	trigger := pages.NewTurnRow(runs[0], messages).Trigger
+	if !strings.Contains(trigger, "mockedit make it pink") {
+		t.Errorf("trigger = %q, want the post the turn had", trigger)
+	}
+	if strings.Contains(trigger, "mockpatch later") {
+		t.Errorf("trigger = %q, answered a post that arrived later", trigger)
+	}
+}
+
+// A retry that fails can be retried again. It has no posts of its own, so the
+// handler walks back to the turn it copied instead of answering nothing.
+func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "mockedit make it pink",
+	})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
+		Kind:   webmaster.TurnWebmaster,
+		Author: "dave",
+	})
+	if err != nil {
+		t.Fatalf("start turn: %v", err)
+	}
+	if err := queries.FailTurn(
+		ctx,
+		sqlc.FailTurnParams{ErrorText: "boom", ID: turn.ID},
+	); err != nil {
+		t.Fatalf("fail turn: %v", err)
+	}
+
+	firstID := strconv.FormatInt(turn.ID, 10)
+	if rec := postAdminAt(
+		t,
+		h.RetryTurn,
+		"/admin/retry/"+firstID,
+		firstID,
+	); rec.Code != http.StatusOK {
+		t.Fatalf("first retry: status = %d", rec.Code)
+	}
+	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("turns = %d, err = %v", len(runs), err)
+	}
+	retry := runs[0]
+	if retry.Status != "changed" {
+		t.Fatalf("first retry status = %q, want changed", retry.Status)
+	}
+
+	// Fail the retry itself, then retry it again.
+	if err := queries.FailTurn(ctx, sqlc.FailTurnParams{
+		ErrorText: "the retry fell over too",
+		ID:        retry.ID,
+	}); err != nil {
+		t.Fatalf("fail the retry: %v", err)
+	}
+	id := strconv.FormatInt(retry.ID, 10)
+	if rec := postAdminAt(t, h.RetryTurn, "/admin/retry/"+id, id); rec.Code != http.StatusOK {
+		t.Fatalf("second retry: status = %d", rec.Code)
+	}
+
+	runs, err = queries.ListWebmasterTurns(ctx, 10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("turns = %d, err = %v, want the failed retry and its retry", len(runs), err)
+	}
+	if runs[0].Status != "changed" {
+		t.Fatalf("second retry status = %q, want changed", runs[0].Status)
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(runs[0].Messages), &messages); err != nil {
+		t.Fatalf("decode the second retry: %v", err)
+	}
+	trigger := pages.NewTurnRow(runs[0], messages).Trigger
+	if !strings.Contains(trigger, post.Body) {
+		t.Errorf("trigger = %q, want the post the first turn had", trigger)
+	}
 }

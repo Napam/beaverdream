@@ -51,6 +51,10 @@ const (
 	adminInput  = "w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200 dark:placeholder:text-neutral-600 dark:focus:border-neutral-600"
 	adminButton = "cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
 	adminChip   = "inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-700 dark:bg-neutral-800 dark:text-neutral-300"
+	// historyGrid is one set of column tracks for the turns list's header and
+	// every row, so a status badge or a missing version cannot shift the
+	// columns behind it.
+	historyGrid = "grid grid-cols-[2.25rem_4.25rem_4.5rem_minmax(0,1fr)_2.5rem_3.5rem_3rem] items-center gap-x-3"
 )
 
 func dash(s string) string {
@@ -221,6 +225,7 @@ templ AdminLogin(action string, failed bool) {
 			<title>beaverdream admin</title>
 			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
 			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
+			@themeScript()
 		</head>
 		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
 			<main class="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4">
@@ -260,6 +265,7 @@ templ AdminPage(view AdminView, datastar string) {
 			<title>beaverdream admin</title>
 			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
 			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
+			@themeScript()
 			<script type="module" src={ datastar }></script>
 		</head>
 		<body class="min-h-dvh bg-gray-100 text-gray-800 antialiased dark:bg-neutral-950 dark:text-neutral-300">
@@ -280,20 +286,27 @@ templ AdminPage(view AdminView, datastar string) {
 templ AdminBody(view AdminView) {
 	<div id="admin-body" class="flex flex-col gap-6">
 		<div id={ "admin-stream-" + view.Panel.Page + "-" + i64(view.Panel.Turn) } hidden data-init={ view.Stream }></div>
-		<header class="sticky top-0 z-20 -mx-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-gray-200 bg-gray-100/90 px-4 backdrop-blur sm:-mx-6 sm:px-6 dark:border-neutral-800 dark:bg-neutral-950/90">
-			<h1 class="py-3 text-base font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-			<nav class="flex gap-1 self-stretch text-sm">
-				@navLink(view.Panel, PageOverview, "/admin", "overview")
-				@navLink(view.Panel, PageTurns, "/admin/turns", "turns")
-				@navLink(view.Panel, PageSite, "/admin/site", "site")
-			</nav>
-			<div class="ml-auto flex items-center gap-4">
-				@AdminLiveCard(view.Live)
-				<a class="text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
-				<form method="post" action="/admin/logout" class="contents">
-					@csrfInput(view.CSRF)
-					<button type="submit" class="cursor-pointer text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200">sign out</button>
-				</form>
+		<header class="sticky top-0 z-20 -mx-4 bg-gray-100/90 backdrop-blur sm:-mx-6 dark:bg-neutral-950/90">
+			<div class="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-1 px-4 sm:px-6">
+				<h1 class="shrink-0 text-base font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
+				<nav class="flex shrink-0 gap-1 self-stretch text-sm">
+					@navLink(view.Panel, PageOverview, "/admin", "overview")
+					@navLink(view.Panel, PageTurns, "/admin/turns", "turns")
+					@navLink(view.Panel, PageSite, "/admin/site", "site")
+				</nav>
+				<div class="ml-auto flex items-center gap-1.5">
+					@themeToggle()
+					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
+					<form method="post" action="/admin/logout" class="contents">
+						@csrfInput(view.CSRF)
+						<button type="submit" class="cursor-pointer rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200">sign out</button>
+					</form>
+				</div>
+			</div>
+			<div class="px-4 sm:px-6">
+				<div class="flex h-8 items-center border-y border-gray-200 dark:border-neutral-800">
+					@AdminLiveCard(view.Live)
+				</div>
 			</div>
 		</header>
 		<div id="admin-flash" class="empty:hidden">
@@ -342,7 +355,7 @@ templ turnsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
 		@AdminHistory(view.Turns, view.Panel.Turn)
-		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run)
+		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run, view.CSRF)
 	</div>
 }
 
@@ -409,17 +422,17 @@ templ adminInstruct(csrf string) {
 // AdminLiveCard is the worker's state right now, in the sticky header. The
 // stream patches the whole element, so every value is server-rendered.
 templ AdminLiveCard(live LiveView) {
-	<div id="admin-live" class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-		<span class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-0.5 dark:border-neutral-800 dark:bg-neutral-900">
-			<span class={ "size-2 rounded-full " + liveDot(live.State) }></span>
-			<span class="font-medium text-gray-900 dark:text-neutral-100">{ live.State }</span>
-			<span class="text-gray-500 dark:text-neutral-400">{ live.Detail }</span>
+	<div id="admin-live" class="flex h-full min-w-0 items-center gap-x-4 overflow-hidden text-xs">
+		<span class="inline-flex w-64 min-w-0 items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 dark:border-neutral-800 dark:bg-neutral-900" title={ live.Detail }>
+			<span class={ "size-2 shrink-0 rounded-full " + liveDot(live.State) }></span>
+			<span class="shrink-0 font-medium text-gray-900 dark:text-neutral-100">{ live.State }</span>
+			<span class="truncate text-gray-500 dark:text-neutral-400">{ live.Detail }</span>
 		</span>
-		<span class="text-gray-500 dark:text-neutral-400">version <span class="font-mono text-gray-900 dark:text-neutral-100">v{ i64(live.Version) }</span></span>
-		<span class="text-gray-500 dark:text-neutral-400">queued <span class="font-mono text-gray-900 dark:text-neutral-100">{ itoa(live.Pending) }</span></span>
-		<span class="text-gray-500 dark:text-neutral-400">today <span class="font-mono text-gray-900 dark:text-neutral-100">{ todayText(live) }</span></span>
+		<span class="shrink-0 text-gray-500 dark:text-neutral-400">version <span class="font-mono text-gray-900 dark:text-neutral-100">v{ i64(live.Version) }</span></span>
+		<span class="shrink-0 text-gray-500 dark:text-neutral-400">queued <span class="font-mono text-gray-900 dark:text-neutral-100">{ itoa(live.Pending) }</span></span>
+		<span class="shrink-0 text-gray-500 dark:text-neutral-400">today <span class="font-mono text-gray-900 dark:text-neutral-100">{ todayText(live) }</span></span>
 		if live.Error != "" {
-			<span class="truncate text-xs text-red-600 dark:text-red-400" title={ live.Error }>{ live.Error }</span>
+			<span class="min-w-0 truncate text-red-600 dark:text-red-400" title={ live.Error }>{ live.Error }</span>
 		}
 	</div>
 }
@@ -588,9 +601,9 @@ templ AdminMemory(summary string, through int64) {
 	</section>
 }
 
-// AdminHistory lists the newest turns, one line each, as links to their own
-// page. The stream patches it when a run ends, so a turn appears without a
-// reload. picked is the turn the page shows, or 0 for the newest.
+// AdminHistory lists the newest turns as a table, one link per row. The stream
+// patches it when a run ends, so a turn appears without a reload. picked is
+// the turn the page shows, or 0 for the newest.
 templ AdminHistory(turns []TurnRow, picked int64) {
 	<section id="admin-history" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
@@ -599,36 +612,51 @@ templ AdminHistory(turns []TurnRow, picked int64) {
 		</div>
 		if len(turns) == 0 {
 			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
+		} else {
+			<div class="max-h-80 overflow-y-auto">
+				<div class={ historyGrid + " sticky top-0 z-10 border-b border-gray-200 bg-white py-1 pr-3 pl-[14px] text-[11px] tracking-wide text-gray-400 uppercase dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-500" }>
+					<span>#</span>
+					<span>status</span>
+					<span>who</span>
+					<span>answered</span>
+					<span>ver</span>
+					<span class="text-right">in</span>
+					<span class="text-right">time</span>
+				</div>
+				<ol>
+					for i, row := range turns {
+						<li>
+							<a
+								href={ templ.SafeURL(turnPath(row.Run.ID, i == 0)) }
+								data-on:click={ navTo(turnPath(row.Run.ID, i == 0)) }
+								title={ turnTitle(row) }
+								class={ historyGrid + " border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60 " + pickedRow(row.Run.ID, picked, i == 0) }
+							>
+								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">#{ i64(row.Run.ID) }</span>
+								<span class="justify-self-start">@statusBadge(row.Run.Status)</span>
+								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ turnAuthor(row) }</span>
+								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(row.Trigger)) }</span>
+								<span class="truncate font-mono text-[11px] text-gray-400 dark:text-neutral-500">
+									if row.Run.VersionID.Valid {
+										v{ i64(row.Run.VersionID.Int64) }
+									}
+								</span>
+								<span class="text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
+									if row.Rounds > 0 {
+										{ short(row.PromptTokens) } in
+									}
+								</span>
+								<span class="text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
+									if row.Run.Status != "running" {
+										{ millis(row.Run.DurationMs) }
+									}
+								</span>
+							</a>
+						</li>
+					}
+				</ol>
+			</div>
 		}
-		<ol class="max-h-80 overflow-y-auto">
-			for i, row := range turns {
-				<li>
-					<a
-						href={ templ.SafeURL(turnPath(row.Run.ID, i == 0)) }
-						data-on:click={ navTo(turnPath(row.Run.ID, i == 0)) }
-						title={ turnTitle(row) }
-						class={ "flex items-center gap-3 border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60 " + pickedRow(row.Run.ID, picked, i == 0) }
-					>
-						<span class="w-9 shrink-0 font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">#{ i64(row.Run.ID) }</span>
-						@statusBadge(row.Run.Status)
-						<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(row.Trigger)) }</span>
-						if row.Run.VersionID.Valid {
-							<span class="hidden shrink-0 font-mono text-[11px] text-gray-400 sm:block dark:text-neutral-500">v{ i64(row.Run.VersionID.Int64) }</span>
-						}
-						<span class="hidden w-14 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums sm:block dark:text-neutral-500">
-							if row.Rounds > 0 {
-								{ short(row.PromptTokens) } in
-							}
-						</span>
-						<span class="w-12 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
-							if row.Run.Status != "running" {
-								{ millis(row.Run.DurationMs) }
-							}
-						</span>
-					</a>
-				</li>
-			}
-		</ol>
 	</section>
 }
 
@@ -639,14 +667,43 @@ templ csrfInput(token string) {
 	<input type="hidden" name="csrf" value={ token }/>
 }
 
+// retryTurn runs an errored turn again. The form sits under the error it
+// answers, so the action is where the reason is.
+templ retryTurn(id int64, csrf string) {
+	<form
+		method="post"
+		action={ "/admin/retry/" + i64(id) }
+		data-on:submit={ "@post('/admin/retry/" + i64(id) + "', {contentType: 'form'})" }
+		data-indicator:_retrying
+	>
+		@csrfInput(csrf)
+		<button
+			type="submit"
+			data-attr:disabled="$_retrying"
+			title="send this turn's instruction, or the posts it answered, to the model again"
+			class="inline-flex cursor-pointer items-center gap-1.5 rounded-sm border border-red-500/30 bg-white px-2.5 py-1 text-xs font-medium text-red-700 hover:border-red-500/60 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:border-red-500/30 dark:bg-neutral-900 dark:text-red-400 dark:hover:border-red-500/60 dark:hover:bg-red-950/30"
+		>
+			<svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg>
+			retry
+		</button>
+	</form>
+}
+
 templ statusBadge(status string) {
-	<span class={ "rounded px-1.5 py-px text-[11px] font-medium " + statusTone(status) }>{ dash(status) }</span>
+	<span class={ "rounded-sm px-1.5 py-px text-[11px] font-medium " + statusTone(status) }>{ dash(status) }</span>
 }
 
 // AdminTurn is the inspector, with the turns either side of it. Following the
 // newest, the stream patches it when a run ends; a picked turn stays as it was
 // loaded.
-templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64, run *RunProgress) {
+templ AdminTurn(
+	detail *TurnDetail,
+	following bool,
+	older int64,
+	newer int64,
+	run *RunProgress,
+	csrf string,
+) {
 	<div id="admin-turn">
 		if detail == nil {
 			<div class={ adminCard }>
@@ -665,7 +722,7 @@ templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64, ru
 					<a href="/admin/turns" data-on:click={ navTo("/admin/turns") } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
 				}
 			</div>
-			@turnInspector(*detail, run)
+			@turnInspector(*detail, run, csrf)
 		}
 	</div>
 }
@@ -678,7 +735,7 @@ templ stepTurn(id int64, older bool) {
 			href={ templ.SafeURL(turnPath(id, false)) }
 			data-on:click={ navTo(turnPath(id, false)) }
 			title={ "turn #" + i64(id) }
-			class="rounded border border-gray-200 px-1.5 py-0.5 font-mono hover:bg-gray-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
+			class="rounded-sm border border-gray-200 px-1.5 py-0.5 font-mono hover:bg-gray-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
 		>
 			if older {
 				{ "← #" + i64(id) }
@@ -697,9 +754,9 @@ templ stepTurn(id int64, older bool) {
 	}
 }
 
-templ turnInspector(d TurnDetail, run *RunProgress) {
+templ turnInspector(d TurnDetail, run *RunProgress, csrf string) {
 	<div class="flex flex-col gap-4">
-		@turnHeader(d)
+		@turnHeader(d, csrf)
 		if d.Row.Run.Status == "running" {
 			@turnRunning(d, run)
 		} else if !d.Stored {
@@ -731,9 +788,6 @@ templ turnRunning(d TurnDetail, run *RunProgress) {
 			<span class={ adminLabel }>in flight</span>
 			<span class={ adminChip }>round { itoa(run.Round) } with the model</span>
 			<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
-			if len(run.Authors) > 0 {
-				<span class={ adminChip }>{ strings.Join(run.Authors, ", ") }</span>
-			}
 		</div>
 		if len(d.Context) > 0 {
 			@turnContext(d)
@@ -803,12 +857,15 @@ templ pinned(text string) {
 	</div>
 }
 
-templ turnHeader(d TurnDetail) {
+templ turnHeader(d TurnDetail, csrf string) {
 	<div class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 			<span class="font-mono text-lg font-semibold text-gray-900 dark:text-neutral-100">#{ i64(d.Row.Run.ID) }</span>
 			@statusBadge(d.Row.Run.Status)
 			<span class="text-sm text-gray-600 dark:text-neutral-400">{ d.Row.Run.Kind } turn</span>
+			if turnAuthor(d.Row) != "" {
+				<span class={ adminChip }>{ "for " + turnAuthor(d.Row) }</span>
+			}
 			if d.Row.Run.VersionID.Valid {
 				<span class={ adminChip }>wrote v{ i64(d.Row.Run.VersionID.Int64) }</span>
 			}
@@ -836,8 +893,15 @@ templ turnHeader(d TurnDetail) {
 				@labelled("changed", d.Row.Run.Changes)
 			</div>
 		}
-		if d.Row.Run.ErrorText != "" {
-			<pre class={ adminPre + " bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400" }>{ d.Row.Run.ErrorText }</pre>
+		if d.Row.Run.Status == "error" {
+			<div class="flex flex-col gap-2">
+				if d.Row.Run.ErrorText != "" {
+					<pre class={ adminPre + " bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400" }>{ d.Row.Run.ErrorText }</pre>
+				}
+				<div class="flex justify-end">
+					@retryTurn(d.Row.Run.ID, csrf)
+				</div>
+			</div>
 		}
 		if d.Row.Run.Notes != "" {
 			<details data-preserve-attr="open">
@@ -961,7 +1025,7 @@ templ roundCard(round RoundView) {
 				<span class={ adminChip }>finish: { round.Stats.FinishReason }</span>
 			}
 			if round.Stats.FinishReason == "length" {
-				<span class="rounded px-1.5 py-px text-[11px] font-medium bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300">hit the output cap</span>
+				<span class="rounded-sm px-1.5 py-px text-[11px] font-medium bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300">hit the output cap</span>
 			}
 		</div>
 		if round.Stats.Deferred != "" {

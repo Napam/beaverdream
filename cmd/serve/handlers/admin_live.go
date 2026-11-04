@@ -117,7 +117,7 @@ func (h *Handlers) syncAdmin(
 	case pages.PageTurns:
 		switch {
 		case t&(topicSite|topicTurns|topicBusy) != 0:
-			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive); err != nil {
+			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive, csrf); err != nil {
 				return err
 			}
 		case t&topicDraft != 0:
@@ -234,6 +234,7 @@ func (h *Handlers) patchAdminTurns(
 	sse *datastar.ServerSentEventGenerator,
 	picked int64,
 	wasLive *bool,
+	csrf string,
 ) error {
 	run := h.runProgress()
 	live := liveInspector(picked, run)
@@ -273,7 +274,7 @@ func (h *Handlers) patchAdminTurns(
 		ctx,
 		sse,
 		"admin-turn",
-		pages.AdminTurn(latest, picked == 0, older, newer, run),
+		pages.AdminTurn(latest, picked == 0, older, newer, run, csrf),
 	)
 }
 

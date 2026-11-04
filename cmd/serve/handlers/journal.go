@@ -221,7 +221,6 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	if appended {
 		// The row is committed even if the trim failed, so the page still has
 		// to hear about it.
-		h.touchActivity()
 		h.hub.publish(topicJournal)
 	}
 	if err != nil {

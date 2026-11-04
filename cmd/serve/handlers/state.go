@@ -176,7 +176,6 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.stateMu.Unlock()
-	h.touchActivity()
 	h.hub.publish(topicState)
 
 	if isDatastar(r) {

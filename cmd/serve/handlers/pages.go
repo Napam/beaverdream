@@ -102,7 +102,6 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not post", http.StatusInternalServerError)
 		return
 	}
-	h.touchActivity()
 	h.hub.publish(topicPosts)
 
 	capped := h.overDailyCap(r.Context())

@@ -238,11 +238,11 @@ prefer simple, readable code over production hardening.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.
-- A quiet board heals back to the seed by copying it forward as a new row and
+- Heal puts the seed page back by copying it forward as a new row and
   recording a heal turn. It keeps posts and the webmaster's notes, clears shared
   state and the journal in the same transaction as that version, takes `h.mu`,
-  and never calls the model. The
-  admin panel can heal immediately.
+  and never calls the model. Only the admin panel heals: a quiet board keeps
+  its page however long it sits.
 - Reset is the one destructive action: it keeps the oldest version, deletes
   every turn (posts, webmaster turns, events, notes) with the compacted
   summaries, later versions and shared state, and

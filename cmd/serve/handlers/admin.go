@@ -516,7 +516,6 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 			return "", false
 		}
 		h.setVersion(restored.ID)
-		h.touchActivity()
 		return fmt.Sprintf("undid version %d", current.ID), true
 	}()
 	if ok {
@@ -524,8 +523,8 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HealBoard puts the plain seed back now instead of waiting for the idle
-// timer. Posts stay; shared state and the journal are cleared with it.
+// HealBoard puts the plain seed back. Posts stay; shared state and the journal
+// are cleared with it.
 func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
@@ -629,7 +628,6 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 			return "", false
 		}
 		h.setVersion(restored.ID)
-		h.touchActivity()
 		return fmt.Sprintf("restored version %d", id), true
 	}()
 	if ok {

@@ -110,12 +110,11 @@ type Handlers struct {
 	lastStateAt   map[string]time.Time
 	journalBucket map[string]*journalBucket
 	// alertSeen collapses repeated browser errors into one event each.
-	alertSeen    map[string]time.Time
-	lastActivity time.Time
-	wake         chan struct{}
-	stop         chan struct{}
-	closeOnce    sync.Once
-	workerWG     sync.WaitGroup
+	alertSeen map[string]time.Time
+	wake      chan struct{}
+	stop      chan struct{}
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
 
 	compactAfterTokens int
 	compactAfterTurns  int
@@ -143,7 +142,6 @@ func New(
 		lastStateAt:   make(map[string]time.Time),
 		journalBucket: make(map[string]*journalBucket),
 		alertSeen:     make(map[string]time.Time),
-		lastActivity:  time.Now(),
 		wake:          make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 
@@ -173,14 +171,10 @@ func New(
 	}
 	mutator.OnRound = h.setRunningRound
 	mutator.OnRoundDone = h.logRoundDone
-	h.workerWG.Add(2)
+	h.workerWG.Add(1)
 	go func() {
 		defer h.workerWG.Done()
 		h.worker()
-	}()
-	go func() {
-		defer h.workerWG.Done()
-		h.healer()
 	}()
 	return h
 }
@@ -289,7 +283,6 @@ func (h *Handlers) mutate(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.touchActivity()
 	h.beginRun(kind, nil)
 	ctx, cancel := mutationContext(ctx)
 	defer cancel()
@@ -830,7 +823,6 @@ func (h *Handlers) roomFor(ctx context.Context, before int64) (webmaster.Room, e
 // mutation is running are collected into the next one, so a burst becomes one
 // rewrite rather than a long queue.
 func (h *Handlers) mutateInBackground(post sqlc.Post) {
-	h.touchActivity()
 	h.liveMu.Lock()
 	h.pending = append(h.pending, post)
 	pending := len(h.pending)
@@ -1059,12 +1051,6 @@ func (h *Handlers) setVersion(version int64) {
 	}
 }
 
-func (h *Handlers) touchActivity() {
-	h.liveMu.Lock()
-	h.lastActivity = time.Now()
-	h.liveMu.Unlock()
-}
-
 func (h *Handlers) setLastError(message string) {
 	h.liveMu.Lock()
 	h.lastError = message
@@ -1077,7 +1063,6 @@ func (h *Handlers) resetLive(version int64) {
 	h.pending = nil
 	h.running = nil
 	h.lastError = ""
-	h.lastActivity = time.Now()
 	h.liveMu.Unlock()
 	h.hub.publish(topicAll)
 }
@@ -1138,39 +1123,10 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 const (
 	rewriteCooldown = time.Second
 	stateCooldown   = 250 * time.Millisecond
-	idleHealAfter   = 20 * time.Minute
 )
 
-// healer brings the board back to its plain seed after a quiet spell, so the
-// next visitor gets the reveal again. Posts stay on the board.
-func (h *Handlers) healer() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-h.stop:
-			return
-		case <-ticker.C:
-			h.healIfIdle(context.Background())
-		}
-	}
-}
-
-func (h *Handlers) healIfIdle(ctx context.Context) {
-	h.liveMu.Lock()
-	idle := time.Since(h.lastActivity)
-	busy := h.running != nil || len(h.pending) > 0
-	h.liveMu.Unlock()
-
-	if busy || idle < idleHealAfter {
-		return
-	}
-	if _, err := h.heal(ctx); err != nil {
-		h.logger.Error("Failed to heal the board", slog.Any("error", err))
-	}
-}
-
 // heal copies the seed version forward. It is a restore, not a model call.
+// Only the admin panel asks for it; a board left alone keeps its page.
 func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1186,7 +1142,6 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("seed site: %w", err)
 	}
 	if sameSiteContent(current, seed) {
-		h.touchActivity()
 		return false, nil
 	}
 
@@ -1211,7 +1166,6 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	}
 	h.setVersion(healed.ID)
 	h.hub.publish(topicState | topicJournal)
-	h.touchActivity()
 	h.logger.Info("Board returned to the seed", slog.Int64("version_id", healed.ID))
 	return true, nil
 }

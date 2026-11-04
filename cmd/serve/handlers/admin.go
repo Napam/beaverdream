@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
@@ -62,128 +64,271 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
-// Admin shows the password form until the request presents the admin token,
-// then the panel. A browser GET cannot set a header, so the password form
-// POSTs here; the token then lives in hidden form fields and the stream's
-// request headers, never in the URL. There is no session cookie on purpose:
-// the board runs model-written JavaScript on the same origin.
+// Admin, AdminTurns, AdminTurn and AdminSite are the admin pages. Each one
+// shows the password form until the request presents the admin token. A
+// browser GET cannot set a header, so the password form POSTs back to the same
+// path; the token then lives in hidden form fields and the request headers of
+// the stream and the panel's own navigation, never in the URL. There is no
+// session cookie on purpose: the board runs model-written JavaScript on the
+// same origin.
 func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost {
+	h.servePanel(w, r, pages.Panel{Page: pages.PageOverview})
+}
+
+func (h *Handlers) AdminTurns(w http.ResponseWriter, r *http.Request) {
+	h.servePanel(w, r, pages.Panel{Page: pages.PageTurns})
+}
+
+func (h *Handlers) AdminTurn(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	h.servePanel(w, r, pages.Panel{Page: pages.PageTurns, Turn: id})
+}
+
+func (h *Handlers) AdminSite(w http.ResponseWriter, r *http.Request) {
+	h.servePanel(w, r, pages.Panel{Page: pages.PageSite})
+}
+
+// servePanel answers one admin page: the password form without the token, the
+// page patched into #admin-body for the panel's own navigation, and the whole
+// document otherwise.
+func (h *Handlers) servePanel(w http.ResponseWriter, r *http.Request, panel pages.Panel) {
+	if r.Method == http.MethodPost && r.Header.Get("X-Admin-Token") == "" {
 		if !h.tokenMatches(r.PostFormValue("password")) {
-			h.renderLogin(w, r, true)
+			h.renderLogin(w, r, panel, true)
 			return
 		}
-		h.renderAdmin(w, r, "")
+	} else if !h.adminTokenOK(r) {
+		h.renderLogin(w, r, panel, false)
 		return
 	}
-	if !h.adminTokenOK(r) {
-		h.renderLogin(w, r, false)
-		return
-	}
-	h.renderAdmin(w, r, "")
+	h.adminDone(w, r, panel, "")
 }
 
 // renderLogin is the only page an unauthenticated visitor gets. A failed
 // password answers 401, so a tool can tell the attempt apart from a success.
-func (h *Handlers) renderLogin(w http.ResponseWriter, r *http.Request, failed bool) {
+func (h *Handlers) renderLogin(
+	w http.ResponseWriter,
+	r *http.Request,
+	panel pages.Panel,
+	failed bool,
+) {
 	h.adminHeaders(w)
 	if failed {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
-	if err := pages.AdminLogin(failed).Render(r.Context(), w); err != nil {
+	if err := pages.AdminLogin(panel.Path(), failed).Render(r.Context(), w); err != nil {
 		h.logger.Error("Failed to render the admin login", slog.Any("error", err))
 	}
 }
 
-// renderAdmin renders the whole panel. Actions use it as the plain fallback
-// when Datastar is not driving the form.
-func (h *Handlers) renderAdmin(w http.ResponseWriter, r *http.Request, flash string) {
+// errNoTurn is a turn page whose id names no webmaster turn.
+var errNoTurn = errors.New("no such webmaster turn")
+
+// adminDone answers an admin page or action without a redirect: a Datastar
+// request gets the page patched into #admin-body, and anything else gets the
+// whole document. The token never needs to appear in a URL.
+func (h *Handlers) adminDone(
+	w http.ResponseWriter,
+	r *http.Request,
+	panel pages.Panel,
+	message string,
+) {
 	h.adminHeaders(w)
-	view, err := h.loadAdmin(r.Context(), flash)
+	view, err := h.loadAdmin(r.Context(), panel, message)
+	if errors.Is(err, errNoTurn) {
+		http.NotFound(w, r)
+		return
+	}
 	if err != nil {
 		h.logger.Error("Failed to load the admin page", slog.Any("error", err))
 		http.Error(w, "Could not load the admin page", http.StatusInternalServerError)
 		return
 	}
-	datastar := h.cfg.DatastarSrc
-	if datastar == "" {
-		datastar = webmaster.DatastarPath
+	if !isDatastar(r) {
+		datastar := h.cfg.DatastarSrc
+		if datastar == "" {
+			datastar = webmaster.DatastarPath
+		}
+		if err := pages.AdminPage(view, datastar).Render(r.Context(), w); err != nil {
+			h.logger.Error("Failed to render admin page", slog.Any("error", err))
+		}
+		return
 	}
-	// The token travels as a request header on the stream, not in its URL.
-	// The jitter keeps tabs from reconnecting in the same instant.
-	streamInit := fmt.Sprintf(
-		"@get('/admin/live', {retry: 'always', retryMaxCount: Infinity, retryInterval: %d, headers: {'X-Admin-Token': %s}})",
+	var b strings.Builder
+	if err := pages.AdminBody(view).Render(r.Context(), &b); err != nil {
+		h.logger.Error("Failed to render the admin panel", slog.Any("error", err))
+		http.Error(w, "Could not render the admin panel", http.StatusInternalServerError)
+		return
+	}
+	sse := datastar.NewSSE(w, r)
+	if err := sse.PatchElements(
+		b.String(),
+		datastar.WithSelectorID("admin-body"),
+		datastar.WithModeOuter(),
+	); err != nil {
+		h.logger.Warn("Failed to patch the admin panel", slog.Any("error", err))
+	}
+}
+
+// loadAdmin reads what one page shows, so the first render, a navigation and
+// the patch after an action use the same value.
+func (h *Handlers) loadAdmin(
+	ctx context.Context,
+	panel pages.Panel,
+	flash string,
+) (pages.AdminView, error) {
+	view := pages.AdminView{
+		Panel:  panel,
+		Live:   h.adminLiveView(ctx),
+		Flash:  flash,
+		Token:  h.cfg.AdminToken,
+		Stream: h.adminStreamInit(panel),
+	}
+	switch panel.Page {
+	case pages.PageOverview:
+		turns, _, err := h.adminTurns(ctx, -1)
+		if err != nil {
+			return view, err
+		}
+		site, err := h.queries.CurrentSite(ctx)
+		if err != nil {
+			return view, fmt.Errorf("load current site: %w", err)
+		}
+		view.Metrics = pages.NewMetrics(turns)
+		view.Budget = h.adminBudget(ctx, site)
+		view.Summary, view.SummaryThrough = h.adminSummary(ctx)
+	case pages.PageTurns:
+		turns, detail, err := h.adminTurns(ctx, panel.Turn)
+		if err != nil {
+			return view, err
+		}
+		view.Turns = turns
+		view.Turn = detail
+	case pages.PageSite:
+		versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
+		if err != nil {
+			return view, fmt.Errorf("list versions: %w", err)
+		}
+		if len(versions) == 0 {
+			return view, errors.New("no site version")
+		}
+		// One read names the current version, so the table cannot mark an
+		// older row current when a version lands between two queries.
+		view.Site = versions[0]
+		view.Versions = versions
+		// The panel shows the same journal and state the page and the prompt
+		// see, so a stuck feed can be read without opening sqlite.
+		view.Feeds, view.States = h.adminFeeds(ctx, view.Site)
+	}
+	return view, nil
+}
+
+// adminStreamInit opens the page's stream. The token travels as a request
+// header, not in the URL. The stream closes when the page's mount is replaced,
+// and the jitter keeps tabs from reconnecting in the same instant.
+func (h *Handlers) adminStreamInit(panel pages.Panel) string {
+	return fmt.Sprintf(
+		"@get('%s', {requestCancellation: 'cleanup', retry: 'always', retryMaxCount: Infinity, retryInterval: %d, headers: {'X-Admin-Token': %s}})",
+		panel.LivePath(),
 		1000+rand.IntN(2000),
 		strconv.Quote(h.cfg.AdminToken),
 	)
-	if err := pages.AdminPage(view, datastar, streamInit).Render(r.Context(), w); err != nil {
-		h.logger.Error("Failed to render admin page", slog.Any("error", err))
-	}
 }
 
-// loadAdmin reads everything the panel shows, so the first render and the
-// patch after an action use the same value.
-func (h *Handlers) loadAdmin(ctx context.Context, flash string) (pages.AdminView, error) {
-	site, err := h.queries.CurrentSite(ctx)
-	if err != nil {
-		return pages.AdminView{}, fmt.Errorf("load current site: %w", err)
-	}
-	runs, err := h.adminRuns(ctx)
-	if err != nil {
-		return pages.AdminView{}, err
-	}
-	versions, err := h.queries.ListSiteVersions(ctx, 12)
-	if err != nil {
-		return pages.AdminView{}, fmt.Errorf("list versions: %w", err)
-	}
+// The pages actions answer with: instructions from the overview, repairs
+// from the site page.
+var (
+	overviewPanel = pages.Panel{Page: pages.PageOverview}
+	sitePanel     = pages.Panel{Page: pages.PageSite}
+)
 
-	// The panel shows the same journal and state the page and the prompt see,
-	// so a stuck feed can be read without opening sqlite.
-	feeds, states := h.adminFeeds(ctx, site)
+const (
+	// adminTurnCount is how many turns the list and the charts show.
+	adminTurnCount = 40
+	// adminVersions is how many versions the panel lists.
+	adminVersions = 20
+)
 
-	summaryText, summaryThrough := h.adminSummary(ctx)
-
-	return pages.AdminView{
-		Site:           site,
-		Live:           h.adminLiveView(ctx),
-		Feeds:          feeds,
-		States:         states,
-		Runs:           runs,
-		Versions:       versions,
-		Summary:        summaryText,
-		SummaryThrough: summaryThrough,
-		Flash:          flash,
-		Token:          h.cfg.AdminToken,
-	}, nil
-}
-
-// adminRuns loads the newest turns. The newest conversations are the ones worth
-// opening; older runs keep their summaries so the page does not carry every
-// prompt.
-func (h *Handlers) adminRuns(ctx context.Context) ([]pages.RunView, error) {
-	runs, err := h.queries.ListWebmasterTurns(ctx, 20)
+// adminTurns loads the newest turns as list rows, and one turn in full for the
+// inspector: the newest when pick is 0, the picked one otherwise, none when
+// pick is negative. Each conversation is decoded once, for its round stats.
+func (h *Handlers) adminTurns(
+	ctx context.Context,
+	pick int64,
+) ([]pages.TurnRow, *pages.TurnDetail, error) {
+	runs, err := h.queries.ListWebmasterTurns(ctx, adminTurnCount)
 	if err != nil {
-		return nil, fmt.Errorf("list webmaster turns: %w", err)
+		return nil, nil, fmt.Errorf("list webmaster turns: %w", err)
 	}
-	views := make([]pages.RunView, 0, len(runs))
+	rows := make([]pages.TurnRow, 0, len(runs))
+	var detail *pages.TurnDetail
 	for i, run := range runs {
-		loaded := i < 8
-		var messages []webmaster.Message
-		if loaded {
-			if err := json.Unmarshal([]byte(run.Messages), &messages); err != nil {
-				h.logger.Warn("Stored mutation messages are not valid JSON",
-					slog.Int64("run_id", run.ID),
-					slog.Any("error", err),
-				)
-			}
+		messages := h.turnMessages(run)
+		if (pick == 0 && i == 0) || run.ID == pick {
+			d := pages.NewTurnDetail(run, messages, webmaster.ToolsRunes())
+			detail = &d
 		}
-		views = append(views, pages.RunView{
-			Run:            run,
-			Messages:       messages,
-			MessagesLoaded: loaded,
-		})
+		rows = append(rows, pages.NewTurnRow(run, messages))
 	}
-	return views, nil
+	if pick > 0 && detail == nil {
+		// Older than the list: read it on its own.
+		row, err := h.queries.GetWebmasterTurn(ctx, pick)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, errNoTurn
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("load turn %d: %w", pick, err)
+		}
+		run := sqlc.ListWebmasterTurnsRow(row)
+		d := pages.NewTurnDetail(run, h.turnMessages(run), webmaster.ToolsRunes())
+		detail = &d
+	}
+	return rows, detail, nil
+}
+
+// turnMessages decodes a stored conversation. A broken one shows as a turn
+// with nothing stored rather than failing the panel.
+func (h *Handlers) turnMessages(run sqlc.ListWebmasterTurnsRow) []webmaster.Message {
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(run.Messages), &messages); err != nil {
+		h.logger.Warn("Stored mutation messages are not valid JSON",
+			slog.Int64("run_id", run.ID),
+			slog.Any("error", err),
+		)
+	}
+	return messages
+}
+
+// adminBudget measures the room the way compactRoom does: the turns after the
+// latest summary and the page the next turn reads.
+func (h *Handlers) adminBudget(ctx context.Context, site sqlc.SiteVersion) pages.BudgetView {
+	budget := pages.BudgetView{
+		LimitTokens: h.compactAfterTokens,
+		LimitTurns:  h.compactAfterTurns,
+		PageRunes:   int64(webmaster.PageRunes(h.siteWithState(ctx, site))),
+	}
+	from, summary, err := h.latestSummary(ctx)
+	if err != nil {
+		h.logger.Warn("Failed to load compacted memory", slog.Any("error", err))
+		return budget
+	}
+	budget.SummaryThrough = from
+	budget.SummaryRunes = int64(utf8.RuneCountInString(summary))
+	stats, err := h.queries.SummaryStats(ctx, sqlc.SummaryStatsParams{
+		ID:   from,
+		ID_2: math.MaxInt64,
+	})
+	if err != nil {
+		h.logger.Warn("Failed to measure the room", slog.Any("error", err))
+		return budget
+	}
+	budget.Turns = stats.Turns
+	budget.LogRunes = numericInt64(stats.Chars)
+	return budget
 }
 
 // adminSummary is the compacted memory the prompt would read, if any.
@@ -311,7 +456,7 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 		return fmt.Sprintf("undid version %d", current.ID), true
 	}()
 	if ok {
-		h.adminDone(w, r, message)
+		h.adminDone(w, r, sitePanel, message)
 	}
 }
 
@@ -324,14 +469,14 @@ func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
 	changed, err := h.heal(r.Context())
 	if err != nil {
 		h.logger.Error("Failed to heal the board", slog.Any("error", err))
-		h.adminDone(w, r, "heal failed: "+err.Error())
+		h.adminDone(w, r, sitePanel, "heal failed: "+err.Error())
 		return
 	}
 	if !changed {
-		h.adminDone(w, r, "the board is already plain")
+		h.adminDone(w, r, sitePanel, "the board is already plain")
 		return
 	}
-	h.adminDone(w, r, "the board went back to the seed")
+	h.adminDone(w, r, sitePanel, "the board went back to the seed")
 }
 
 // AdminMutate sends a free-form instruction straight to the model. It can also
@@ -348,7 +493,7 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 
 	instruction := truncate(strings.TrimSpace(r.FormValue("instruction")), maxBodyLen)
 	if instruction == "" {
-		h.adminDone(w, r, "nothing to send")
+		h.adminDone(w, r, overviewPanel, "nothing to send")
 		return
 	}
 
@@ -368,18 +513,18 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.overDailyCap(r.Context()) {
-		h.adminDone(w, r, "daily mutation cap reached")
+		h.adminDone(w, r, overviewPanel, "daily mutation cap reached")
 		return
 	}
 
 	res, err := h.mutate(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
-		h.adminDone(w, r, "mutation failed: "+err.Error())
+		h.adminDone(w, r, overviewPanel, "mutation failed: "+err.Error())
 	case res.Changed:
-		h.adminDone(w, r, "changed: "+res.Reason)
+		h.adminDone(w, r, overviewPanel, "changed: "+res.Reason)
 	default:
-		h.adminDone(w, r, "no change: "+res.Reason)
+		h.adminDone(w, r, overviewPanel, "no change: "+res.Reason)
 	}
 }
 
@@ -424,37 +569,6 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return fmt.Sprintf("restored version %d", id), true
 	}()
 	if ok {
-		h.adminDone(w, r, message)
-	}
-}
-
-// adminDone answers an admin action without a redirect: a Datastar request
-// gets the panel patched in place, and a plain form gets the whole page. The
-// token never needs to appear in a URL.
-func (h *Handlers) adminDone(w http.ResponseWriter, r *http.Request, message string) {
-	if !isDatastar(r) {
-		h.renderAdmin(w, r, message)
-		return
-	}
-	h.adminHeaders(w)
-	view, err := h.loadAdmin(r.Context(), message)
-	if err != nil {
-		h.logger.Error("Failed to load the admin page", slog.Any("error", err))
-		http.Error(w, "Could not load the admin page", http.StatusInternalServerError)
-		return
-	}
-	var b strings.Builder
-	if err := pages.AdminBody(view).Render(r.Context(), &b); err != nil {
-		h.logger.Error("Failed to render the admin panel", slog.Any("error", err))
-		http.Error(w, "Could not render the admin panel", http.StatusInternalServerError)
-		return
-	}
-	sse := datastar.NewSSE(w, r)
-	if err := sse.PatchElements(
-		b.String(),
-		datastar.WithSelectorID("admin-body"),
-		datastar.WithModeOuter(),
-	); err != nil {
-		h.logger.Warn("Failed to patch the admin panel", slog.Any("error", err))
+		h.adminDone(w, r, sitePanel, message)
 	}
 }

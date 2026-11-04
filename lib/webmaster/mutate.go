@@ -60,14 +60,16 @@ type ToolCall struct {
 }
 
 // Message is one entry of the conversation sent to the model. Assistant
-// entries carry the stats of the round that produced them.
+// entries carry the stats of the round that produced them, and the user entry
+// names its sections.
 type Message struct {
-	Role       string      `json:"role"`
-	Content    string      `json:"content,omitempty"`
-	Reasoning  string      `json:"reasoning,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	Stats      *RoundStats `json:"stats,omitempty"`
+	Role       string          `json:"role"`
+	Content    string          `json:"content,omitempty"`
+	Sections   []PromptSection `json:"sections,omitempty"`
+	Reasoning  string          `json:"reasoning,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	Stats      *RoundStats     `json:"stats,omitempty"`
 }
 
 // Result is what one mutation produced. Rounds holds every completion that
@@ -137,11 +139,11 @@ func (m *Mutator) MutatePosts(
 	}
 	ed := newEditor(current)
 	sys := systemPrompt()
-	usr := userPrompt(current, room, triggers)
+	usr, sections := userPromptSections(current, room, triggers)
 
 	res := Result{Site: current, Messages: []Message{
 		{Role: "system", Content: sys},
-		{Role: "user", Content: usr},
+		{Role: "user", Content: usr, Sections: sections},
 	}}
 
 	messages := []openai.ChatCompletionMessageParamUnion{
@@ -839,14 +841,48 @@ func clip(s string, limit int) string {
 	return string(runes[:limit]) + "..."
 }
 
+// PromptSection names one stretch of the user prompt by byte offsets. The
+// sections tile the prompt in order, so the admin panel can show exactly what
+// the model read and how much room each part took.
+type PromptSection struct {
+	Name  string `json:"name"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+}
+
+// promptBuilder is a strings.Builder that marks where each section starts.
+// Opening a section closes the one before it.
+type promptBuilder struct {
+	strings.Builder
+	sections []PromptSection
+}
+
+func (b *promptBuilder) section(name string) {
+	b.close()
+	b.sections = append(b.sections, PromptSection{Name: name, Start: b.Len()})
+}
+
+func (b *promptBuilder) close() {
+	if n := len(b.sections); n > 0 {
+		b.sections[n-1].End = b.Len()
+	}
+}
+
 // userPrompt assembles the room's conversation, the current page, and the one
 // new message the model has to answer. The history comes first because it only
 // grows at the end, so a provider can cache everything up to the end of the
 // log. The notes, the page and the new post can change every turn, so they
 // come after it.
 func userPrompt(site Site, room Room, triggers []Post) string {
-	var b strings.Builder
+	prompt, _ := userPromptSections(site, room, triggers)
+	return prompt
+}
 
+// userPromptSections is userPrompt with the sections it wrote.
+func userPromptSections(site Site, room Room, triggers []Post) (string, []PromptSection) {
+	var b promptBuilder
+
+	b.section("compacted history")
 	b.WriteString("COMPACTED HISTORY:\n")
 	if summary := strings.TrimSpace(room.Summary); summary != "" {
 		b.WriteString(summary)
@@ -860,7 +896,9 @@ func userPrompt(site Site, room Room, triggers []Post) string {
 		triggerIDs[trigger.ID] = true
 	}
 
-	b.WriteString("\nROOM LOG AFTER THAT, oldest first:\n")
+	b.WriteString("\n")
+	b.section("room log")
+	b.WriteString("ROOM LOG AFTER THAT, oldest first:\n")
 	if log := RenderLog(room.Log, triggerIDs); log != "" {
 		b.WriteString(log)
 		b.WriteString("\n")
@@ -868,7 +906,9 @@ func userPrompt(site Site, room Room, triggers []Post) string {
 		b.WriteString("(nothing since the compacted history)\n")
 	}
 
-	b.WriteString("\nYOUR NOTES:\n")
+	b.WriteString("\n")
+	b.section("notes")
+	b.WriteString("YOUR NOTES:\n")
 	if notes := strings.TrimSpace(room.Notes); notes != "" {
 		b.WriteString(notes)
 		b.WriteString("\n")
@@ -877,33 +917,46 @@ func userPrompt(site Site, room Room, triggers []Post) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(pagePrompt(site))
+	writePage(&b, site)
 
+	b.WriteString("\n")
+	b.section("new post")
 	if len(triggers) == 1 {
 		trigger := triggers[0]
-		b.WriteString("\nNEW POST")
+		b.WriteString("NEW POST")
 		if trigger.ID != 0 {
-			fmt.Fprintf(&b, " #%d", trigger.ID)
+			fmt.Fprintf(&b.Builder, " #%d", trigger.ID)
 		}
 		if trigger.Author != "" {
-			fmt.Fprintf(&b, " from %s", trigger.Author)
+			fmt.Fprintf(&b.Builder, " from %s", trigger.Author)
 		}
 		b.WriteString(":\n")
 		b.WriteString(trigger.Body)
 		b.WriteString("\nThe poster is looking at this post.\n")
 	} else {
-		b.WriteString("\nNEW POSTS since the last change:\n")
+		b.WriteString("NEW POSTS since the last change:\n")
 		for _, trigger := range triggers {
 			author := trigger.Author
 			if author == "" {
 				author = "anon"
 			}
-			fmt.Fprintf(&b, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
+			fmt.Fprintf(&b.Builder, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
 		}
 		b.WriteString("The posters are looking at their own posts.\n")
 	}
 
-	return b.String()
+	b.close()
+	return b.String(), b.sections
+}
+
+// ToolsRunes is the size of the tool definitions sent with every completion,
+// as JSON. They count against the prompt like any message.
+func ToolsRunes() int {
+	data, err := json.Marshal(toolParams())
+	if err != nil {
+		return 0
+	}
+	return utf8.RuneCount(data)
 }
 
 // PageRunes is the size of the page sections of the prompt. The compaction
@@ -915,8 +968,15 @@ func PageRunes(site Site) int {
 // pagePrompt renders the current page: stylesheet, regions, shared state,
 // and the plain flag.
 func pagePrompt(site Site) string {
-	var b strings.Builder
+	var b promptBuilder
+	writePage(&b, site)
+	return b.String()
+}
 
+// writePage writes the page sections of the prompt. Each region is its own
+// section, because the board is usually most of the page.
+func writePage(b *promptBuilder, site Site) {
+	b.section("stylesheet")
 	b.WriteString("CURRENT STYLESHEET:\n")
 	if strings.TrimSpace(site.CSS) == "" {
 		b.WriteString("(empty, base styles only)\n")
@@ -925,11 +985,18 @@ func pagePrompt(site Site) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("\nCURRENT REGIONS:\n")
-	fmt.Fprintf(&b, "header:\n%s\n\nboard:\n%s\n\nfooter:\n%s\n",
-		site.Header, site.Board, site.Footer)
+	b.WriteString("\n")
+	b.section("header")
+	b.WriteString("CURRENT REGIONS:\n")
+	b.WriteString("header:\n" + site.Header + "\n\n")
+	b.section("board")
+	b.WriteString("board:\n" + site.Board + "\n\n")
+	b.section("footer")
+	b.WriteString("footer:\n" + site.Footer + "\n")
 
-	b.WriteString("\nCURRENT SHARED STATE:\n")
+	b.WriteString("\n")
+	b.section("shared state")
+	b.WriteString("CURRENT SHARED STATE:\n")
 	if strings.TrimSpace(site.StateSchema) == "" || strings.TrimSpace(site.StateSchema) == "{}" {
 		b.WriteString("(no schema)\n")
 	} else {
@@ -945,12 +1012,14 @@ func pagePrompt(site Site) string {
 			}
 			sort.Strings(keys)
 			for _, key := range keys {
-				fmt.Fprintf(&b, "%s: %s\n", key, site.State[key])
+				fmt.Fprintf(&b.Builder, "%s: %s\n", key, site.State[key])
 			}
 		}
 	}
 
-	b.WriteString("\nCURRENT JOURNAL:\n")
+	b.WriteString("\n")
+	b.section("journal")
+	b.WriteString("CURRENT JOURNAL:\n")
 	if strings.TrimSpace(site.JournalSchema) == "" ||
 		strings.TrimSpace(site.JournalSchema) == "{}" {
 		b.WriteString("(no keys)\n")
@@ -966,7 +1035,7 @@ func pagePrompt(site Site) string {
 		for _, key := range keys {
 			state := site.Journal[key]
 			fmt.Fprintf(
-				&b,
+				&b.Builder,
 				"%s: match %d, rules %d, %d rows",
 				key,
 				state.Match,
@@ -988,14 +1057,16 @@ func pagePrompt(site Site) string {
 		}
 	}
 
-	b.WriteString("\nBOARD IS PLAIN: ")
+	b.WriteString("\n")
+	b.section("flags")
+	b.WriteString("BOARD IS PLAIN: ")
 	if site.Plain {
 		b.WriteString("yes\n")
 	} else {
 		b.WriteString("no\n")
 	}
-	fmt.Fprintf(&b, "CHANGES SINCE THE LAST HEAL: %d\n", site.ChangesSinceHeal)
-	return b.String()
+	fmt.Fprintf(&b.Builder, "CHANGES SINCE THE LAST HEAL: %d\n", site.ChangesSinceHeal)
+	b.close()
 }
 
 // reasoningOf pulls "reasoning_content" out of an OpenAI-compatible reply. It

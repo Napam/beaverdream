@@ -100,27 +100,48 @@ The code-owned live script owns the parts Datastar does not:
   `beaverdream:state`.
 - `beaverdream:stale`, from the journal runtime, reloads the page.
 
-## The admin stream
+## The admin pages and their streams
 
-The admin panel uses the same idea on a second stream, `GET /admin/live`. It
-subscribes to the same hub and patches `#admin-live`, `#admin-version`,
-`#admin-versions`, `#admin-memory`, `#admin-history` and `#admin-feeds` as
-topics arrive. The status card moves with every round, and history and memory
-move when a run ends, including a run that kept the page or failed.
+The admin panel is pages that stack in one column: `/admin` (overview:
+instruction box, charts, compaction budget, memory), `/admin/turns` (a strip
+of recent turns over an inspector that follows the newest turn),
+`/admin/turns/{id}` (the same strip with one turn held), and `/admin/site`
+(current version, versions, journal and state, reset).
 
-Admin auth is a password, not a session. `GET /admin` without the token returns
-only the password form; the form POSTs the token and gets the panel. The token
-then lives in the panel's hidden form fields and in the stream's
+Admin auth is a password, not a session. A page without the token returns
+only the password form, which POSTs back to the same path, so a reload or a
+new tab lands where it was. The token then lives in the page's hidden form
+fields and in the local `$_token` signal, which the panel sends as the
 `X-Admin-Token` request header. It is never accepted from the query string and
-never stored in a cookie, because the board runs model-written JavaScript on the
-same origin. A reload asks again.
+never stored in a cookie, because the board runs model-written JavaScript on
+the same origin. Datastar never sends signals that start with an underscore,
+so the token stays out of the `datastar` query parameter too.
+
+Links between pages keep a real `href`. A plain click pushes the path to
+history and fetches it with the header; the page answers with `#admin-body`
+patched in place. Back and forward fetch `location.pathname` the same way. A
+modified click falls through to the browser, so a new tab works and asks for
+the password there.
+
+Each page has its own stream, `GET /admin/live?page=...`, plus `&turn=N` on a
+held turn. The mount sits inside `#admin-body` with an id per page and opens
+the stream with `requestCancellation: 'cleanup'`, so navigating removes the
+mount, closes the old stream and opens the new page's. Every stream patches
+`#admin-live`, the status card, which moves with every round. The overview's
+stream patches `#admin-metrics` and `#admin-memory` when a run ends, and
+`#admin-budget` with posts, state and journal rows too, because the page it
+measures carries them. The turns stream patches `#admin-history` when a run
+ends, including a run that kept the page or failed, and `#admin-turn` only
+while it follows the newest; a held turn stays as it was loaded. The site
+stream patches `#admin-version` and `#admin-versions` on a new version and
+`#admin-feeds` on state and journal writes.
 
 Actions do not redirect either. Their forms submit through Datastar with
-`contentType: 'form'`, and the handler answers with the whole `#admin-body`
-patched in place, flash included. A plain form post without Datastar renders
-the same page with a 200, so the panel still works with scripting off and in
-tests. The stream mount sits outside `#admin-body`, so a patch never opens a
-second stream.
+`contentType: 'form'`, and the handler answers with the page the action lives
+on, its whole `#admin-body` patched in place, flash included: an instruction
+answers with the overview, the repairs and reset with the site page. A plain
+form post without Datastar renders the same page with a 200, so the panel
+still works with scripting off and in tests.
 
 ## HTTP/2
 
@@ -154,7 +175,7 @@ works.
 - `lib/webmaster/journal_runtime_test.go` runs the journal runtime in node or
   bun: pushed rows, held rows, failed reads, rules changes, matches, resync,
   refusals.
-- `cmd/serve/handlers/admin_live_test.go` covers the panel stream, its
-  version, history, state and feeds patches, and an action that patches
-  `#admin-body` instead of redirecting. The password gate is in
-  `handlers_test.go`.
+- `cmd/serve/handlers/admin_live_test.go` covers each page's stream and its
+  patches, a held turn the stream leaves alone, the turn page, the login that
+  posts back to its page, and an action that patches `#admin-body` instead of
+  redirecting. The password gate is in `handlers_test.go`.

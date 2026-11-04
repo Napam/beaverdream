@@ -226,6 +226,55 @@ func (q *Queries) GetPost(ctx context.Context, id int64) (Post, error) {
 	return i, err
 }
 
+const getWebmasterTurn = `-- name: GetWebmasterTurn :one
+SELECT
+  t.id, t.kind, t.author, t.body, t.said, t.changes, t.notes, t.status, t.error_text, t.messages, t.duration_ms, t.created_at,
+  v.id AS version_id
+FROM
+  turns t
+  LEFT JOIN site_versions v ON v.turn_id = t.id
+WHERE
+  t.kind = 'webmaster'
+  AND t.id = ?
+`
+
+type GetWebmasterTurnRow struct {
+	ID         int64
+	Kind       string
+	Author     string
+	Body       string
+	Said       string
+	Changes    string
+	Notes      string
+	Status     string
+	ErrorText  string
+	Messages   string
+	DurationMs int64
+	CreatedAt  string
+	VersionID  sql.NullInt64
+}
+
+func (q *Queries) GetWebmasterTurn(ctx context.Context, id int64) (GetWebmasterTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, getWebmasterTurn, id)
+	var i GetWebmasterTurnRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Author,
+		&i.Body,
+		&i.Said,
+		&i.Changes,
+		&i.Notes,
+		&i.Status,
+		&i.ErrorText,
+		&i.Messages,
+		&i.DurationMs,
+		&i.CreatedAt,
+		&i.VersionID,
+	)
+	return i, err
+}
+
 const latestNotes = `-- name: LatestNotes :one
 SELECT
   notes

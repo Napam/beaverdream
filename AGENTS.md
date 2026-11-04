@@ -37,10 +37,10 @@ prefer simple, readable code over production hardening.
   (the loop, prompts, tool schemas).
 - `cmd/serve/handlers` owns HTTP: `live.go` (the stream and its projection),
   `hub.go` (topics and subscribers), `pages.go` (board, post, version),
-  `versions.go` (version writes, carry forward), `admin.go` (auth, inject,
-  restore), `admin_live.go` (the admin stream), `state.go` (shared state),
-  `journal.go` (feeds), `handlers.go` (mutation wrapper, room log, cap,
-  config).
+  `versions.go` (version writes, carry forward), `admin.go` (auth, pages,
+  inject, restore), `admin_live.go` (the admin streams), `state.go` (shared
+  state), `journal.go` (feeds), `handlers.go` (mutation wrapper, room log,
+  cap, config).
 - GET requests never call the model. Only a post or an admin instruction
   mutates the site.
 
@@ -183,14 +183,18 @@ prefer simple, readable code over production hardening.
   form prefilled so a visitor can set their display name again. Posts use the
   cookie value as the author. Names are not unique and there are no accounts.
   The server ignores any author field in model markup.
-- Admin is always password-protected. `GET /admin` without the token renders
-  the password form; the form POSTs the token and gets the panel, which carries
-  it in hidden fields and sends it as `X-Admin-Token` on the live stream. Never
-  a cookie, and never a query parameter: model scripts are same-origin and must
-  not inherit admin access, and the token must not land in URLs or history.
-  Admin actions answer Datastar with the panel patched in place (a plain POST
-  renders the whole page), so no redirect needs the token. When `ADMIN_TOKEN`
-  is empty the server generates one and logs the password.
+- Admin is always password-protected. The pages are `/admin`,
+  `/admin/turns`, `/admin/turns/{id}` and `/admin/site`. Without the token a
+  page renders the password form, which POSTs the token back to the same path.
+  The page carries the token in hidden fields and the `$_token` signal, and
+  sends it as `X-Admin-Token` on its live stream and on the fetch that moves
+  between pages. Never a cookie, and never a query parameter: model scripts
+  are same-origin and must not inherit admin access, and the token must not
+  land in URLs or history. Admin pages and actions answer Datastar with
+  `#admin-body` patched in place (a plain request renders the whole page), so
+  no redirect needs the token. Each page opens its own stream for its own
+  panels. When `ADMIN_TOKEN` is empty the server generates one and logs the
+  password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining
@@ -212,7 +216,11 @@ prefer simple, readable code over production hardening.
 ## Frontend
 
 The board page is assembled in Go (`lib/webmaster/site.go`), not templ. The
-admin page is templ with tailwind classes. `web/lib` and
+admin page is templ with tailwind classes; `web/pages/admin_view.go` turns
+stored turns into what it shows. The user message in `turns.messages`
+carries `sections`, byte offsets that tile the prompt, written by the same
+builder that writes the prompt, so the inspector shows each part exactly as
+the model read it. Charts are plain CSS bars. `web/lib` and
 `static/bundle.js` are leftover scaffold; no page loads them, so do not add
 board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 
@@ -224,6 +232,8 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   paths. `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.
+  The mock reports rough usage, four request bytes per prompt token with the
+  system message counted as cached, so the admin charts have numbers.
 - Each model round logs `Mutation round finished` with its time, prompt,
   cached and completion tokens, the size of the reply and the reasoning, its
   `finish_reason`, the tools it called, how many were rejected, one clipped

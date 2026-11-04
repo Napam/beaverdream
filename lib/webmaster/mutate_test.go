@@ -467,6 +467,49 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 	}
 }
 
+// The sections tile the prompt with no gap or overlap, and each one starts at
+// its own heading, so the admin panel shows exactly what the model read.
+func TestUserPromptSectionsTileThePrompt(t *testing.T) {
+	room := Room{Summary: "old news", Notes: "keep an eye on dave", Log: []Turn{{
+		ID: 1, Kind: TurnPost, Author: "kit", Body: "hi",
+	}}}
+	site := Site{CSS: "body{}", Header: "<h1>hi</h1>", Board: "{{posts}}", Footer: "<p>bye</p>"}
+	prompt, sections := userPromptSections(site, room, []Post{{ID: 9, Author: "dave", Body: "yo"}})
+
+	if prompt != userPrompt(site, room, []Post{{ID: 9, Author: "dave", Body: "yo"}}) {
+		t.Fatal("the sectioned prompt differs from the prompt")
+	}
+	starts := map[string]string{
+		"compacted history": "COMPACTED HISTORY:",
+		"room log":          "ROOM LOG AFTER THAT",
+		"notes":             "YOUR NOTES:",
+		"stylesheet":        "CURRENT STYLESHEET:",
+		"header":            "CURRENT REGIONS:\nheader:",
+		"board":             "board:\n{{posts}}",
+		"footer":            "footer:\n<p>bye</p>",
+		"shared state":      "CURRENT SHARED STATE:",
+		"journal":           "CURRENT JOURNAL:",
+		"flags":             "BOARD IS PLAIN:",
+		"new post":          "NEW POST #9 from dave",
+	}
+	if len(sections) != len(starts) {
+		t.Fatalf("got %d sections, want %d: %+v", len(sections), len(starts), sections)
+	}
+	at := 0
+	for _, s := range sections {
+		if s.Start != at || s.End < s.Start {
+			t.Fatalf("section %q spans %d..%d, want it to start at %d", s.Name, s.Start, s.End, at)
+		}
+		if !strings.HasPrefix(prompt[s.Start:s.End], starts[s.Name]) {
+			t.Errorf("section %q starts with %q", s.Name, prompt[s.Start:min(s.End, s.Start+30)])
+		}
+		at = s.End
+	}
+	if at != len(prompt) {
+		t.Errorf("sections end at %d, prompt is %d bytes", at, len(prompt))
+	}
+}
+
 // A notes rewrite must not touch the cacheable prefix: everything through the
 // end of the room log stays byte for byte the same.
 func TestUserPromptKeepsTheLogPrefixWhenNotesChange(t *testing.T) {

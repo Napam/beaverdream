@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,13 +13,23 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
-// AdminLive is the admin page's one stream. It patches the same fragments the
-// page rendered, so the panel follows the board without polling. The token
-// rides in the X-Admin-Token request header; a bad one answers 204, which
-// tells Datastar to stop retrying a page the browser cannot fix.
+// AdminLive is an admin page's one stream. The page names itself in the query,
+// and the stream patches the fragments that page rendered, so the panel
+// follows the board without polling. The token rides in the X-Admin-Token
+// request header; a bad one answers 204, which tells Datastar to stop retrying
+// a page the browser cannot fix.
 func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	h.adminHeaders(w)
 	if !h.adminTokenOK(r) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	panel := pages.Panel{Page: r.URL.Query().Get("page")}
+	switch panel.Page {
+	case pages.PageOverview, pages.PageSite:
+	case pages.PageTurns:
+		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
+	default:
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -30,7 +41,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
-	if err := h.syncAdmin(ctx, sse, topicAll); err != nil {
+	if err := h.syncAdmin(ctx, sse, panel, topicAll); err != nil {
 		return
 	}
 
@@ -47,18 +58,20 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-sub.wake:
-			if err := h.syncAdmin(ctx, sse, sub.take()); err != nil {
+			if err := h.syncAdmin(ctx, sse, panel, sub.take()); err != nil {
 				return
 			}
 		}
 	}
 }
 
-// syncAdmin patches the panels a topic can change. A failed read is logged and
-// skipped: the next change retries it. Only a failed write ends the stream.
+// syncAdmin patches the panels of one page that a topic can change. Every
+// page carries the status card. A failed read is logged and skipped: the next
+// change retries it. Only a failed write ends the stream.
 func (h *Handlers) syncAdmin(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
+	panel pages.Panel,
 	t topic,
 ) error {
 	if t&(topicBusy|topicPosts|topicSite) != 0 {
@@ -71,22 +84,39 @@ func (h *Handlers) syncAdmin(
 			return err
 		}
 	}
-	if t&topicSite != 0 {
-		if err := h.patchAdminVersion(ctx, sse); err != nil {
-			return err
+	switch panel.Page {
+	case pages.PageOverview:
+		if t&(topicSite|topicTurns) != 0 {
+			if err := h.patchAdminMetrics(ctx, sse); err != nil {
+				return err
+			}
+			if err := h.patchAdminMemory(ctx, sse); err != nil {
+				return err
+			}
 		}
-	}
-	if t&(topicSite|topicTurns) != 0 {
-		if err := h.patchAdminMemory(ctx, sse); err != nil {
-			return err
+		// The budget counts the log and the page, and the page carries the
+		// shared state and the newest journal rows.
+		if t&(topicPosts|topicSite|topicTurns|topicState|topicJournal) != 0 {
+			if err := h.patchAdminBudget(ctx, sse); err != nil {
+				return err
+			}
 		}
-		if err := h.patchAdminHistory(ctx, sse); err != nil {
-			return err
+	case pages.PageTurns:
+		if t&(topicSite|topicTurns) != 0 {
+			if err := h.patchAdminTurns(ctx, sse, panel.Turn); err != nil {
+				return err
+			}
 		}
-	}
-	if t&(topicSite|topicState|topicJournal) != 0 {
-		if err := h.patchAdminFeeds(ctx, sse); err != nil {
-			return err
+	case pages.PageSite:
+		if t&topicSite != 0 {
+			if err := h.patchAdminVersion(ctx, sse); err != nil {
+				return err
+			}
+		}
+		if t&(topicSite|topicState|topicJournal) != 0 {
+			if err := h.patchAdminFeeds(ctx, sse); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -123,7 +153,7 @@ func (h *Handlers) patchAdminVersion(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 ) error {
-	versions, err := h.queries.ListSiteVersions(ctx, 12)
+	versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list versions", slog.Any("error", err))
 		return nil
@@ -158,18 +188,66 @@ func (h *Handlers) patchAdminMemory(
 	return h.patchAdmin(ctx, sse, "admin-memory", pages.AdminMemory(summary, through))
 }
 
-// patchAdminHistory brings the newest turns forward, so a reset cannot leave
-// deleted runs on a second admin tab.
-func (h *Handlers) patchAdminHistory(
+// patchAdminMetrics brings the charts forward.
+func (h *Handlers) patchAdminMetrics(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 ) error {
-	runs, err := h.adminRuns(ctx)
+	turns, _, err := h.adminTurns(ctx, -1)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
 	}
-	return h.patchAdmin(ctx, sse, "admin-history", pages.AdminHistory(runs))
+	return h.patchAdmin(ctx, sse, "admin-metrics", pages.AdminMetrics(pages.NewMetrics(turns)))
+}
+
+// patchAdminTurns brings the turn list forward, and the inspector when it
+// follows the newest. One read covers both, so a reset cannot leave deleted
+// runs on a second admin tab. A picked turn stays as it was loaded.
+func (h *Handlers) patchAdminTurns(
+	ctx context.Context,
+	sse *datastar.ServerSentEventGenerator,
+	picked int64,
+) error {
+	pick := int64(0)
+	if picked > 0 {
+		pick = -1
+	}
+	turns, latest, err := h.adminTurns(ctx, pick)
+	if err != nil {
+		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
+		return nil
+	}
+	if err := h.patchAdmin(
+		ctx,
+		sse,
+		"admin-history",
+		pages.AdminHistory(turns, picked),
+	); err != nil {
+		return err
+	}
+	if picked > 0 {
+		return nil
+	}
+	// The newest turn's only neighbour is the one before it.
+	var older int64
+	if len(turns) > 1 {
+		older = turns[1].Run.ID
+	}
+	return h.patchAdmin(ctx, sse, "admin-turn", pages.AdminTurn(latest, true, older, 0))
+}
+
+// patchAdminBudget brings the compaction budget forward.
+func (h *Handlers) patchAdminBudget(
+	ctx context.Context,
+	sse *datastar.ServerSentEventGenerator,
+) error {
+	site, err := h.queries.CurrentSite(ctx)
+	if err != nil {
+		h.logger.Error("Live admin stream could not load the site", slog.Any("error", err))
+		return nil
+	}
+	return h.patchAdmin(ctx, sse, "admin-budget", pages.AdminBudget(h.adminBudget(ctx, site)))
 }
 
 // patchAdminFeeds brings the journal and shared state forward.

@@ -91,6 +91,6 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		return "board reset to the original version", true
 	}()
 	if ok {
-		h.adminDone(w, r, message)
+		h.adminDone(w, r, sitePanel, message)
 	}
 }

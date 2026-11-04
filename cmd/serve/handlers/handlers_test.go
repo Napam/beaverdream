@@ -622,7 +622,7 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	if !strings.Contains(open.Body.String(), `name="password"`) {
 		t.Fatal("the page without a token is not the password form")
 	}
-	if strings.Contains(open.Body.String(), "journal and shared state") {
+	if strings.Contains(open.Body.String(), "talk to the webmaster") {
 		t.Fatal("the page without a token carries admin data")
 	}
 
@@ -638,7 +638,7 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	if authed.Code != http.StatusOK {
 		t.Fatalf("with password: status = %d, want 200", authed.Code)
 	}
-	if !strings.Contains(authed.Body.String(), "journal and shared state") {
+	if !strings.Contains(authed.Body.String(), "talk to the webmaster") {
 		t.Fatal("the authenticated page is missing the panel")
 	}
 	if got := authed.Header().Get("Referrer-Policy"); got != "no-referrer" {
@@ -657,14 +657,14 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	req.Header.Set("X-Admin-Token", "secret")
 	h.Admin(header, req)
 	if header.Code != http.StatusOK ||
-		!strings.Contains(header.Body.String(), "journal and shared state") {
+		!strings.Contains(header.Body.String(), "talk to the webmaster") {
 		t.Fatalf("header token: status = %d, want the panel", header.Code)
 	}
 
 	// The token is not accepted in the query string any more.
 	query := httptest.NewRecorder()
 	h.Admin(query, httptest.NewRequest(http.MethodGet, "/admin?token=secret", nil))
-	if strings.Contains(query.Body.String(), "journal and shared state") {
+	if strings.Contains(query.Body.String(), "talk to the webmaster") {
 		t.Fatal("a query token still opens the panel")
 	}
 	action := postForm(t, h.HealBoard, "/admin/heal?token=secret", url.Values{})
@@ -1679,7 +1679,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 		t.Fatalf("upsert state: %v", err)
 	}
 
-	rec := getAdmin(t, h.Admin, "/admin")
+	rec := getAdmin(t, h.AdminSite, "/admin/site")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -1689,7 +1689,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 		"1 row · match 1 · rules 1",
 		publicID(visitorA),
 		"taps = 7",
-		"JOURNAL SCHEMA",
+		"journal schema",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin page is missing %q", want)

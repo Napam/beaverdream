@@ -93,6 +93,11 @@ func completions(w http.ResponseWriter, r *http.Request) {
 		writeStream(w, calls)
 		return
 	}
+	reply, err := json.Marshal(calls)
+	if err != nil {
+		http.Error(w, "encode calls", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      "chatcmpl-mock",
 		"object":  "chat.completion",
@@ -107,10 +112,28 @@ func completions(w http.ResponseWriter, r *http.Request) {
 			},
 			"finish_reason": "tool_calls",
 		}},
-		"usage": map[string]int{
-			"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
-		},
+		"usage": usage(req, len(reply)),
 	})
+}
+
+// usage is a rough count for the admin panel's charts: four bytes of request
+// per prompt token, with the system message as the cached prefix a provider
+// would report.
+func usage(req chatRequest, replyBytes int) map[string]any {
+	prompt, cached := 0, 0
+	for _, m := range req.Messages {
+		prompt += len(m.Content) / 4
+		if m.Role == "system" {
+			cached += len(m.Content) / 4
+		}
+	}
+	completion := replyBytes / 4
+	return map[string]any{
+		"prompt_tokens":         prompt,
+		"completion_tokens":     completion,
+		"total_tokens":          prompt + completion,
+		"prompt_tokens_details": map[string]int{"cached_tokens": cached},
+	}
 }
 
 // decide returns the tool calls for one round. A theme keyword rewrites the

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/db/generated/sqlc"
@@ -13,14 +14,6 @@ import (
 // resetConfirm asks before the one destructive action. Both the plain form and
 // the Datastar click ask the same question.
 const resetConfirm = "confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
-
-// RunView pairs a stored run with its parsed conversation, so the admin
-// template never touches JSON.
-type RunView struct {
-	Run            sqlc.ListWebmasterTurnsRow
-	Messages       []webmaster.Message
-	MessagesLoaded bool
-}
 
 // FeedView is one declared journal key: the match being played, its rules and
 // size, and the last rows the page would fold.
@@ -51,22 +44,14 @@ type LiveView struct {
 }
 
 const (
-	adminCard  = "rounded-sm border border-gray-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
-	adminLabel = "mb-2 text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-neutral-500"
-	adminPre   = "overflow-auto rounded bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-600 dark:bg-neutral-950 dark:text-neutral-400"
-	adminInput = "w-full rounded-sm border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200 dark:placeholder:text-neutral-600 dark:focus:border-neutral-600"
+	adminCard   = "rounded-lg border border-gray-200 bg-white p-4 shadow-xs dark:border-neutral-800 dark:bg-neutral-900"
+	adminLabel  = "text-xs font-semibold tracking-wide text-gray-500 uppercase dark:text-neutral-500"
+	adminMuted  = "text-xs text-gray-500 dark:text-neutral-500"
+	adminPre    = "overflow-auto rounded-md bg-gray-50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-gray-700 dark:bg-neutral-950 dark:text-neutral-300"
+	adminInput  = "w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200 dark:placeholder:text-neutral-600 dark:focus:border-neutral-600"
+	adminButton = "cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
+	adminChip   = "inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-700 dark:bg-neutral-800 dark:text-neutral-300"
 )
-
-func statusClass(status string) string {
-	switch status {
-	case "changed":
-		return "text-emerald-600 dark:text-emerald-400"
-	case "error":
-		return "text-red-600 dark:text-red-400"
-	default:
-		return "text-gray-500 dark:text-neutral-400"
-	}
-}
 
 func dash(s string) string {
 	if s == "" {
@@ -109,26 +94,112 @@ func todayText(live LiveView) string {
 	return strconv.FormatInt(live.Today, 10)
 }
 
-// AdminView is everything the panel shows. The page and the in-place patch
-// after an action render from the same value, so an action never redirects and
-// never puts the token in a URL.
+func liveDot(state string) string {
+	switch state {
+	case "running":
+		return "bg-indigo-500 animate-pulse"
+	case "queued":
+		return "bg-amber-400"
+	}
+	return "bg-emerald-500"
+}
+
+func height(part, whole int64) string {
+	return "height: " + percent(part, whole)
+}
+
+func width(part, whole int64) string {
+	return "width: " + percent(part, whole)
+}
+
+// The admin pages. Each one has its own path, and the panel links between them
+// with a fetch that carries the token as a header.
+const (
+	PageOverview = "overview"
+	PageTurns    = "turns"
+	PageSite     = "site"
+)
+
+// Panel names one admin page. Turn is the turn the turns page shows, or 0 to
+// follow the newest.
+type Panel struct {
+	Page string
+	Turn int64
+}
+
+// Path is where the page lives. A login form posts back to it, so a reload
+// returns to the same page.
+func (p Panel) Path() string {
+	switch {
+	case p.Page == PageTurns && p.Turn > 0:
+		return "/admin/turns/" + i64(p.Turn)
+	case p.Page == PageTurns:
+		return "/admin/turns"
+	case p.Page == PageSite:
+		return "/admin/site"
+	}
+	return "/admin"
+}
+
+// LivePath is the page's stream. It names the page, so the stream pushes only
+// the panels this page shows.
+func (p Panel) LivePath() string {
+	path := "/admin/live?page=" + p.Page
+	if p.Turn > 0 {
+		path += "&turn=" + i64(p.Turn)
+	}
+	return path
+}
+
+// AdminView is everything one admin page shows. A field another page needs
+// stays empty. The page and the in-place patch after an action or a
+// navigation render from the same value, so nothing redirects and the token
+// never lands in a URL.
 type AdminView struct {
+	Panel          Panel
 	Site           sqlc.SiteVersion
 	Live           LiveView
 	Feeds          []FeedView
 	States         []StateView
-	Runs           []RunView
+	Turns          []TurnRow
+	Turn           *TurnDetail
+	Metrics        MetricsView
+	Budget         BudgetView
 	Versions       []sqlc.SiteVersion
 	Summary        string
 	SummaryThrough int64
 	Flash          string
 	Token          string
+	// Stream is the data-init that opens this page's stream.
+	Stream string
+}
+
+// adminSignals are the page's local signals: the code tab of the current
+// version and the token the fetches send as a header. Datastar never sends
+// signals that start with an underscore, so the token stays out of URLs.
+func adminSignals(token string) string {
+	return fmt.Sprintf("{_code: 'board', _token: %s}", strconv.Quote(token))
+}
+
+// fetchPage loads an admin page into #admin-body with the token in a header.
+func fetchPage(path string) string {
+	return "@get('" + path + "', {headers: {'X-Admin-Token': $_token}})"
+}
+
+// navTo follows a link inside the panel: push the path, fetch the page. A
+// modified click falls through to the browser, so a new tab works and asks
+// for the password there.
+func navTo(path string) string {
+	return "if (!evt.metaKey && !evt.ctrlKey && !evt.shiftKey && !evt.altKey) { " +
+		"evt.preventDefault(); history.pushState(null, '', '" + path + "'); " +
+		fetchPage(path) + "; window.scrollTo(0, 0) }"
 }
 
 // AdminLogin is the only thing an unauthenticated visitor sees: a password
 // box. There is no session cookie on purpose, because the board runs
-// model-written JavaScript on the same origin. A reload asks again.
-templ AdminLogin(failed bool) {
+// model-written JavaScript on the same origin. A reload asks again, and the
+// form posts to the page it was asked for.
+templ AdminLogin(action string, failed bool) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -140,7 +211,7 @@ templ AdminLogin(failed bool) {
 		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
 			<main class="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4">
 				<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-				<form method="post" action="/admin" class="flex flex-col gap-2">
+				<form method="post" action={ templ.SafeURL(action) } class="flex flex-col gap-2">
 					<label class="text-xs text-gray-500 dark:text-neutral-400" for="password">password</label>
 					<input
 						id="password"
@@ -156,7 +227,7 @@ templ AdminLogin(failed bool) {
 					}
 					<button
 						type="submit"
-						class="cursor-pointer rounded-sm bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+						class="cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
 					>enter</button>
 				</form>
 			</main>
@@ -164,9 +235,9 @@ templ AdminLogin(failed bool) {
 	</html>
 }
 
-// AdminPage is the shell. The stream mount sits outside AdminBody, so patching
-// the body after an action does not open a second stream.
-templ AdminPage(view AdminView, datastar string, streamInit string) {
+// AdminPage is the shell. Back and forward fetch the page the address bar
+// names; everything else lives in AdminBody, which navigation replaces.
+templ AdminPage(view AdminView, datastar string) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -176,63 +247,97 @@ templ AdminPage(view AdminView, datastar string, streamInit string) {
 			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
 			<script type="module" src={ datastar }></script>
 		</head>
-		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
-			<div class="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-8">
-				<div id="admin-stream" hidden data-init={ streamInit }></div>
+		<body class="min-h-dvh bg-gray-100 text-gray-800 antialiased dark:bg-neutral-950 dark:text-neutral-300">
+			<div
+				class="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6"
+				data-signals={ adminSignals(view.Token) }
+				data-on:popstate__window="@get(location.pathname, {headers: {'X-Admin-Token': $_token}})"
+			>
 				@AdminBody(view)
 			</div>
 		</body>
 	</html>
 }
 
-// AdminBody is the panel without the shell. An action patches this whole
-// element, so the flash and every panel update in one frame.
+// AdminBody is one page without the shell. Navigation and actions patch this
+// whole element. The stream mount is inside it with an id per page, so a new
+// page closes the old stream and opens its own.
 templ AdminBody(view AdminView) {
-	<div id="admin-body" class="contents">
-		<header class="flex items-baseline justify-between gap-4">
-			<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-			<nav class="flex gap-4 text-xs text-gray-400 dark:text-neutral-600">
-				<a class="hover:text-gray-600 dark:hover:text-neutral-400" href="/">board</a>
+	<div id="admin-body" class="flex flex-col gap-6">
+		<div id={ "admin-stream-" + view.Panel.Page + "-" + i64(view.Panel.Turn) } hidden data-init={ view.Stream }></div>
+		<header class="sticky top-0 z-20 -mx-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-gray-200 bg-gray-100/90 px-4 backdrop-blur sm:-mx-6 sm:px-6 dark:border-neutral-800 dark:bg-neutral-950/90">
+			<h1 class="py-3 text-base font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
+			<nav class="flex gap-1 self-stretch text-sm">
+				@navLink(view.Panel, PageOverview, "/admin", "overview")
+				@navLink(view.Panel, PageTurns, "/admin/turns", "turns")
+				@navLink(view.Panel, PageSite, "/admin/site", "site")
 			</nav>
+			<div class="ml-auto flex items-center gap-4">
+				@AdminLiveCard(view.Live)
+				<a class="text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200" href="/" target="_blank" rel="noopener">board ↗</a>
+			</div>
 		</header>
-		<div id="admin-flash">
+		<div id="admin-flash" class="empty:hidden">
 			if view.Flash != "" {
-				<p class="rounded-sm border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{ view.Flash }</p>
+				<p class="rounded-md border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">{ view.Flash }</p>
 			}
 		</div>
-		@AdminLiveCard(view.Live)
+		switch view.Panel.Page {
+			case PageTurns:
+				@turnsPage(view)
+			case PageSite:
+				@sitePage(view)
+			default:
+				@overviewPage(view)
+		}
+	</div>
+}
+
+func navClass(current Panel, page string) string {
+	base := "flex items-center border-b-2 px-3 "
+	if current.Page == page {
+		return base + "border-gray-900 font-medium text-gray-900 dark:border-neutral-100 dark:text-neutral-100"
+	}
+	return base + "border-transparent text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200"
+}
+
+templ navLink(current Panel, page string, path string, label string) {
+	<a href={ templ.SafeURL(path) } data-on:click={ navTo(path) } class={ navClass(current, page) }>{ label }</a>
+}
+
+// overviewPage is the glance, top to bottom: talk to the webmaster, how
+// recent turns went, how close the room is to compaction, and what it
+// remembers.
+templ overviewPage(view AdminView) {
+	<div class="flex flex-col gap-6">
+		@adminInstruct(view.Token)
+		@AdminMetrics(view.Metrics)
+		@AdminBudget(view.Budget)
 		@AdminMemory(view.Summary, view.SummaryThrough)
+	</div>
+}
+
+// turnsPage shows the list of recent turns, then one of them: the newest or
+// the one in the URL.
+templ turnsPage(view AdminView) {
+	{{ older, newer := view.turnNeighbours() }}
+	<div class="flex flex-col gap-3">
+		@AdminHistory(view.Turns, view.Panel.Turn)
+		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer)
+	</div>
+}
+
+// sitePage is the page as it stands, the versions before it, the data it
+// keeps, and the destructive action, top to bottom.
+templ sitePage(view AdminView) {
+	<div class="flex flex-col gap-6">
 		@AdminVersion(view.Site, view.Token)
-		@AdminFeeds(view.Feeds, view.States)
-		<section class={ adminCard }>
-			<p class={ adminLabel }>talk to the webmaster</p>
-			<form method="post" action="/admin/mutate" class="flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'})" data-indicator:_sending>
-				<input type="hidden" name="token" value={ view.Token }/>
-				<textarea
-					name="instruction"
-					rows="3"
-					required
-					maxlength="2000"
-					placeholder="make it look like a 1998 guestbook"
-					class={ adminInput }
-				></textarea>
-				<div class="flex items-center justify-between gap-4">
-					<label class="flex items-center gap-2 text-xs text-gray-500 dark:text-neutral-400">
-						<input type="checkbox" name="also_post" value="1"/>
-						also store as a post
-					</label>
-					<button
-						type="submit"
-						data-attr:disabled="$_sending"
-						class="cursor-pointer rounded-sm bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black disabled:cursor-default disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
-					>send to model</button>
-				</div>
-			</form>
-		</section>
 		@AdminVersions(view.Versions, view.Site.ID, view.Token)
-		@AdminHistory(view.Runs)
-		<section class={ adminCard + " border-red-500/30" }>
-			<p class={ adminLabel }>reset</p>
+		@AdminFeeds(view.Feeds, view.States)
+	</div>
+	<section class={ adminCard + " border-red-500/30 dark:border-red-500/30" }>
+		<p class={ adminLabel }>danger zone</p>
+		<div class="mt-2 flex flex-wrap items-center gap-4">
 			<form
 				method="post"
 				action="/admin/reset"
@@ -244,14 +349,206 @@ templ AdminBody(view AdminView) {
 					data-indicator:_resetting
 					data-attr:disabled="$_resetting"
 					data-on:click={ "evt.preventDefault(); if (" + resetConfirm + ") @post('/admin/reset', {contentType: 'form'})" }
-					class="cursor-pointer rounded-sm border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 disabled:cursor-default disabled:opacity-50"
+					class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
 				>reset the board</button>
 			</form>
-			<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
+			<p class={ adminMuted }>
 				Deletes every post, feed row, shared value and later version, and clears the mutation history. The original version stays.
 			</p>
-		</section>
+		</div>
+	</section>
+}
+
+templ adminInstruct(token string) {
+	<section class={ adminCard }>
+		<p class={ adminLabel }>talk to the webmaster</p>
+		<form method="post" action="/admin/mutate" class="mt-2 flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'})" data-indicator:_sending>
+			<input type="hidden" name="token" value={ token }/>
+			<textarea
+				name="instruction"
+				rows="3"
+				required
+				maxlength="2000"
+				placeholder="make it look like a 1998 guestbook"
+				class={ adminInput }
+			></textarea>
+			<div class="flex items-center justify-between gap-4">
+				<label class="flex items-center gap-2 text-xs text-gray-500 dark:text-neutral-400">
+					<input type="checkbox" name="also_post" value="1"/>
+					also store as a post
+				</label>
+				<button
+					type="submit"
+					data-attr:disabled="$_sending"
+					class="cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black disabled:cursor-default disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+				>send to model</button>
+			</div>
+		</form>
+	</section>
+}
+
+// AdminLiveCard is the worker's state right now, in the sticky header. The
+// stream patches the whole element, so every value is server-rendered.
+templ AdminLiveCard(live LiveView) {
+	<div id="admin-live" class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+		<span class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-0.5 dark:border-neutral-800 dark:bg-neutral-900">
+			<span class={ "size-2 rounded-full " + liveDot(live.State) }></span>
+			<span class="font-medium text-gray-900 dark:text-neutral-100">{ live.State }</span>
+			<span class="text-gray-500 dark:text-neutral-400">{ live.Detail }</span>
+		</span>
+		<span class="text-gray-500 dark:text-neutral-400">version <span class="font-mono text-gray-900 dark:text-neutral-100">v{ i64(live.Version) }</span></span>
+		<span class="text-gray-500 dark:text-neutral-400">queued <span class="font-mono text-gray-900 dark:text-neutral-100">{ itoa(live.Pending) }</span></span>
+		<span class="text-gray-500 dark:text-neutral-400">today <span class="font-mono text-gray-900 dark:text-neutral-100">{ todayText(live) }</span></span>
+		if live.Error != "" {
+			<span class="truncate text-xs text-red-600 dark:text-red-400" title={ live.Error }>{ live.Error }</span>
+		}
 	</div>
+}
+
+// AdminMetrics charts the recent finished turns: what each one cost in tokens
+// and how long it took. A column opens its turn in the inspector.
+templ AdminMetrics(m MetricsView) {
+	<section id="admin-metrics" class={ adminCard + " flex flex-col gap-5" }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>recent turns</p>
+			<p class={ adminMuted }>last { plural(m.Finished, "finished turn") }</p>
+		</div>
+		if m.Finished == 0 {
+			<p class="text-sm text-gray-400 dark:text-neutral-600">no finished turns yet</p>
+		} else {
+			<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+				@statTile("avg time", millis(m.TotalMs/int64(m.Finished)), "per turn")
+				@statTile("avg rounds", strconv.FormatFloat(float64(m.TotalRounds)/float64(m.Finished), 'f', 1, 64), "most "+itoa(m.MaxRoundsCount))
+				@statTile("cache hit", ratio(m.CachedTokens, m.PromptTokens), "of prompt tokens")
+				@statTile("tokens in", short(m.PromptTokens), short(m.PromptTokens-m.CachedTokens)+" uncached")
+				@statTile("tokens out", short(m.OutputTokens), "incl. reasoning")
+				@statTile("rejected", itoa(m.RejectedCalls), "tool calls")
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<div class="flex flex-wrap items-baseline justify-between gap-2">
+					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">tokens per turn</p>
+					<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
+						@legend("bg-sky-200 dark:bg-sky-900", "prompt, cached")
+						@legend("bg-sky-500", "prompt, uncached")
+						@legend("bg-violet-500", "output")
+					</div>
+				</div>
+				if m.MaxTokens == 0 {
+					<p class="flex h-36 items-center justify-center rounded-md bg-gray-50 text-sm text-gray-400 dark:bg-neutral-950 dark:text-neutral-600">the model reported no token counts</p>
+				}
+				<div
+					class="flex h-36 items-end gap-0.5 border-b border-gray-200 dark:border-neutral-800"
+					if m.MaxTokens == 0 {
+						hidden
+					}
+				>
+					for _, row := range m.Turns {
+						<a
+							href={ templ.SafeURL(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							title={ turnTitle(row) }
+							data-on:click={ navTo(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
+						>
+							<span class="flex w-full flex-col overflow-hidden rounded-t-sm" style={ height(row.PromptTokens+row.CompletionTokens, m.MaxTokens) }>
+								<span class="w-full bg-violet-500" style={ height(row.CompletionTokens, row.PromptTokens+row.CompletionTokens) }></span>
+								<span class="w-full bg-sky-500" style={ height(row.PromptTokens-row.CachedTokens, row.PromptTokens+row.CompletionTokens) }></span>
+								<span class="w-full bg-sky-200 dark:bg-sky-900" style={ height(row.CachedTokens, row.PromptTokens+row.CompletionTokens) }></span>
+							</span>
+						</a>
+					}
+				</div>
+				@chartAxis(m, short(m.MaxTokens)+" tokens")
+			</div>
+			<div class="flex flex-col gap-1.5">
+				<div class="flex flex-wrap items-baseline justify-between gap-2">
+					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">time per turn <span class="font-normal text-gray-500 dark:text-neutral-500">· the number is rounds</span></p>
+					<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
+						@legend(statusBar("changed"), "changed")
+						@legend(statusBar("kept"), "kept")
+						@legend(statusBar("silent"), "silent")
+						@legend(statusBar("error"), "error")
+					</div>
+				</div>
+				<div class="flex h-28 items-end gap-0.5 border-b border-gray-200 dark:border-neutral-800">
+					for _, row := range m.Turns {
+						<a
+							href={ templ.SafeURL(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							title={ turnTitle(row) }
+							data-on:click={ navTo(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col items-center justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
+						>
+							<span class="text-[10px] leading-4 text-gray-400 tabular-nums dark:text-neutral-500">{ itoa(row.Rounds) }</span>
+							<span class={ "w-full rounded-t-sm " + statusBar(row.Run.Status) } style={ height(row.Run.DurationMs, m.MaxDurationMs) }></span>
+						</a>
+					}
+				</div>
+				@chartAxis(m, millis(m.MaxDurationMs))
+			</div>
+		}
+	</section>
+}
+
+templ statTile(label string, value string, sub string) {
+	<div class="rounded-md bg-gray-50 px-3 py-2 dark:bg-neutral-950">
+		<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">{ label }</p>
+		<p class="font-mono text-lg font-semibold text-gray-900 tabular-nums dark:text-neutral-100">{ value }</p>
+		<p class="truncate text-[11px] text-gray-400 dark:text-neutral-600">{ sub }</p>
+	</div>
+}
+
+templ legend(swatch string, label string) {
+	<span class="inline-flex items-center gap-1.5"><span class={ "size-2.5 rounded-sm " + swatch }></span>{ label }</span>
+}
+
+templ chartAxis(m MetricsView, top string) {
+	<div class="flex justify-between font-mono text-[11px] text-gray-400 dark:text-neutral-600">
+		if len(m.Turns) > 0 {
+			<span>#{ i64(m.Turns[0].Run.ID) }</span>
+			<span>tallest { top }</span>
+			<span>#{ i64(m.Turns[len(m.Turns)-1].Run.ID) }</span>
+		}
+	</div>
+}
+
+// AdminBudget shows how close the next prompt is to compaction, measured the
+// way the server decides it.
+templ AdminBudget(b BudgetView) {
+	<section id="admin-budget" class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex items-baseline justify-between gap-2">
+			<p class={ adminLabel }>context budget</p>
+			<p class={ adminMuted }>compaction runs when either bar fills</p>
+		</div>
+		<div class="flex flex-col gap-1">
+			<div class="flex items-baseline justify-between text-sm">
+				<span>log + page</span>
+				<span class="font-mono tabular-nums">~{ short(b.Tokens()) } / { short(int64(b.LimitTokens)) } tokens</span>
+			</div>
+			<div class="flex h-3 overflow-hidden rounded-full bg-gray-100 dark:bg-neutral-800">
+				<span class="h-full bg-sky-500" style={ width(b.LogRunes/runesPerToken, int64(b.LimitTokens)) } title={ "room log ~" + short(b.LogRunes/runesPerToken) + " tokens" }></span>
+				<span class="h-full bg-emerald-500" style={ width(b.PageRunes/runesPerToken, int64(b.LimitTokens)) } title={ "page ~" + short(b.PageRunes/runesPerToken) + " tokens" }></span>
+			</div>
+			<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
+				@legend("bg-sky-500", "room log ~"+short(b.LogRunes/runesPerToken))
+				@legend("bg-emerald-500", "page ~"+short(b.PageRunes/runesPerToken))
+			</div>
+		</div>
+		<div class="flex flex-col gap-1">
+			<div class="flex items-baseline justify-between text-sm">
+				<span>turns since the summary</span>
+				<span class="font-mono tabular-nums">{ i64(b.Turns) } / { itoa(b.LimitTurns) }</span>
+			</div>
+			<div class="h-3 overflow-hidden rounded-full bg-gray-100 dark:bg-neutral-800">
+				<span class="block h-full bg-violet-500" style={ width(b.Turns, int64(b.LimitTurns)) }></span>
+			</div>
+		</div>
+		<p class={ adminMuted }>
+			if b.SummaryThrough > 0 {
+				The summary covers turns through #{ i64(b.SummaryThrough) } and adds ~{ short(b.SummaryRunes / runesPerToken) } tokens on top.
+			} else {
+				Nothing compacted yet. Every turn so far is in the log.
+			}
+		</p>
+	</section>
 }
 
 // AdminMemory is the compacted history. The stream patches it when a run
@@ -260,223 +557,504 @@ templ AdminMemory(summary string, through int64) {
 	<section id="admin-memory" class={ adminCard }>
 		<p class={ adminLabel }>compacted memory</p>
 		if summary == "" {
-			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
+			<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
 		} else {
-			<p class="mb-2 text-xs text-gray-400 dark:text-neutral-600">
-				one message standing in for turns through #{ strconv.FormatInt(through, 10) }
-			</p>
-			<pre class={ adminPre }>{ summary }</pre>
+			<details class="mt-2" data-preserve-attr="open">
+				<summary class="cursor-pointer text-sm text-gray-600 dark:text-neutral-400">
+					one message standing in for turns through #{ i64(through) } · { tokens(utf8.RuneCountInString(summary)) } tokens
+				</summary>
+				<pre class={ adminPre + " mt-2 max-h-96" }>{ summary }</pre>
+			</details>
 		}
 	</section>
 }
 
-// AdminHistory is the newest turns with their conversations. The stream
-// patches it when a version lands, so a rewrite appears without a reload.
-templ AdminHistory(runs []RunView) {
-	<section id="admin-history">
-		<p class={ adminLabel }>mutation history</p>
-		if len(runs) == 0 {
-			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
-		}
-		for _, run := range runs {
-			@runCard(run)
-		}
-	</section>
-}
-
-// AdminLiveCard is the worker's state right now. The stream patches the whole
-// section, so every value is server-rendered and the page needs no script.
-templ AdminLiveCard(live LiveView) {
-	<section id="admin-live" class={ adminCard }>
-		<p class={ adminLabel }>live</p>
-		<div class="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500 dark:text-neutral-400">
-			<span>state <span class="font-mono text-gray-900 dark:text-neutral-100">{ live.State }</span></span>
-			<span>version <span class="font-mono text-gray-900 dark:text-neutral-100">v{ strconv.FormatInt(live.Version, 10) }</span></span>
-			<span>queued <span class="font-mono text-gray-900 dark:text-neutral-100">{ strconv.Itoa(live.Pending) }</span></span>
-			<span>today <span class="font-mono text-gray-900 dark:text-neutral-100">{ todayText(live) }</span></span>
+// AdminHistory lists the newest turns, one line each, as links to their own
+// page. The stream patches it when a run ends, so a turn appears without a
+// reload. picked is the turn the page shows, or 0 for the newest.
+templ AdminHistory(turns []TurnRow, picked int64) {
+	<section id="admin-history" class={ adminCard + " p-0" }>
+		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
+			<p class={ adminLabel }>turns</p>
+			<p class={ adminMuted }>{ plural(len(turns), "turn") }, newest first</p>
 		</div>
-		<p class="mt-1 text-xs text-gray-500 dark:text-neutral-400">{ live.Detail }</p>
-		if live.Error != "" {
-			<p class="mt-1 text-xs text-red-600 dark:text-red-400">{ live.Error }</p>
+		if len(turns) == 0 {
+			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
 		}
+		<ol class="max-h-80 overflow-y-auto">
+			for i, row := range turns {
+				<li>
+					<a
+						href={ templ.SafeURL(turnPath(row.Run.ID, i == 0)) }
+						data-on:click={ navTo(turnPath(row.Run.ID, i == 0)) }
+						title={ turnTitle(row) }
+						class={ "flex items-center gap-3 border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60 " + pickedRow(row.Run.ID, picked, i == 0) }
+					>
+						<span class="w-9 shrink-0 font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">#{ i64(row.Run.ID) }</span>
+						@statusBadge(row.Run.Status)
+						<span class="min-w-0 flex-1 truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(row.Trigger)) }</span>
+						if row.Run.VersionID.Valid {
+							<span class="hidden shrink-0 font-mono text-[11px] text-gray-400 sm:block dark:text-neutral-500">v{ i64(row.Run.VersionID.Int64) }</span>
+						}
+						<span class="hidden w-14 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums sm:block dark:text-neutral-500">
+							if row.Rounds > 0 {
+								{ short(row.PromptTokens) } in
+							}
+						</span>
+						<span class="w-12 shrink-0 text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">{ millis(row.Run.DurationMs) }</span>
+					</a>
+				</li>
+			}
+		</ol>
 	</section>
+}
+
+templ statusBadge(status string) {
+	<span class={ "rounded px-1.5 py-px text-[11px] font-medium " + statusTone(status) }>{ dash(status) }</span>
+}
+
+// AdminTurn is the inspector, with the turns either side of it. Following the
+// newest, the stream patches it when a run ends; a picked turn stays as it was
+// loaded.
+templ AdminTurn(detail *TurnDetail, following bool, older int64, newer int64) {
+	<div id="admin-turn">
+		if detail == nil {
+			<div class={ adminCard }>
+				<p class="text-sm text-gray-400 dark:text-neutral-600">No turns yet. Post on the board or talk to the webmaster, and the first turn shows here.</p>
+			</div>
+		} else {
+			<div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-neutral-500">
+				@stepTurn(older, true)
+				if following {
+					<span>following the newest turn</span>
+				} else {
+					<span>showing turn #{ i64(detail.Row.Run.ID) }</span>
+				}
+				@stepTurn(newer, false)
+				if !following {
+					<a href="/admin/turns" data-on:click={ navTo("/admin/turns") } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
+				}
+			</div>
+			@turnInspector(*detail)
+		}
+	</div>
+}
+
+// stepTurn is one step through the list by id, with a dull arrow at either
+// end.
+templ stepTurn(id int64, older bool) {
+	if id > 0 {
+		<a
+			href={ templ.SafeURL(turnPath(id, false)) }
+			data-on:click={ navTo(turnPath(id, false)) }
+			title={ "turn #" + i64(id) }
+			class="rounded border border-gray-200 px-1.5 py-0.5 font-mono hover:bg-gray-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
+		>
+			if older {
+				{ "← #" + i64(id) }
+			} else {
+				{ "#" + i64(id) + " →" }
+			}
+		</a>
+	} else {
+		<span class="px-1.5 py-0.5 font-mono text-gray-300 dark:text-neutral-700">
+			if older {
+				←
+			} else {
+				→
+			}
+		</span>
+	}
+}
+
+templ turnInspector(d TurnDetail) {
+	<div class="flex flex-col gap-4">
+		@turnHeader(d)
+		if d.Row.Run.Status == "running" {
+			<div class={ adminCard }>
+				<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
+			</div>
+		} else if !d.Stored {
+			<div class={ adminCard }>
+				<p class="text-sm text-gray-500 dark:text-neutral-400">No conversation was stored for this turn.</p>
+			</div>
+		} else {
+			@turnContext(d)
+			if len(d.Rounds) > 0 {
+				@turnGrowth(d)
+			}
+			for _, round := range d.Rounds {
+				@roundCard(round)
+			}
+		}
+	</div>
+}
+
+templ turnHeader(d TurnDetail) {
+	<div class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+			<span class="font-mono text-lg font-semibold text-gray-900 dark:text-neutral-100">#{ i64(d.Row.Run.ID) }</span>
+			@statusBadge(d.Row.Run.Status)
+			<span class="text-sm text-gray-600 dark:text-neutral-400">{ d.Row.Run.Kind } turn</span>
+			if d.Row.Run.VersionID.Valid {
+				<span class={ adminChip }>wrote v{ i64(d.Row.Run.VersionID.Int64) }</span>
+			}
+			<span class="ml-auto font-mono text-xs text-gray-500 dark:text-neutral-500">{ clock(d.Row.Run.CreatedAt) } UTC</span>
+		</div>
+		<div class="flex flex-wrap gap-2">
+			<span class={ adminChip }>{ millis(d.Row.Run.DurationMs) }</span>
+			<span class={ adminChip }>{ plural(d.Row.Rounds, "round") }</span>
+			<span class={ adminChip }>{ short(d.Row.PromptTokens) } in · { ratio(d.Row.CachedTokens, d.Row.PromptTokens) } cached</span>
+			<span class={ adminChip }>{ short(d.Row.CompletionTokens) } out</span>
+			if d.Row.Rejected > 0 {
+				<span class={ adminChip + " text-red-700 dark:text-red-400" }>{ plural(d.Row.Rejected, "rejected call") }</span>
+			}
+		</div>
+		<div class="grid gap-3 md:grid-cols-3">
+			@labelled("answered", d.Row.Trigger)
+			@labelled("said", d.Row.Run.Said)
+			@labelled("changed", d.Row.Run.Changes)
+		</div>
+		if d.Row.Run.ErrorText != "" {
+			<pre class={ adminPre + " bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400" }>{ d.Row.Run.ErrorText }</pre>
+		}
+		if d.Row.Run.Notes != "" {
+			<details data-preserve-attr="open">
+				<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">notes after this turn · { tokens(utf8.RuneCountInString(d.Row.Run.Notes)) } tokens</summary>
+				<pre class={ adminPre + " mt-2 max-h-72" }>{ d.Row.Run.Notes }</pre>
+			</details>
+		}
+	</div>
+}
+
+templ labelled(label string, text string) {
+	<div class="min-w-0">
+		<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">{ label }</p>
+		<p class="mt-0.5 max-h-32 overflow-auto text-sm whitespace-pre-wrap text-gray-800 dark:text-neutral-200">{ dash(text) }</p>
+	</div>
+}
+
+// turnContext is what the first request carried, part by part, in the order
+// the model read it.
+templ turnContext(d TurnDetail) {
+	<div class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>what the model read</p>
+			<p class="font-mono text-xs text-gray-500 dark:text-neutral-400">{ tokens(d.ContextRunes()) } tokens estimated · { short(int64(d.ContextRunes())) } chars</p>
+		</div>
+		<div class="flex h-4 overflow-hidden rounded-md bg-gray-100 dark:bg-neutral-800">
+			for _, part := range d.Context {
+				<span class={ "h-full border-r border-white/60 last:border-0 dark:border-neutral-900/60 " + partColor(part.Name) } style={ width(int64(part.Runes), int64(d.ContextRunes())) } title={ part.Name + " " + tokens(part.Runes) + " tokens" }></span>
+			}
+		</div>
+		<div class="flex flex-col">
+			for _, part := range d.Context {
+				@contextRow(part, d.ContextRunes())
+			}
+		</div>
+		if !d.Sectioned {
+			<p class={ adminMuted }>This turn was stored before prompt sections were recorded, so the user prompt is one block.</p>
+		}
+	</div>
+}
+
+templ contextRow(part ContextPart, total int) {
+	if part.Text == "" {
+		<div class="flex items-center gap-3 px-1 py-1.5 text-sm">
+			@contextRowLabel(part, total)
+		</div>
+	} else {
+		<details class="group rounded-md open:bg-gray-50 dark:open:bg-neutral-950" data-preserve-attr="open">
+			<summary class="flex cursor-pointer list-none items-center gap-3 rounded-md px-1 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60">
+				@contextRowLabel(part, total)
+			</summary>
+			<pre class={ adminPre + " mx-1 mb-2 max-h-[32rem] bg-white dark:bg-neutral-900" }>{ part.Text }</pre>
+		</details>
+	}
+}
+
+templ contextRowLabel(part ContextPart, total int) {
+	<span class={ "size-3 shrink-0 rounded-sm " + partColor(part.Name) }></span>
+	<span class="min-w-0 flex-1 truncate text-gray-800 dark:text-neutral-200">
+		{ part.Name }
+		if part.Note != "" {
+			<span class="text-xs text-gray-400 dark:text-neutral-600">{ part.Note }</span>
+		}
+	</span>
+	<span class="hidden h-1.5 w-32 overflow-hidden rounded-full bg-gray-100 sm:block dark:bg-neutral-800">
+		<span class={ "block h-full " + partColor(part.Name) } style={ width(int64(part.Runes), int64(total)) }></span>
+	</span>
+	<span class="w-16 text-right font-mono text-xs text-gray-500 tabular-nums dark:text-neutral-400">{ tokens(part.Runes) }</span>
+	<span class="w-12 text-right font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">{ ratio(int64(part.Runes), int64(total)) }</span>
+	if part.Text != "" {
+		<span class="w-4 text-xs text-gray-400 group-open:rotate-90 dark:text-neutral-600">▸</span>
+	} else {
+		<span class="w-4"></span>
+	}
+}
+
+// turnGrowth shows each round's request: the same base every time, plus the
+// replies and tool results the loop appended before it. The reported numbers
+// are what the provider counted.
+templ turnGrowth(d TurnDetail) {
+	<div class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>how the request grew</p>
+			<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
+				@legend("bg-slate-400", "system, tools and user prompt")
+				@legend("bg-indigo-500", "earlier replies and tool results")
+			</div>
+		</div>
+		<div class="flex flex-col gap-1.5">
+			for _, round := range d.Rounds {
+				<div class="grid grid-cols-[3rem_1fr_auto] items-center gap-3 text-xs">
+					<span class="font-mono text-gray-500 dark:text-neutral-400">R{ itoa(round.Stats.Round) }</span>
+					<span class="flex h-3 overflow-hidden rounded-sm bg-gray-100 dark:bg-neutral-800">
+						<span class="h-full bg-slate-400" style={ width(int64(round.Base), int64(d.MaxInput())) }></span>
+						<span class="h-full bg-indigo-500" style={ width(int64(round.Carried), int64(d.MaxInput())) }></span>
+					</span>
+					<span class="font-mono text-gray-500 tabular-nums dark:text-neutral-400">
+						est { tokens(round.Base + round.Carried) }
+						if round.Stats.PromptTokens > 0 {
+							· sent { short(round.Stats.PromptTokens) } ({ ratio(round.Stats.CachedTokens, round.Stats.PromptTokens) } cached)
+						}
+					</span>
+				</div>
+			}
+		</div>
+		<p class={ adminMuted }>Reasoning is not sent back, so it never grows the request.</p>
+	</div>
+}
+
+templ roundCard(round RoundView) {
+	<div class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-center gap-2">
+			<span class="font-semibold text-gray-900 dark:text-neutral-100">round { itoa(round.Stats.Round) }</span>
+			<span class={ adminChip }>{ millis(round.Stats.Elapsed.Milliseconds()) }</span>
+			<span class={ adminChip }>{ short(round.Stats.PromptTokens) } in · { short(round.Stats.CachedTokens) } cached</span>
+			<span class={ adminChip }>{ short(round.Stats.CompletionTokens) } out</span>
+			if round.Stats.FinishReason != "" {
+				<span class={ adminChip }>finish: { round.Stats.FinishReason }</span>
+			}
+			if round.Stats.FinishReason == "length" {
+				<span class="rounded px-1.5 py-px text-[11px] font-medium bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300">hit the output cap</span>
+			}
+		</div>
+		if round.Stats.Deferred != "" {
+			<p class="rounded-md border border-amber-400/40 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">done deferred: { round.Stats.Deferred }</p>
+		}
+		if round.Reasoning != "" {
+			<details data-preserve-attr="open">
+				<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">reasoning · { short(int64(utf8.RuneCountInString(round.Reasoning))) } chars</summary>
+				<pre class={ adminPre + " mt-2 max-h-96" }>{ round.Reasoning }</pre>
+			</details>
+		}
+		if strings.TrimSpace(round.Content) != "" {
+			<div>
+				<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">reply</p>
+				<pre class={ adminPre + " mt-1" }>{ round.Content }</pre>
+			</div>
+		}
+		for _, call := range round.Calls {
+			@callBlock(call)
+		}
+	</div>
+}
+
+func callTone(call CallView) string {
+	switch {
+	case call.Rejected:
+		return "border-red-400/50"
+	case call.Deferred:
+		return "border-amber-400/50"
+	}
+	return "border-gray-200 dark:border-neutral-800"
+}
+
+func callResultTone(call CallView) string {
+	switch {
+	case call.Rejected:
+		return "bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400"
+	case call.Deferred:
+		return "bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+	}
+	return "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"
+}
+
+templ callBlock(call CallView) {
+	<div class={ "flex flex-col gap-2 rounded-md border p-3 " + callTone(call) }>
+		<div class="flex flex-wrap items-baseline gap-2">
+			<span class="font-mono text-sm font-semibold text-gray-900 dark:text-neutral-100">{ call.Name }</span>
+			if call.ID != "" {
+				<span class="font-mono text-[11px] text-gray-400 dark:text-neutral-600">{ call.ID }</span>
+			}
+		</div>
+		for _, arg := range call.Args {
+			if arg.Block {
+				<div>
+					<p class="font-mono text-[11px] text-gray-500 dark:text-neutral-500">{ arg.Key } · { short(int64(utf8.RuneCountInString(arg.Value))) } chars</p>
+					<pre class={ adminPre + " mt-1 max-h-96" }>{ arg.Value }</pre>
+				</div>
+			} else {
+				<p class="text-sm"><span class="font-mono text-xs text-gray-500 dark:text-neutral-500">{ arg.Key }</span> <span class="font-mono text-xs text-gray-800 dark:text-neutral-200">{ arg.Value }</span></p>
+			}
+		}
+		if call.Result != "" {
+			<pre class={ "rounded-md px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words " + callResultTone(call) }>{ "→ " + call.Result }</pre>
+		}
+	</div>
+}
+
+type codeField struct {
+	Key   string
+	Label string
+	Text  string
+}
+
+func codeFields(site sqlc.SiteVersion) []codeField {
+	return []codeField{
+		{"css", "css", site.Css},
+		{"header", "header", site.Header},
+		{"board", "board", site.Board},
+		{"footer", "footer", site.Footer},
+		{"state", "state schema", site.StateSchema},
+		{"journal", "journal schema", site.JournalSchema},
+	}
 }
 
 // AdminVersion is the current render and the two one-click repairs.
 templ AdminVersion(site sqlc.SiteVersion, token string) {
-	<section id="admin-version" class={ adminCard }>
-		<p class={ adminLabel }>current version</p>
+	<section id="admin-version" class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>current version</p>
+			<p class="font-mono text-xs text-gray-500 dark:text-neutral-500">{ clock(site.CreatedAt) } UTC</p>
+		</div>
 		<p class="text-sm">
-			<span class="font-mono">v{ strconv.FormatInt(site.ID, 10) }</span>
-			<span class="text-gray-400 dark:text-neutral-600">· { site.CreatedAt }</span>
+			<span class="font-mono text-lg font-semibold text-gray-900 dark:text-neutral-100">v{ i64(site.ID) }</span>
+			if site.TurnID.Valid {
+				<span class="ml-2 font-mono text-xs text-gray-500 dark:text-neutral-500">from turn #{ i64(site.TurnID.Int64) }</span>
+			}
 		</p>
-		<p class="mt-1 text-sm text-gray-500 dark:text-neutral-400">{ dash(site.Reason) }</p>
-		<details class="mt-3" data-preserve-attr="open">
-			<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">css and regions</summary>
-			<pre class={ adminPre + " mt-2" }>{ "CSS:\n" + site.Css + "\n\nHEADER:\n" + site.Header + "\n\nBOARD:\n" + site.Board + "\n\nFOOTER:\n" + site.Footer + "\n\nSTATE SCHEMA:\n" + site.StateSchema + "\n\nJOURNAL SCHEMA:\n" + site.JournalSchema }</pre>
-		</details>
-		<div class="mt-3 flex flex-wrap gap-2">
+		<p class="text-sm text-gray-600 dark:text-neutral-400">{ dash(site.Reason) }</p>
+		<div class="flex flex-wrap gap-1 border-b border-gray-200 dark:border-neutral-800">
+			for _, field := range codeFields(site) {
+				<button
+					type="button"
+					data-on:click={ "$_code = '" + field.Key + "'" }
+					data-class={ "{'border-gray-900 text-gray-900 dark:border-neutral-100 dark:text-neutral-100': $_code == '" + field.Key + "'}" }
+					class="-mb-px cursor-pointer border-b-2 border-transparent px-2 py-1 text-xs text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200"
+				>{ field.Label } <span class="font-mono text-[10px] text-gray-400 dark:text-neutral-600">{ short(int64(utf8.RuneCountInString(field.Text))) }</span></button>
+			}
+		</div>
+		for _, field := range codeFields(site) {
+			<div
+				data-show={ "$_code == '" + field.Key + "'" }
+				if field.Key != "board" {
+					style="display: none"
+				}
+			>
+				<p class="mb-1 text-[11px] text-gray-400 uppercase dark:text-neutral-600">{ field.Label }</p>
+				<pre class={ adminPre + " max-h-96" }>{ dash(field.Text) }</pre>
+			</div>
+		}
+		<div class="flex flex-wrap gap-2">
 			<form method="post" action="/admin/undo" data-on:submit="@post('/admin/undo', {contentType: 'form'})" data-indicator:_undoing>
 				<input type="hidden" name="token" value={ token }/>
-				<button
-					type="submit"
-					data-attr:disabled="$_undoing"
-					class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-				>undo last change</button>
+				<button type="submit" data-attr:disabled="$_undoing" class={ adminButton }>undo last change</button>
 			</form>
 			<form method="post" action="/admin/heal" data-on:submit="@post('/admin/heal', {contentType: 'form'})" data-indicator:_healing>
 				<input type="hidden" name="token" value={ token }/>
-				<button
-					type="submit"
-					data-attr:disabled="$_healing"
-					class="cursor-pointer rounded-sm border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
-				>heal now</button>
+				<button type="submit" data-attr:disabled="$_healing" class={ adminButton }>heal now</button>
 			</form>
 		</div>
-		<p class="mt-2 text-xs text-gray-500 dark:text-neutral-500">
-			heal clears the journal and shared state with the page, so a game in progress ends.
-		</p>
+		<p class={ adminMuted }>Heal clears the journal and shared state with the page, so a game in progress ends.</p>
 	</section>
+}
+
+func versionSize(v sqlc.SiteVersion) int64 {
+	return int64(utf8.RuneCountInString(v.Css) + utf8.RuneCountInString(v.Header) +
+		utf8.RuneCountInString(v.Board) + utf8.RuneCountInString(v.Footer))
+}
+
+func largestVersion(versions []sqlc.SiteVersion) int64 {
+	var largest int64
+	for _, v := range versions {
+		largest = max(largest, versionSize(v))
+	}
+	return largest
 }
 
 // AdminFeeds shows the journal and shared state the page and the prompt see,
 // so a stuck feed can be read without opening sqlite.
 templ AdminFeeds(feeds []FeedView, states []StateView) {
-	<section id="admin-feeds" class={ adminCard }>
+	<section id="admin-feeds" class={ adminCard + " flex flex-col gap-3" }>
 		<p class={ adminLabel }>journal and shared state</p>
 		if len(feeds) == 0 && len(states) == 0 {
 			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing declared</p>
 		}
 		for _, feed := range feeds {
-			<div class="mb-3 last:mb-0">
+			<div>
 				<p class="text-sm">
-					<span class="font-mono">{ feed.Key }</span>
+					<span class="font-mono font-medium">{ feed.Key }</span>
 					<span class="text-gray-400 dark:text-neutral-600">· { rowCount(feed.Rows) } · match { strconv.Itoa(feed.Match) } · rules { strconv.Itoa(feed.Rules) }</span>
 				</p>
 				if len(feed.Last) == 0 {
 					<p class="text-xs text-gray-400 dark:text-neutral-600">no rows in this match yet</p>
 				} else {
-					<pre class={ adminPre + " mt-1" }>{ feedText(feed.Last) }</pre>
+					<pre class={ adminPre + " mt-1 max-h-64" }>{ feedText(feed.Last) }</pre>
 				}
 			</div>
 		}
 		if len(states) > 0 {
-			<p class="mt-3 mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
-			<pre class={ adminPre }>{ stateText(states) }</pre>
+			<div>
+				<p class="mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
+				<pre class={ adminPre + " max-h-64" }>{ stateText(states) }</pre>
+			</div>
 		}
 	</section>
 }
 
-// AdminVersions lists the newest versions, with a restore button for every
-// version except the current one.
+// AdminVersions lists the newest versions with their size, and a restore
+// button for every version except the current one.
 templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, token string) {
-	<section id="admin-versions">
-		<p class={ adminLabel }>versions</p>
-		<table class="w-full text-sm">
-			<thead>
-				<tr class="text-left text-xs text-gray-400 dark:text-neutral-600">
-					<th class="pb-1 font-normal">id</th>
-					<th class="pb-1 font-normal">when</th>
-					<th class="pb-1 font-normal">reason</th>
-					<th class="pb-1"></th>
-				</tr>
-			</thead>
-			<tbody>
-				for _, version := range versions {
-					<tr class="border-t border-gray-200 dark:border-neutral-800">
-						<td class="py-1 font-mono text-xs">v{ strconv.FormatInt(version.ID, 10) }</td>
-						<td class="py-1 font-mono text-xs text-gray-400 dark:text-neutral-600">{ version.CreatedAt }</td>
-						<td class="py-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(version.Reason) }</td>
-						<td class="py-1 text-right">
-							if version.ID != currentID {
-								<form
-									method="post"
-									action={ "/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore" }
-									data-on:submit={ "@post('/admin/versions/" + strconv.FormatInt(version.ID, 10) + "/restore', {contentType: 'form'})" }
-									data-indicator:_restoring
-								>
-									<input type="hidden" name="token" value={ token }/>
-									<button
-										type="submit"
-										data-attr:disabled="$_restoring"
-										title="restores this version's page and journal schema; newer feed rows stay but become invisible"
-										class="cursor-pointer text-xs text-gray-400 underline-offset-2 hover:underline disabled:cursor-default disabled:opacity-50 dark:text-neutral-500"
-									>restore</button>
-								</form>
-							} else {
-								<span class="text-xs text-gray-300 dark:text-neutral-700">current</span>
-							}
-						</td>
-					</tr>
-				}
-			</tbody>
-		</table>
-	</section>
-}
-
-templ runCard(view RunView) {
-	<details class={ adminCard + " mb-2" } data-preserve-attr="open">
-		<summary class="cursor-pointer list-none">
-			<div class="flex flex-wrap items-baseline gap-2 text-sm">
-				<span class="font-mono text-xs text-gray-400 dark:text-neutral-600">#{ strconv.FormatInt(view.Run.ID, 10) }</span>
-				<span class="font-medium">{ view.Run.Kind }</span>
-				<span class={ "text-xs " + statusClass(view.Run.Status) }>{ view.Run.Status }</span>
-				if view.Run.VersionID.Valid {
-					<span class="font-mono text-xs text-gray-400 dark:text-neutral-600">v{ strconv.FormatInt(view.Run.VersionID.Int64, 10) }</span>
-				}
-				<span class="text-xs text-gray-400 dark:text-neutral-600">{ strconv.FormatInt(view.Run.DurationMs, 10) }ms</span>
-			</div>
-			<div class="mt-1 text-xs text-gray-500 dark:text-neutral-400">{ dash(view.Run.Said) }</div>
-			if view.Run.Changes != "" {
-				<div class="mt-1 text-xs text-gray-400 dark:text-neutral-600">changed: { view.Run.Changes }</div>
-			}
-			<div class="mt-1 truncate text-xs text-gray-400 dark:text-neutral-600">{ dash(view.Run.Body) }</div>
-		</summary>
-		<div class="mt-3 flex flex-col gap-3">
-			if view.Run.ErrorText != "" {
-				<pre class={ adminPre + " text-red-600 dark:text-red-400" }>{ view.Run.ErrorText }</pre>
-			}
-			if view.MessagesLoaded {
-				for _, message := range view.Messages {
-					@messageBlock(message)
-				}
-			} else {
-				<p class="text-xs text-gray-400 dark:text-neutral-600">conversation not loaded for older runs</p>
-			}
+	<section id="admin-versions" class={ adminCard + " p-0" }>
+		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-3 dark:border-neutral-800">
+			<p class={ adminLabel }>versions</p>
+			<p class={ adminMuted }>bar is page size</p>
 		</div>
-	</details>
-}
-
-templ messageBlock(message webmaster.Message) {
-	<div class="border-l-2 border-gray-200 pl-3 dark:border-neutral-800">
-		<div class="flex items-baseline gap-2 text-xs">
-			<span class="font-mono font-semibold text-gray-500 uppercase dark:text-neutral-400">{ message.Role }</span>
-			if message.ToolCallID != "" {
-				<span class="font-mono text-gray-400 dark:text-neutral-600">{ message.ToolCallID }</span>
-			}
-		</div>
-		if message.Reasoning != "" {
-			<details class="mt-1" data-preserve-attr="open">
-				<summary class="cursor-pointer text-xs text-gray-400 dark:text-neutral-600">reasoning</summary>
-				<pre class={ adminPre + " mt-1" }>{ message.Reasoning }</pre>
-			</details>
-		}
-		if message.Content != "" {
-			<pre class={ adminPre + " mt-1" }>{ message.Content }</pre>
-		}
-		for _, call := range message.ToolCalls {
-			<div class="mt-2">
-				<div class="flex items-baseline gap-2 text-xs">
-					<span class="font-mono text-emerald-600 dark:text-emerald-400">{ call.Name }</span>
-					if call.ID != "" {
-						<span class="font-mono text-gray-400 dark:text-neutral-600">{ call.ID }</span>
+		<ol class="max-h-[36rem] divide-y divide-gray-100 overflow-y-auto dark:divide-neutral-800">
+			for _, version := range versions {
+				<li class="flex items-center gap-3 px-4 py-2">
+					<span class="w-10 shrink-0 font-mono text-xs text-gray-900 dark:text-neutral-100">v{ i64(version.ID) }</span>
+					<span class="flex min-w-0 flex-1 flex-col gap-1">
+						<span class="truncate text-xs text-gray-600 dark:text-neutral-400" title={ version.Reason }>{ dash(version.Reason) }</span>
+						<span class="flex items-center gap-2">
+							<span class="h-1.5 w-full max-w-40 overflow-hidden rounded-full bg-gray-100 dark:bg-neutral-800">
+								<span class="block h-full bg-emerald-500" style={ width(versionSize(version), largestVersion(versions)) }></span>
+							</span>
+							<span class="font-mono text-[10px] text-gray-400 dark:text-neutral-600">{ short(versionSize(version)) } · { clock(version.CreatedAt) }</span>
+						</span>
+					</span>
+					if version.ID != currentID {
+						<form
+							method="post"
+							action={ "/admin/versions/" + i64(version.ID) + "/restore" }
+							data-on:submit={ "@post('/admin/versions/" + i64(version.ID) + "/restore', {contentType: 'form'})" }
+							data-indicator:_restoring
+						>
+							<input type="hidden" name="token" value={ token }/>
+							<button
+								type="submit"
+								data-attr:disabled="$_restoring"
+								title="restores this version's page and journal schema; newer feed rows stay but become invisible"
+								class="cursor-pointer text-xs text-sky-700 underline-offset-2 hover:underline disabled:cursor-default disabled:opacity-50 dark:text-sky-400"
+							>restore</button>
+						</form>
+					} else {
+						<span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">current</span>
 					}
-				</div>
-				<pre class={ adminPre + " mt-1" }>{ call.Arguments }</pre>
-				if call.Result != "" {
-					<pre class={ adminPre + " mt-1" }>{ "→ " + call.Result }</pre>
-				}
-			</div>
-		}
-	</div>
+				</li>
+			}
+		</ol>
+	</section>
 }

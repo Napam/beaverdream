@@ -182,6 +182,17 @@ ORDER BY
 LIMIT
   ?;
 
+-- name: GetWebmasterTurn :one
+SELECT
+  t.*,
+  v.id AS version_id
+FROM
+  turns t
+  LEFT JOIN site_versions v ON v.turn_id = t.id
+WHERE
+  t.kind = 'webmaster'
+  AND t.id = ?;
+
 -- name: CountWebmasterTurnsSince :one
 SELECT
   count(*)

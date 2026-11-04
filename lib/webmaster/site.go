@@ -221,6 +221,11 @@ func PostsContainer(rendered string) string {
 // pass a content-hashed path.
 const DatastarPath = "/static/datastar.js"
 
+// FaviconPath is the beaver icon the code-owned pages put in their tab. The
+// path is literal, not content-hashed: the document builders do not know the
+// static root, and a 885-byte icon is not worth threading one through.
+const FaviconPath = "/static/assets/beaver.svg"
+
 // LiveCursor is what an open page has already shown. The page holds it as the
 // _bd signal and sends it whenever its stream opens, so a reconnect resumes
 // from the page, not from the start.
@@ -416,7 +421,7 @@ func IdentityDoc(name string) string {
 	}
 	return `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
 		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
-		`<link rel="icon" href="data:,"><title>beaverdream</title><style>` +
+		`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `"><title>beaverdream</title><style>` +
 		BaseCSS +
 		`</style></head><body>` +
 		`<h1>beaverdream</h1><p class="tagline">a small message board</p>` +
@@ -505,7 +510,7 @@ func SiteDoc(site Site, posts []Post) string {
 		escapedName,
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
-	b.WriteString(`<link rel="icon" href="data:,">`)
+	b.WriteString(`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`)
 	b.WriteString(`<title>beaverdream</title>`)
 	// A module script is deferred, so Datastar starts after the whole page,
 	// model scripts included, has parsed.

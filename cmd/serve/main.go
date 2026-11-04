@@ -221,6 +221,12 @@ func randomHex(size int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// favicon sends the browser's implicit icon request to the beaver the
+// code-owned pages already link.
+func favicon(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, webmaster.FaviconPath, http.StatusMovedPermanently)
+}
+
 // SetupRouter registers every route. Writes are commands that answer with a
 // redirect or 204; /live is the one stream an open page reads from.
 func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
@@ -231,6 +237,9 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Use(h.RedirectAdmin)
 
 	beaverdream.SetupStatic(router)
+
+	// A browser that ignores the page's icon link still asks for this.
+	router.Get("/favicon.ico", favicon)
 
 	router.Get("/", h.Index)
 	router.Get("/identity", h.Identity)
@@ -256,6 +265,9 @@ func SetupAdminRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Use(middleware.Recoverer)
 
 	beaverdream.SetupStatic(router)
+
+	// A browser that ignores the page's icon link still asks for this.
+	router.Get("/favicon.ico", favicon)
 
 	router.Get("/admin", h.Admin)
 	router.Post("/admin", h.Admin)

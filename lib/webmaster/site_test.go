@@ -26,6 +26,19 @@ func TestThePageSwitchesWithoutATransition(t *testing.T) {
 	}
 }
 
+// The board and the name page carry the beaver icon, so the tab is not blank.
+func TestThePagesCarryTheBeaverIcon(t *testing.T) {
+	icon := `<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`
+	for name, doc := range map[string]string{
+		"board": SiteDoc(Site{Board: PostsPlaceholder}, nil),
+		"name":  IdentityDoc(""),
+	} {
+		if !strings.Contains(doc, icon) {
+			t.Errorf("the %s page is missing %s", name, icon)
+		}
+	}
+}
+
 // stripBusy removes the code-owned spinner and its keyframes, so a test about
 // page transitions can look at everything else the shell serves.
 func stripBusy(doc string) string {

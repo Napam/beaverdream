@@ -113,7 +113,7 @@ func width(part, whole int64) string {
 }
 
 // The admin pages. Each one has its own path, and the panel links between them
-// with a fetch that carries the token as a header.
+// with a fetch that carries the remembered login as a cookie.
 const (
 	PageOverview = "overview"
 	PageTurns    = "turns"
@@ -153,8 +153,8 @@ func (p Panel) LivePath() string {
 
 // AdminView is everything one admin page shows. A field another page needs
 // stays empty. The page and the in-place patch after an action or a
-// navigation render from the same value, so nothing redirects and the token
-// never lands in a URL.
+// navigation render from the same value, so nothing redirects and no secret
+// lands in a URL.
 type AdminView struct {
 	Panel          Panel
 	Site           sqlc.SiteVersion
@@ -169,21 +169,26 @@ type AdminView struct {
 	Summary        string
 	SummaryThrough int64
 	Flash          string
-	Token          string
+	// CSRF is the token every action form carries for this login. Empty when
+	// the request has no login cookie, which is why login redirects.
+	CSRF string
+	// Board is the board's URL as seen from the admin port, for the header
+	// link. The admin runs on its own port, so a relative link would 404.
+	Board string
 	// Stream is the data-init that opens this page's stream.
 	Stream string
 }
 
-// adminSignals are the page's local signals: the code tab of the current
-// version and the token the fetches send as a header. Datastar never sends
-// signals that start with an underscore, so the token stays out of URLs.
-func adminSignals(token string) string {
-	return fmt.Sprintf("{_code: 'board', _token: %s}", strconv.Quote(token))
+// adminSignals are the page's local signals: which code tab of the current
+// version is open. The login cookie rides along with the fetches, so there is
+// no secret to keep here.
+func adminSignals() string {
+	return "{_code: 'board'}"
 }
 
-// fetchPage loads an admin page into #admin-body with the token in a header.
+// fetchPage loads an admin page into #admin-body.
 func fetchPage(path string) string {
-	return "@get('" + path + "', {headers: {'X-Admin-Token': $_token}})"
+	return "@get('" + path + "')"
 }
 
 // navTo follows a link inside the panel: push the path, fetch the page. A
@@ -196,9 +201,9 @@ func navTo(path string) string {
 }
 
 // AdminLogin is the only thing an unauthenticated visitor sees: a password
-// box. There is no session cookie on purpose, because the board runs
-// model-written JavaScript on the same origin. A reload asks again, and the
-// form posts to the page it was asked for.
+// box. A correct password sets the login cookie, good for 30 days; the form
+// posts to the page it was asked for, so a reload, a new tab or a link from
+// someone else lands where it was going.
 templ AdminLogin(action string, failed bool) {
 	<html lang="en">
 		<head>
@@ -229,6 +234,7 @@ templ AdminLogin(action string, failed bool) {
 						type="submit"
 						class="cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
 					>enter</button>
+					<p class="text-xs text-gray-400 dark:text-neutral-500">signing in needs cookies; without them every visit asks again</p>
 				</form>
 			</main>
 		</body>
@@ -250,8 +256,8 @@ templ AdminPage(view AdminView, datastar string) {
 		<body class="min-h-dvh bg-gray-100 text-gray-800 antialiased dark:bg-neutral-950 dark:text-neutral-300">
 			<div
 				class="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6"
-				data-signals={ adminSignals(view.Token) }
-				data-on:popstate__window="@get(location.pathname, {headers: {'X-Admin-Token': $_token}})"
+				data-signals={ adminSignals() }
+				data-on:popstate__window="@get(location.pathname)"
 			>
 				@AdminBody(view)
 			</div>
@@ -274,7 +280,11 @@ templ AdminBody(view AdminView) {
 			</nav>
 			<div class="ml-auto flex items-center gap-4">
 				@AdminLiveCard(view.Live)
-				<a class="text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200" href="/" target="_blank" rel="noopener">board ↗</a>
+				<a class="text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
+				<form method="post" action="/admin/logout" class="contents">
+					@csrfInput(view.CSRF)
+					<button type="submit" class="cursor-pointer text-sm text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200">sign out</button>
+				</form>
 			</div>
 		</header>
 		<div id="admin-flash" class="empty:hidden">
@@ -310,7 +320,7 @@ templ navLink(current Panel, page string, path string, label string) {
 // remembers.
 templ overviewPage(view AdminView) {
 	<div class="flex flex-col gap-6">
-		@adminInstruct(view.Token)
+		@adminInstruct(view.CSRF)
 		@AdminMetrics(view.Metrics)
 		@AdminBudget(view.Budget)
 		@AdminMemory(view.Summary, view.SummaryThrough)
@@ -331,8 +341,8 @@ templ turnsPage(view AdminView) {
 // keeps, and the destructive action, top to bottom.
 templ sitePage(view AdminView) {
 	<div class="flex flex-col gap-6">
-		@AdminVersion(view.Site, view.Token)
-		@AdminVersions(view.Versions, view.Site.ID, view.Token)
+		@AdminVersion(view.Site, view.CSRF)
+		@AdminVersions(view.Versions, view.Site.ID, view.CSRF)
 		@AdminFeeds(view.Feeds, view.States)
 	</div>
 	<section class={ adminCard + " border-red-500/30 dark:border-red-500/30" }>
@@ -343,7 +353,7 @@ templ sitePage(view AdminView) {
 				action="/admin/reset"
 				onsubmit={ templ.JSUnsafeFuncCall("return " + resetConfirm) }
 			>
-				<input type="hidden" name="token" value={ view.Token }/>
+				@csrfInput(view.CSRF)
 				<button
 					type="submit"
 					data-indicator:_resetting
@@ -359,11 +369,11 @@ templ sitePage(view AdminView) {
 	</section>
 }
 
-templ adminInstruct(token string) {
+templ adminInstruct(csrf string) {
 	<section class={ adminCard }>
 		<p class={ adminLabel }>talk to the webmaster</p>
 		<form method="post" action="/admin/mutate" class="mt-2 flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'})" data-indicator:_sending>
-			<input type="hidden" name="token" value={ token }/>
+			@csrfInput(csrf)
 			<textarea
 				name="instruction"
 				rows="3"
@@ -607,6 +617,13 @@ templ AdminHistory(turns []TurnRow, picked int64) {
 			}
 		</ol>
 	</section>
+}
+
+// csrfInput is the hidden field every action form carries. The value is
+// derived from the login cookie, so the board, which cannot read this page,
+// cannot forge an action.
+templ csrfInput(token string) {
+	<input type="hidden" name="csrf" value={ token }/>
 }
 
 templ statusBadge(status string) {
@@ -923,7 +940,7 @@ func codeFields(site sqlc.SiteVersion) []codeField {
 }
 
 // AdminVersion is the current render and the two one-click repairs.
-templ AdminVersion(site sqlc.SiteVersion, token string) {
+templ AdminVersion(site sqlc.SiteVersion, csrf string) {
 	<section id="admin-version" class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<p class={ adminLabel }>current version</p>
@@ -959,11 +976,11 @@ templ AdminVersion(site sqlc.SiteVersion, token string) {
 		}
 		<div class="flex flex-wrap gap-2">
 			<form method="post" action="/admin/undo" data-on:submit="@post('/admin/undo', {contentType: 'form'})" data-indicator:_undoing>
-				<input type="hidden" name="token" value={ token }/>
+				@csrfInput(csrf)
 				<button type="submit" data-attr:disabled="$_undoing" class={ adminButton }>undo last change</button>
 			</form>
 			<form method="post" action="/admin/heal" data-on:submit="@post('/admin/heal', {contentType: 'form'})" data-indicator:_healing>
-				<input type="hidden" name="token" value={ token }/>
+				@csrfInput(csrf)
 				<button type="submit" data-attr:disabled="$_healing" class={ adminButton }>heal now</button>
 			</form>
 		</div>
@@ -1016,7 +1033,7 @@ templ AdminFeeds(feeds []FeedView, states []StateView) {
 
 // AdminVersions lists the newest versions with their size, and a restore
 // button for every version except the current one.
-templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, token string) {
+templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, csrf string) {
 	<section id="admin-versions" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-3 dark:border-neutral-800">
 			<p class={ adminLabel }>versions</p>
@@ -1042,7 +1059,7 @@ templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, token string) 
 							data-on:submit={ "@post('/admin/versions/" + i64(version.ID) + "/restore', {contentType: 'form'})" }
 							data-indicator:_restoring
 						>
-							<input type="hidden" name="token" value={ token }/>
+							@csrfInput(csrf)
 							<button
 								type="submit"
 								data-attr:disabled="$_restoring"

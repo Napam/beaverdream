@@ -633,13 +633,12 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 		t.Fatalf("wrong password: status = %d, want 401 with the form", wrong.Code)
 	}
 
-	// The password is the token.
+	// The password is the token. A correct one sets the remembered login and
+	// redirects, so the next request carries the cookie and gets its CSRF
+	// token, and a reload cannot repost the password.
 	authed := postForm(t, h.Admin, "/admin", url.Values{"password": {"secret"}})
-	if authed.Code != http.StatusOK {
-		t.Fatalf("with password: status = %d, want 200", authed.Code)
-	}
-	if !strings.Contains(authed.Body.String(), "talk to the webmaster") {
-		t.Fatal("the authenticated page is missing the panel")
+	if authed.Code != http.StatusSeeOther || authed.Header().Get("Location") != "/admin" {
+		t.Fatalf("with password: status = %d, want a redirect back", authed.Code)
 	}
 	if got := authed.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("Referrer-Policy = %q", got)
@@ -647,8 +646,42 @@ func TestAdminRequiresTokenWhenSet(t *testing.T) {
 	if got := authed.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q", got)
 	}
-	if cookies := authed.Result().Cookies(); len(cookies) != 0 {
-		t.Errorf("admin set %d cookies, want none", len(cookies))
+	cookies := authed.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("admin set %d cookies, want one", len(cookies))
+	}
+	login := cookies[0]
+	if login.Name != handlers.AdminCookieName || login.Value == "" {
+		t.Errorf("cookie = %q, want a remembered login", login.Name)
+	}
+	if !login.HttpOnly || login.SameSite != http.SameSiteStrictMode ||
+		login.Path != "/" || login.MaxAge <= 0 || login.Domain != "" {
+		t.Errorf("cookie attributes = %+v", login)
+	}
+
+	// The cookie opens the panel on a later visit, with no password.
+	remembered := httptest.NewRecorder()
+	again := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	again.AddCookie(login)
+	h.Admin(remembered, again)
+	if remembered.Code != http.StatusOK ||
+		!strings.Contains(remembered.Body.String(), "talk to the webmaster") {
+		t.Fatalf("remembered login: status = %d, want the panel", remembered.Code)
+	}
+	if strings.Contains(remembered.Body.String(), "secret") {
+		t.Error("the panel carries the admin token")
+	}
+
+	// A value that was edited by hand is not a login.
+	forged := httptest.NewRecorder()
+	tampered := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	tampered.AddCookie(&http.Cookie{
+		Name:  handlers.AdminCookieName,
+		Value: login.Value + "x",
+	})
+	h.Admin(forged, tampered)
+	if strings.Contains(forged.Body.String(), "talk to the webmaster") {
+		t.Fatal("a tampered cookie opened the panel")
 	}
 
 	// A fetch can send the token as a header instead.

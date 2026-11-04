@@ -33,9 +33,14 @@ type Env = struct {
 	OpenAIReasoningEffort string
 	// Path to the sqlite database file. Defaults to "./data/sqlite.db".
 	DBPath string
-	// Required token for /admin. Empty means the server generates a random
-	// one at startup and logs the URL.
+	// Admin password. Empty means the server generates a random one at
+	// startup and logs the URL.
 	AdminToken string
+	// Port that serves the admin pages. The board's port redirects /admin
+	// here. A separate origin keeps the board's scripts, and the model's, off
+	// the origin that holds the admin login cookie. Defaults to the port after
+	// PORT, skipping the live reload proxy.
+	AdminPort string
 	// Cost kill switch: mutations allowed per UTC day. Zero disables the cap.
 	MaxMutationsPerDay int
 	// Tool rounds per mutation before the loop gives up.
@@ -66,11 +71,29 @@ func init() {
 		OpenAIReasoningEffort: os.Getenv("OPENAI_REASONING_EFFORT"),
 		DBPath:                GetEnv("DB_PATH", "./data/sqlite.db"),
 		AdminToken:            os.Getenv("ADMIN_TOKEN"),
+		AdminPort:             adminPort(GetEnv("PORT", "6930")),
 		MaxMutationsPerDay:    GetEnvInt("MAX_MUTATIONS_PER_DAY", 500),
 		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
 		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),
 	}
+}
+
+// adminPort is the port the admin listener uses: the one after the board's,
+// skipping the live reload proxy so the two never collide in dev.
+func adminPort(port string) string {
+	if configured := os.Getenv("ADMIN_PORT"); configured != "" {
+		return configured
+	}
+	board, err := strconv.Atoi(port)
+	if err != nil {
+		return "6932"
+	}
+	next := board + 1
+	if strconv.Itoa(next) == os.Getenv("LIVE_RELOAD_PROXY_PORT") {
+		next++
+	}
+	return strconv.Itoa(next)
 }
 
 // loadAPIKey reads OPENAI_API_KEY, which the task or shell can supply. The key

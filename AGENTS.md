@@ -183,18 +183,42 @@ prefer simple, readable code over production hardening.
   form prefilled so a visitor can set their display name again. Posts use the
   cookie value as the author. Names are not unique and there are no accounts.
   The server ignores any author field in model markup.
-- Admin is always password-protected. The pages are `/admin`,
-  `/admin/turns`, `/admin/turns/{id}` and `/admin/site`. Without the token a
-  page renders the password form, which POSTs the token back to the same path.
-  The page carries the token in hidden fields and the `$_token` signal, and
-  sends it as `X-Admin-Token` on its live stream and on the fetch that moves
-  between pages. Never a cookie, and never a query parameter: model scripts
-  are same-origin and must not inherit admin access, and the token must not
-  land in URLs or history. Admin pages and actions answer Datastar with
-  `#admin-body` patched in place (a plain request renders the whole page), so
-  no redirect needs the token. Each page opens its own stream for its own
-  panels. When `ADMIN_TOKEN` is empty the server generates one and logs the
-  password.
+- Admin is always password-protected, on its own port. The pages are
+  `/admin`, `/admin/turns`, `/admin/turns/{id}` and `/admin/site`, served only
+  on `ADMIN_PORT` (default: the port after `PORT`, skipping the live reload
+  proxy). The board's port redirects every admin path there, keeping the host,
+  so a LAN address works too; the admin listener mounts the panel and its
+  assets only and serves no board route. That split is what allows the login
+  cookie: model-written JavaScript never runs on the admin origin, and the
+  browser refuses to hand the board a cross-origin response. The cookie is
+  `beaverdream_admin`, a signed expiry, HttpOnly, SameSite=Strict, host-only,
+  lasting 30 days; a new `ADMIN_TOKEN` invalidates it. Without it a page
+  renders the password form. A correct password sets the cookie and answers
+  with a 303 back to the same path, so the next request carries the cookie,
+  the page gets its CSRF token, and a reload cannot repost the password.
+  Cookies are scoped by host, not by port, so the board port does receive the
+  cookie; HttpOnly keeps it out of the model's scripts, and the CSRF token
+  keeps a forged action from working.
+- Every cookie-authenticated POST needs the `csrf` field, which is
+  HMAC(ADMIN_TOKEN, "admin-csrf:" + the signed expiry in the cookie), compared
+  in constant time. It is derived, not stored, and it dies with the login. The
+  panel renders it into every action form, and the live stream renders it into
+  the fragments that carry forms (undo, heal, restore), because that is where
+  those panels come from after load. Only the admin origin can read it. A
+  request authenticated by `X-Admin-Token` skips the check: that token is
+  itself a secret only a script has. Login needs no CSRF (one shared identity,
+  and the password is still required). Never add an `Origin` or `Sec-Fetch-*`
+  check: `Referrer-Policy: no-referrer` makes browsers report `Origin: null`,
+  and plain HTTP on a LAN address sends no fetch metadata at all.
+- Every cookie with the admin's name is tried and any that verifies is used.
+  A page on the board port can plant one ahead of the real login; skipping bad
+  ones keeps that from locking the admin out. Nobody can read or overwrite the
+  real cookie from the board. `X-Admin-Token` still works in a header or form
+  field for scripts. Never a query parameter, and never the token in a page or
+  a URL. Admin pages and actions answer Datastar with `#admin-body` patched in
+  place (a plain request renders the whole page), so no redirect needs a
+  secret. Each page opens its own stream for its own panels. When
+  `ADMIN_TOKEN` is empty the server generates one and logs the password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining

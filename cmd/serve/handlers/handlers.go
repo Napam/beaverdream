@@ -44,10 +44,15 @@ const (
 
 // Config holds the environment knobs the handlers enforce.
 type Config struct {
-	// AdminToken guards /admin. Every admin request must carry it in the
-	// X-Admin-Token header or a form field; never a cookie and never a query
-	// parameter.
+	// AdminToken is the admin password. It signs the remembered login cookie
+	// and still works in the X-Admin-Token header or a form field for scripts.
 	AdminToken string
+	// AdminPort is the port that serves /admin, so the login cookie lives on
+	// an origin the board's scripts never run on. The board's port redirects
+	// there. Empty means the port after Port.
+	AdminPort string
+	// Port is the board's port, used for the link back from the admin pages.
+	Port string
 	// MaxMutationsPerDay is a cost kill switch. Zero disables the cap.
 	MaxMutationsPerDay int
 	// CompactAfterTokens is the estimated transcript size that triggers
@@ -140,6 +145,13 @@ func New(
 
 		compactAfterTokens: cfg.CompactAfterTokens,
 		compactAfterTurns:  cfg.CompactAfterTurns,
+	}
+
+	if h.cfg.Port == "" {
+		h.cfg.Port = "6930"
+	}
+	if h.cfg.AdminPort == "" {
+		h.cfg.AdminPort = "6932"
 	}
 	if h.compactAfterTokens <= 0 {
 		h.compactAfterTokens = defaultCompactAfterTokens

@@ -96,17 +96,25 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	if env.Vars.AdminPort == env.Vars.Port {
+		return fmt.Errorf("ADMIN_PORT must differ from PORT: the admin needs its own origin")
+	}
+
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
 		AdminToken:         adminToken,
+		AdminPort:          env.Vars.AdminPort,
+		Port:               env.Vars.Port,
 		MaxMutationsPerDay: env.Vars.MaxMutationsPerDay,
 		DatastarSrc:        beaverdream.StaticRootPath("static/datastar.js"),
 	})
 	defer h.Close()
 
 	router := SetupRouter(logger, h)
+	adminRouter := SetupAdminRouter(logger, h)
 
 	logAttrs := []slog.Attr{
 		slog.String("address", env.Vars.Host+":"+env.Vars.Port),
+		slog.String("admin_address", env.Vars.Host+":"+env.Vars.AdminPort),
 		slog.String("db_path", env.Vars.DBPath),
 		slog.String("openai_base_url", env.Vars.OpenAIBaseURL),
 		slog.String("openai_model", env.Vars.OpenAIModel),
@@ -131,20 +139,32 @@ func run(logger *slog.Logger) error {
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(true)
 	protocols.SetUnencryptedHTTP2(true)
-	srv := &http.Server{
-		Addr:              env.Vars.Host + ":" + env.Vars.Port,
-		Handler:           router,
-		ReadHeaderTimeout: 10 * time.Second,
-		Protocols:         &protocols,
-	}
-	if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
-		if err := srv.ListenAndServeTLS(env.Vars.TLSCertFile, env.Vars.TLSKeyFile); err != nil {
-			return fmt.Errorf("listen and serve tls: %w", err)
+	serve := func(addr string, handler http.Handler, name string) error {
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			Protocols:         &protocols,
+		}
+		if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
+			if err := srv.ListenAndServeTLS(env.Vars.TLSCertFile, env.Vars.TLSKeyFile); err != nil {
+				return fmt.Errorf("%s: listen and serve tls: %w", name, err)
+			}
+			return nil
+		}
+		if err := srv.ListenAndServe(); err != nil {
+			return fmt.Errorf("%s: listen and serve: %w", name, err)
 		}
 		return nil
 	}
-	if err := srv.ListenAndServe(); err != nil {
-		return fmt.Errorf("listen and serve: %w", err)
+
+	// The admin gets its own listener, so no board is ever served on the
+	// origin that holds the login cookie.
+	errs := make(chan error, 2)
+	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.Port, router, "board") }()
+	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.AdminPort, adminRouter, "admin") }()
+	if err := <-errs; err != nil {
+		return err
 	}
 	return nil
 }
@@ -171,7 +191,7 @@ func resolveAdminToken(logger *slog.Logger, configured string) (string, error) {
 	}
 	logger.Warn(
 		"ADMIN_TOKEN is not set, generated one for this run",
-		slog.String("admin_url", scheme+"://"+net.JoinHostPort(host, env.Vars.Port)+"/admin"),
+		slog.String("admin_url", scheme+"://"+net.JoinHostPort(host, env.Vars.AdminPort)+"/admin"),
 		slog.String("admin_password", token),
 	)
 	return token, nil
@@ -206,6 +226,9 @@ func randomHex(size int) (string, error) {
 func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
+	// The board's port has no admin routes. It sends /admin to the admin
+	// port, whose origin the board's scripts cannot reach.
+	router.Use(h.RedirectAdmin)
 
 	beaverdream.SetupStatic(router)
 
@@ -220,6 +243,19 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Get("/j/{key}", h.JournalRead)
 	router.Post("/j/{key}", h.JournalAppend)
 	router.Post("/x/err", h.ClientError)
+
+	logger.Debug("Routes registered")
+	return router
+}
+
+// SetupAdminRouter serves the panel and the assets it loads, and nothing else.
+// No board route is mounted here: the model's page never runs on the origin
+// that holds the admin login cookie.
+func SetupAdminRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
+	router := chi.NewRouter()
+	router.Use(middleware.Recoverer)
+
+	beaverdream.SetupStatic(router)
 
 	router.Get("/admin", h.Admin)
 	router.Post("/admin", h.Admin)
@@ -236,8 +272,9 @@ func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Post("/admin/heal", h.HealBoard)
 	router.Post("/admin/versions/{id}/restore", h.RestoreVersion)
 	router.Post("/admin/reset", h.ResetBoard)
+	router.Post("/admin/logout", h.AdminLogout)
 
-	logger.Debug("Routes registered")
+	logger.Debug("Admin routes registered")
 	return router
 }
 

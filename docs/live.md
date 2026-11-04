@@ -108,20 +108,49 @@ of recent turns over an inspector that follows the newest turn),
 `/admin/turns/{id}` (the same strip with one turn held), and `/admin/site`
 (current version, versions, journal and state, reset).
 
-Admin auth is a password, not a session. A page without the token returns
-only the password form, which POSTs back to the same path, so a reload or a
-new tab lands where it was. The token then lives in the page's hidden form
-fields and in the local `$_token` signal, which the panel sends as the
-`X-Admin-Token` request header. It is never accepted from the query string and
-never stored in a cookie, because the board runs model-written JavaScript on
-the same origin. Datastar never sends signals that start with an underscore,
-so the token stays out of the `datastar` query parameter too.
+The admin lives on its own port, `ADMIN_PORT` (default: the port after
+`PORT`, skipping the live reload proxy). The board's port redirects every
+`/admin` path there, keeping the host, so `http://192.168.1.5:6930/admin`
+becomes `http://192.168.1.5:6932/admin` for everyone on the network. The admin
+listener mounts the panel and the assets it loads and nothing else: no board
+route, so model-written JavaScript never runs on the origin that holds the
+login cookie.
+
+A password, once entered, sets `beaverdream_admin`: a signed expiry, HttpOnly,
+SameSite=Strict, host-only, good for 30 days. The login answers with a 303 to
+the same path, so the next request has the cookie and the page can render its
+CSRF token. Nothing like the token appears in the page or in a URL. A new
+`ADMIN_TOKEN` invalidates every remembered login.
+
+Cookies ignore ports, so the board's page does send this cookie to the admin
+port. That is harmless for reads (the browser refuses to hand a cross-origin
+response to a script) but not for writes, which is why every
+cookie-authenticated POST must carry `csrf`: HMAC(ADMIN_TOKEN, "admin-csrf:" +
+the cookie's signed expiry), in constant time. The panel puts it in every
+action form, and the stream puts it in the fragments that contain forms. The
+board cannot read the admin HTML, so it cannot learn the token. A request
+authenticated by `X-Admin-Token` skips the check. Login needs none, since it
+is one shared identity and still needs the password.
+
+Do not add an `Origin` or `Sec-Fetch-*` check. `Referrer-Policy: no-referrer`
+makes browsers report `Origin: null` on form posts, and plain HTTP on a LAN
+address sends no fetch metadata at all, so such a check only passes on
+localhost.
+
+Any cookie with the login's name is tried and the first one that verifies is
+used, so a cookie planted by the board's page cannot lock the admin out.
+Signing out clears this browser only; rotating `ADMIN_TOKEN` signs out
+everyone. Without cookies the form works but every visit asks again.
+
+A page without a login returns only the password form, which POSTs back to the
+same path, so a reload or a new tab lands where it was. Signing out clears
+the cookie and shows the form again.
 
 Links between pages keep a real `href`. A plain click pushes the path to
-history and fetches it with the header; the page answers with `#admin-body`
-patched in place. Back and forward fetch `location.pathname` the same way. A
-modified click falls through to the browser, so a new tab works and asks for
-the password there.
+history and fetches it, and the cookie rides along; the page answers with
+`#admin-body` patched in place. Back and forward fetch `location.pathname` the
+same way. A modified click falls through to the browser, so a new tab works
+and is already logged in.
 
 Each page has its own stream, `GET /admin/live?page=...`, plus `&turn=N` on a
 held turn. The mount sits inside `#admin-body` with an id per page and opens
@@ -176,6 +205,7 @@ works.
   bun: pushed rows, held rows, failed reads, rules changes, matches, resync,
   refusals.
 - `cmd/serve/handlers/admin_live_test.go` covers each page's stream and its
-  patches, a held turn the stream leaves alone, the turn page, the login that
-  posts back to its page, and an action that patches `#admin-body` instead of
-  redirecting. The password gate is in `handlers_test.go`.
+  patches, a held turn the stream leaves alone, the turn page, the remembered
+  login, the origin gate, the host split, signing out, and an action that
+  patches `#admin-body` instead of redirecting. The cookie and password rules
+  are in `handlers_test.go`.

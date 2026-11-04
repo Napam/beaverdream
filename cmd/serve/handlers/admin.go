@@ -23,15 +23,24 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
-// requireAdmin guards the admin routes. The token must be present on every
-// request: a header for the stream and fetches, a hidden form field for
-// actions. No cookie on purpose: the model's page runs arbitrary same-origin
-// JavaScript, and a cookie would hand that script the admin panel.
+// requireAdmin guards the admin routes. A request is allowed with the
+// remembered login cookie or the admin token in a header or form field. The
+// cookie is safe only because these routes live on the admin host; see
+// AdminCookieName. A state change from another origin is refused outright,
+// so the board's scripts cannot drive an action with a borrowed cookie.
 func (h *Handlers) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	h.adminHeaders(w)
-	if !h.adminTokenOK(r) {
+	authed, csrf := h.adminAccess(r)
+	if !authed {
 		// 404 rather than 403: the panel should not advertise itself.
 		http.NotFound(w, r)
+		return false
+	}
+	if !csrf {
+		h.logger.Warn("Admin action refused for a missing token",
+			slog.String("path", r.URL.Path),
+		)
+		http.Error(w, "Bad token", http.StatusForbidden)
 		return false
 	}
 	return true
@@ -65,12 +74,11 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 }
 
 // Admin, AdminTurns, AdminTurn and AdminSite are the admin pages. Each one
-// shows the password form until the request presents the admin token. A
-// browser GET cannot set a header, so the password form POSTs back to the same
-// path; the token then lives in hidden form fields and the request headers of
-// the stream and the panel's own navigation, never in the URL. There is no
-// session cookie on purpose: the board runs model-written JavaScript on the
-// same origin.
+// shows the password form until the browser remembers a login. The password
+// form POSTs back to the same path; a correct password sets the signed,
+// HttpOnly cookie and the page renders, so nothing ever puts the token in a
+// URL. These routes are only served on the admin host, which has no board and
+// so never runs the model's JavaScript.
 func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 	h.servePanel(w, r, pages.Panel{Page: pages.PageOverview})
 }
@@ -96,16 +104,22 @@ func (h *Handlers) AdminSite(w http.ResponseWriter, r *http.Request) {
 // page patched into #admin-body for the panel's own navigation, and the whole
 // document otherwise.
 func (h *Handlers) servePanel(w http.ResponseWriter, r *http.Request, panel pages.Panel) {
-	if r.Method == http.MethodPost && r.Header.Get("X-Admin-Token") == "" {
-		if !h.tokenMatches(r.PostFormValue("password")) {
-			h.renderLogin(w, r, panel, true)
-			return
-		}
-	} else if !h.adminTokenOK(r) {
+	authed, _ := h.adminAccess(r)
+	switch {
+	case authed:
+		h.adminDone(w, r, panel, "")
+	case r.Method == http.MethodPost && h.tokenMatches(r.PostFormValue("password")):
+		// Answer with a redirect, so the next request carries the new cookie
+		// and the page gets its CSRF token, and a reload cannot re-post the
+		// password.
+		h.adminHeaders(w)
+		h.setAdminSession(w, r)
+		http.Redirect(w, r, r.URL.RequestURI(), http.StatusSeeOther)
+	case r.Method == http.MethodPost:
+		h.renderLogin(w, r, panel, true)
+	default:
 		h.renderLogin(w, r, panel, false)
-		return
 	}
-	h.adminDone(w, r, panel, "")
 }
 
 // renderLogin is the only page an unauthenticated visitor gets. A failed
@@ -139,6 +153,8 @@ func (h *Handlers) adminDone(
 ) {
 	h.adminHeaders(w)
 	view, err := h.loadAdmin(r.Context(), panel, message)
+	view.Board = h.BoardURL(r)
+	view.CSRF = h.csrfFor(r)
 	if errors.Is(err, errNoTurn) {
 		http.NotFound(w, r)
 		return
@@ -185,7 +201,6 @@ func (h *Handlers) loadAdmin(
 		Panel:  panel,
 		Live:   h.adminLiveView(ctx),
 		Flash:  flash,
-		Token:  h.cfg.AdminToken,
 		Stream: h.adminStreamInit(panel),
 	}
 	switch panel.Page {
@@ -227,15 +242,15 @@ func (h *Handlers) loadAdmin(
 	return view, nil
 }
 
-// adminStreamInit opens the page's stream. The token travels as a request
-// header, not in the URL. The stream closes when the page's mount is replaced,
-// and the jitter keeps tabs from reconnecting in the same instant.
+// adminStreamInit opens the page's stream. The remembered login rides along
+// as a cookie, so no secret appears in the URL or the page. The stream closes
+// when the page's mount is replaced, and the jitter keeps tabs from
+// reconnecting in the same instant.
 func (h *Handlers) adminStreamInit(panel pages.Panel) string {
 	return fmt.Sprintf(
-		"@get('%s', {requestCancellation: 'cleanup', retry: 'always', retryMaxCount: Infinity, retryInterval: %d, headers: {'X-Admin-Token': %s}})",
+		"@get('%s', {requestCancellation: 'cleanup', retry: 'always', retryMaxCount: Infinity, retryInterval: %d})",
 		panel.LivePath(),
 		1000+rand.IntN(2000),
-		strconv.Quote(h.cfg.AdminToken),
 	)
 }
 

@@ -16,14 +16,17 @@ import (
 // AdminLive is an admin page's one stream. The page names itself in the query,
 // and the stream patches the fragments that page rendered, so the panel
 // follows the board without polling. The token rides in the X-Admin-Token
-// request header; a bad one answers 204, which tells Datastar to stop retrying
-// a page the browser cannot fix.
+// remembered login cookie or the token header; a request without either answers
+// 204, which tells Datastar to stop retrying a page the browser cannot fix.
 func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	h.adminHeaders(w)
-	if !h.adminTokenOK(r) {
+	if !h.adminAuthed(r) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// The page's forms carry this token, so the fragments the stream patches
+	// keep working after the page has loaded.
+	csrf := h.csrfFor(r)
 	panel := pages.Panel{Page: r.URL.Query().Get("page")}
 	switch panel.Page {
 	case pages.PageOverview, pages.PageSite:
@@ -41,7 +44,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
-	if err := h.syncAdmin(ctx, sse, panel, topicAll); err != nil {
+	if err := h.syncAdmin(ctx, sse, panel, csrf, topicAll); err != nil {
 		return
 	}
 
@@ -58,7 +61,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-sub.wake:
-			if err := h.syncAdmin(ctx, sse, panel, sub.take()); err != nil {
+			if err := h.syncAdmin(ctx, sse, panel, csrf, sub.take()); err != nil {
 				return
 			}
 		}
@@ -72,6 +75,7 @@ func (h *Handlers) syncAdmin(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 	panel pages.Panel,
+	csrf string,
 	t topic,
 ) error {
 	if t&(topicBusy|topicPosts|topicSite) != 0 {
@@ -109,7 +113,7 @@ func (h *Handlers) syncAdmin(
 		}
 	case pages.PageSite:
 		if t&topicSite != 0 {
-			if err := h.patchAdminVersion(ctx, sse); err != nil {
+			if err := h.patchAdminVersion(ctx, sse, csrf); err != nil {
 				return err
 			}
 		}
@@ -152,6 +156,7 @@ func (h *Handlers) patchAdmin(
 func (h *Handlers) patchAdminVersion(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
+	csrf string,
 ) error {
 	versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
 	if err != nil {
@@ -167,7 +172,7 @@ func (h *Handlers) patchAdminVersion(
 		ctx,
 		sse,
 		"admin-version",
-		pages.AdminVersion(current, h.cfg.AdminToken),
+		pages.AdminVersion(current, csrf),
 	); err != nil {
 		return err
 	}
@@ -175,7 +180,7 @@ func (h *Handlers) patchAdminVersion(
 		ctx,
 		sse,
 		"admin-versions",
-		pages.AdminVersions(versions, current.ID, h.cfg.AdminToken),
+		pages.AdminVersions(versions, current.ID, csrf),
 	)
 }
 

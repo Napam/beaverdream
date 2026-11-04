@@ -37,8 +37,8 @@ func TestAdminPageOpensTheLiveStream(t *testing.T) {
 		`id="admin-stream-site-0"`,
 		`@get(&#39;/admin/live?page=site&#39;`,
 		`requestCancellation: &#39;cleanup&#39;`,
-		`X-Admin-Token`,
 		`id="admin-body"`,
+		`sign out`,
 		`/static/datastar.js`,
 		`data-on:submit="@post('/admin/heal'`,
 	} {
@@ -51,6 +51,9 @@ func TestAdminPageOpensTheLiveStream(t *testing.T) {
 	}
 	if strings.Contains(body, "/admin/live?token=") {
 		t.Error("the stream URL carries the token")
+	}
+	if strings.Contains(body, testAdminToken) {
+		t.Error("the page carries the admin token")
 	}
 }
 
@@ -228,9 +231,15 @@ func TestAdminLoginReturnsToThePage(t *testing.T) {
 		t.Fatal("the password form does not post back to /admin/site")
 	}
 	authed := postForm(t, h.AdminSite, "/admin/site", url.Values{"password": {"secret"}})
-	if authed.Code != http.StatusOK ||
-		!strings.Contains(authed.Body.String(), "journal and shared state") {
-		t.Fatalf("status = %d, want the site page", authed.Code)
+	if authed.Code != http.StatusSeeOther || authed.Header().Get("Location") != "/admin/site" {
+		t.Fatalf("status = %d, want a redirect back to /admin/site", authed.Code)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/site", nil)
+	req.AddCookie(authed.Result().Cookies()[0])
+	page := httptest.NewRecorder()
+	h.AdminSite(page, req)
+	if !strings.Contains(page.Body.String(), "journal and shared state") {
+		t.Fatal("the redirected page is missing the site panel")
 	}
 }
 
@@ -321,5 +330,222 @@ func TestAdminActionWithoutDatastarRendersThePanel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `id="admin-body"`) {
 		t.Error("the response is missing the panel")
+	}
+}
+
+// login posts the password. It answers with a redirect, so the next request
+// carries the new cookie.
+func login(t *testing.T, h *handlers.Handlers) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/admin",
+		strings.NewReader("password="+testAdminToken),
+	)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.Admin(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want a redirect", rec.Code)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("login set %d cookies, want one", len(cookies))
+	}
+	return cookies[0]
+}
+
+// panelWith fetches an admin page, asserting it is the panel and not the
+// password form.
+func panelWith(t *testing.T, h *handlers.Handlers, cookie *http.Cookie) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Admin(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `id="admin-body"`) {
+		t.Fatalf("panel status = %d", rec.Code)
+	}
+	return rec.Body.String()
+}
+
+// csrfFrom reads the token the panel renders into its action forms.
+func csrfFrom(t *testing.T, body string) string {
+	t.Helper()
+	const open = `name="csrf" value="`
+	at := strings.Index(body, open)
+	if at < 0 {
+		t.Fatal("the panel carries no csrf token")
+	}
+	rest := body[at+len(open):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		t.Fatal("the csrf token is not closed")
+	}
+	return rest[:end]
+}
+
+// A state change needs the token derived from the login. The board can send a
+// form with the cookie attached, but it cannot read the admin page, so it
+// cannot learn the token.
+func TestAdminActionNeedsTheCSRFToken(t *testing.T) {
+	h, queries := setup(t)
+	cookie := login(t, h)
+	csrf := csrfFrom(t, panelWith(t, h, cookie))
+
+	send := func(fields url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/admin/undo",
+			strings.NewReader(fields.Encode()),
+		)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+		h.UndoLast(rec, req)
+		return rec
+	}
+
+	// A second version gives undo something to copy forward.
+	seed, err := queries.CurrentSite(context.Background())
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if _, err := queries.CreateSiteVersion(context.Background(), sqlc.CreateSiteVersionParams{
+		Css:    seed.Css,
+		Note:   seed.Note,
+		Header: seed.Header,
+		Board:  seed.Board,
+		Footer: seed.Footer,
+		Reason: "test edit",
+	}); err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	countVersions := func() int {
+		versions, err := queries.ListSiteVersions(context.Background(), 20)
+		if err != nil {
+			t.Fatalf("list versions: %v", err)
+		}
+		return len(versions)
+	}
+	before := countVersions()
+
+	if rec := send(nil); rec.Code != http.StatusForbidden {
+		t.Errorf("without the token: status = %d, want 403", rec.Code)
+	}
+	if rec := send(url.Values{"csrf": {"nope"}}); rec.Code != http.StatusForbidden {
+		t.Errorf("a wrong token: status = %d, want 403", rec.Code)
+	}
+	if after := countVersions(); after != before {
+		t.Errorf("a refused action changed the board: %d versions, was %d", after, before)
+	}
+	if rec := send(url.Values{"csrf": {csrf}}); rec.Code == http.StatusForbidden {
+		t.Error("the right token is refused")
+	}
+	if after := countVersions(); after != before+1 {
+		t.Errorf("the allowed action wrote %d versions, want one", after-before)
+	}
+
+	// A script with the admin token needs no token: the token is the secret.
+	req := httptest.NewRequest(http.MethodPost, "/admin/undo", nil)
+	req.Header.Set("X-Admin-Token", testAdminToken)
+	rec := httptest.NewRecorder()
+	h.UndoLast(rec, req)
+	if rec.Code == http.StatusForbidden {
+		t.Error("the admin token is refused without a csrf field")
+	}
+}
+
+// A page on the board port can plant a cookie with the admin's name ahead of
+// the real login. Any cookie that verifies is accepted, so that cannot lock
+// the admin out.
+func TestAdminIgnoresAPlantedCookie(t *testing.T) {
+	h, _ := setup(t)
+	cookie := login(t, h)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.AddCookie(&http.Cookie{Name: handlers.AdminCookieName, Value: "junk", Path: "/admin"})
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.Admin(rec, req)
+	if !strings.Contains(rec.Body.String(), `id="admin-body"`) {
+		t.Fatal("a planted cookie locked the admin out")
+	}
+}
+
+// The remembered login is enough for the stream, which sends no header or
+// token.
+func TestAdminLiveAcceptsTheRememberedLogin(t *testing.T) {
+	h, _ := setup(t)
+	cookie := login(t, h)
+	live := openSSE(t, h.AdminLive, "/admin/live?page=site", func(req *http.Request) {
+		req.AddCookie(cookie)
+	})
+	live.next(t, []string{`id="admin-live"`, `waiting for a post`})
+	// The stream's own fragments keep the action forms working.
+	live.next(t, []string{`id="admin-version"`, `name="csrf"`})
+}
+
+// Signing out clears the cookie and shows the password form again.
+func TestAdminLogoutForgetsTheLogin(t *testing.T) {
+	h, _ := setup(t)
+	cookie := login(t, h)
+	csrf := csrfFrom(t, panelWith(t, h, cookie))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/logout", strings.NewReader("csrf="+csrf))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	h.AdminLogout(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `name="password"`) {
+		t.Fatalf("status = %d, want the password form", rec.Code)
+	}
+	cleared := rec.Result().Cookies()
+	if len(cleared) != 1 || cleared[0].Name != handlers.AdminCookieName ||
+		cleared[0].MaxAge >= 0 {
+		t.Errorf("logout cookies = %+v, want the login cleared", cleared)
+	}
+}
+
+// The board's port sends admin paths to the admin port, keeping the host and
+// path, so the link works from localhost and from a LAN address alike. The
+// admin port serves no board.
+func TestAdminRedirectsToItsOwnPort(t *testing.T) {
+	h, _ := setupWithConfig(t, handlers.Config{
+		AdminToken: testAdminToken,
+		Port:       "6930",
+		AdminPort:  "6932",
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	board := h.RedirectAdmin(next)
+
+	call := func(host string, target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		board.ServeHTTP(rec, req)
+		return rec
+	}
+
+	redirect := call("172.29.101.116:6930", "/admin/turns/8?pick=1")
+	if redirect.Code != http.StatusFound {
+		t.Fatalf("status = %d, want a redirect", redirect.Code)
+	}
+	if got := redirect.Header().
+		Get("Location"); got != "http://172.29.101.116:6932/admin/turns/8?pick=1" {
+		t.Errorf("Location = %q", got)
+	}
+	if rec := call("localhost:6930", "/posts"); rec.Code != http.StatusNoContent {
+		t.Errorf("a board path: status = %d, want it passed through", rec.Code)
+	}
+
+	// The header link back to the board crosses ports in the other direction.
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.Host = "172.29.101.116:6932"
+	if got := h.BoardURL(req); got != "http://172.29.101.116:6930/" {
+		t.Errorf("board URL = %q", got)
 	}
 }

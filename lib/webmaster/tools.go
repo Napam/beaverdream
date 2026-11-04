@@ -8,9 +8,12 @@ import (
 	"unicode"
 )
 
+// The size caps exist to stop a runaway write, not to keep the page small. A
+// rewritten board with a game in it passes 20k bytes, so the cap leaves room
+// for the page to keep growing before a whole rewrite is refused.
 const (
-	maxCSSLen      = 20000
-	maxRegionLen   = 20000
+	maxCSSLen      = 64000
+	maxRegionLen   = 64000
 	minRegionLen   = 8
 	maxStateKeys   = 8
 	maxStateName   = 32

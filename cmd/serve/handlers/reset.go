@@ -15,6 +15,14 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Stop the turn in flight before waiting for the lock. A model call holds
+	// h.mu for minutes; without the cancel the admin request would hang until
+	// that turn finished, and the turn is about to be deleted anyway. The
+	// deferred resume also covers a panic, which would otherwise leave work
+	// paused for the life of the process.
+	h.stopWork()
+	defer h.resumeWork()
+
 	// Serialize with mutations so a rewrite cannot land in the middle of the
 	// reset or write a version that references a deleted post. The panel is
 	// rendered after both locks are released, so a slow admin client does not

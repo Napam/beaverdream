@@ -246,7 +246,9 @@ prefer simple, readable code over production hardening.
 - Reset is the one destructive action: it keeps the oldest version, deletes
   every turn (posts, webmaster turns, events, notes) with the compacted
   summaries, later versions and shared state, and
-  rewinds the id sequences. It takes `h.mu`, so it cannot race a mutation.
+  rewinds the id sequences. It cancels the turn in flight and drops the queue
+  before it takes `h.mu`, so it never waits on a model call and cannot race a
+  mutation. Posts that arrive during the reset stay queued and run after it.
 
 ## Frontend
 

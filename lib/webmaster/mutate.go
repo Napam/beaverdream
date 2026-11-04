@@ -774,6 +774,8 @@ Rules:
 - The board region must render every post you were given. The server inserts
   the current posts newest first. Never invent a post and never drop one.
 - Keep one working post form in the page, in whichever region fits the design.
+- Do not put a summary, changelog or recap of your past turns on the page. The
+  room log holds that; prose on the page is for the visitor using it now.
 - When you do change it, keep the site readable as a message board at first.
   Get bolder as the board gets busier.
 - BOARD IS PLAIN means the page still matches the seed. The first change away

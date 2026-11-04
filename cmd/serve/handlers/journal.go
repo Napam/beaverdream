@@ -261,13 +261,13 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 		Limit: maxJournalRead,
 	})
 	if err != nil {
-		h.logger.Error("Failed to read the journal", slog.Any("error", err))
+		h.logRead("Failed to read the journal", err)
 		writeStateError(w, http.StatusInternalServerError, "could not read that")
 		return
 	}
 	latest, err := h.queries.JournalLatest(r.Context(), key)
 	if err != nil {
-		h.logger.Error("Failed to read journal state", slog.Any("error", err))
+		h.logRead("Failed to read journal state", err)
 		writeStateError(w, http.StatusInternalServerError, "could not read that")
 		return
 	}

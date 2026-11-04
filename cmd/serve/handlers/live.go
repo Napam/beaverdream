@@ -128,7 +128,7 @@ func (h *Handlers) syncSite(
 ) error {
 	current, err := h.queries.CurrentSite(ctx)
 	if err != nil {
-		h.logger.Error("Live stream could not load the site", slog.Any("error", err))
+		h.logRead("Live stream could not load the site", err)
 		return nil
 	}
 	if current.ID == view.cursor.Version {
@@ -173,7 +173,7 @@ func (h *Handlers) syncPosts(
 ) error {
 	latest, err := h.queries.LatestPostID(ctx)
 	if err != nil {
-		h.logger.Error("Live stream could not load the newest post", slog.Any("error", err))
+		h.logRead("Live stream could not load the newest post", err)
 		return nil
 	}
 	if latest == view.cursor.Post {
@@ -188,7 +188,7 @@ func (h *Handlers) syncPosts(
 			Limit: livePostBatch,
 		})
 		if err != nil {
-			h.logger.Error("Live stream could not load new posts", slog.Any("error", err))
+			h.logRead("Live stream could not load new posts", err)
 			return nil
 		}
 		mode = datastar.WithModePrepend()
@@ -196,7 +196,7 @@ func (h *Handlers) syncPosts(
 	if len(rows) == 0 || len(rows) == livePostBatch {
 		rows, err = h.queries.ListRecentPosts(ctx, livePostBatch)
 		if err != nil {
-			h.logger.Error("Live stream could not load posts", slog.Any("error", err))
+			h.logRead("Live stream could not load posts", err)
 			return nil
 		}
 		mode = datastar.WithModeInner()
@@ -234,12 +234,12 @@ func (h *Handlers) syncState(
 ) error {
 	site, err := h.queries.CurrentSite(ctx)
 	if err != nil {
-		h.logger.Error("Live stream could not load the site", slog.Any("error", err))
+		h.logRead("Live stream could not load the site", err)
 		return nil
 	}
 	rows, err := h.queries.ListSiteState(ctx)
 	if err != nil {
-		h.logger.Error("Live stream could not load shared state", slog.Any("error", err))
+		h.logRead("Live stream could not load shared state", err)
 		return nil
 	}
 	values, err := json.Marshal(stateValues(parseStateSchema(site.StateSchema), rows))
@@ -268,7 +268,7 @@ func (h *Handlers) syncJournal(
 ) error {
 	newest, err := h.queries.MaxJournalID(ctx)
 	if err != nil {
-		h.logger.Error("Live stream could not read the journal", slog.Any("error", err))
+		h.logRead("Live stream could not read the journal", err)
 		return nil
 	}
 	if newest == view.cursor.Journal {
@@ -285,7 +285,7 @@ func (h *Handlers) syncJournal(
 		Limit: liveJournalBatch,
 	})
 	if err != nil {
-		h.logger.Error("Live stream could not read journal rows", slog.Any("error", err))
+		h.logRead("Live stream could not read journal rows", err)
 		return nil
 	}
 	if len(rows) == liveJournalBatch {

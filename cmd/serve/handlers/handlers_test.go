@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -1728,4 +1729,73 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 			t.Errorf("admin page is missing %q", want)
 		}
 	}
+}
+
+// A reset must not wait behind a model call. It cancels the turn in flight and
+// wipes the board, so the admin request answers now instead of minutes later.
+func TestResetCancelsTheRunningTurn(t *testing.T) {
+	var hold atomic.Bool
+	hold.Store(true)
+	inFlight := make(chan struct{})
+	h, queries := setupWithModel(t, handlers.Config{AdminToken: testAdminToken},
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// The server only notices a dropped client once the body is
+				// read, so read it (and put it back) before blocking.
+				body, _ := io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				if !hold.Load() {
+					next.ServeHTTP(w, r)
+					return
+				}
+				select {
+				case <-inFlight:
+				default:
+					close(inFlight)
+				}
+				<-r.Context().Done()
+			})
+		})
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"hold that turn"}})
+	select {
+	case <-inFlight:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the model call never started")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the reset waited for the model call")
+	}
+
+	ctx := context.Background()
+	site, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	if site.ID != 1 {
+		t.Errorf("current version = %d, want the seed", site.ID)
+	}
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	if len(posts) != 0 {
+		t.Errorf("reset left %d posts", len(posts))
+	}
+
+	// The worker has to start again: one post after the reset is enough.
+	hold.Store(false)
+	postFormAs(t, h.CreatePost, "/posts", url.Values{"body": {"after the reset"}}, "eve")
+	waitFor(t, "the version after the reset", func() bool {
+		current, err := queries.CurrentSite(ctx)
+		return err == nil && current.ID == 2
+	})
 }

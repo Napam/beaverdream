@@ -111,6 +111,11 @@ type Handlers struct {
 	journalBucket map[string]*journalBucket
 	// alertSeen collapses repeated browser errors into one event each.
 	alertSeen map[string]time.Time
+	// cancelRun stops the model call in flight; stopped counts the resets
+	// that have not finished yet, so overlapping resets keep work paused.
+	// Both guarded by liveMu.
+	cancelRun context.CancelFunc
+	stopped   int
 	wake      chan struct{}
 	stop      chan struct{}
 	closeOnce sync.Once
@@ -246,6 +251,17 @@ func postFromRow(row sqlc.Post) webmaster.Post {
 	}
 }
 
+// logRead logs a query that failed on a request's context, unless the client
+// left first. A closed tab or a reload cancels its streams and reads, which is
+// the page working as intended, not a server fault. A deadline still logs: no
+// read has one today, and a slow query should stay visible if one is added.
+func (h *Handlers) logRead(message string, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	h.logger.Error(message, slog.Any("error", err))
+}
+
 // createdPost adapts the insert row to the view model the rest of the handler
 // already speaks.
 func createdPost(row sqlc.CreatePostRow) sqlc.Post {
@@ -283,9 +299,14 @@ func (h *Handlers) mutate(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.beginRun(kind, nil)
 	ctx, cancel := mutationContext(ctx)
 	defer cancel()
+	if !h.startRun(cancel) {
+		return webmaster.Result{}, errors.New("the board is resetting")
+	}
+	defer h.clearRun()
+
+	h.beginRun(kind, nil)
 
 	var triggers []sqlc.Post
 	if triggerPost != nil {
@@ -515,17 +536,23 @@ func (h *Handlers) mutateHeld(
 	// retried next time. The page the next turn reads counts against the
 	// budget. The mutation deadline may already be spent, so compaction runs
 	// on its own clock; summarize bounds each model call.
+	//
+	// A reset cancels this turn and then waits for the lock. Summarizing turns
+	// the reset is about to delete would put a model call back in that wait,
+	// so a canceled turn skips it.
 	nextPage := currentSite
 	if res.Changed {
 		nextPage = res.Site
 	}
 	compactStart := time.Now()
-	if err := h.compactRoom(
-		context.WithoutCancel(ctx),
-		turn.ID,
-		int64(webmaster.PageRunes(nextPage)),
-	); err != nil {
-		h.logger.Error("Failed to compact the room", slog.Any("error", err))
+	if ctx.Err() != context.Canceled {
+		if err := h.compactRoom(
+			context.WithoutCancel(ctx),
+			turn.ID,
+			int64(webmaster.PageRunes(nextPage)),
+		); err != nil {
+			h.logger.Error("Failed to compact the room", slog.Any("error", err))
+		}
 	}
 	compactMs := time.Since(compactStart).Milliseconds()
 
@@ -861,6 +888,10 @@ func (h *Handlers) runPending() {
 	defer h.mu.Unlock()
 
 	h.liveMu.Lock()
+	if h.stopped > 0 {
+		h.liveMu.Unlock()
+		return
+	}
 	batch := h.pending
 	h.pending = nil
 	h.liveMu.Unlock()
@@ -894,13 +925,19 @@ func (h *Handlers) runPending() {
 		slog.Any("post_ids", batchIDs),
 	)
 
-	h.beginRun("post", postAuthors(batch))
 	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
+	if !h.startRun(cancel) {
+		cancel()
+		return
+	}
+	h.beginRun("post", postAuthors(batch))
 	_, err := h.mutateHeld(ctx, "post", "", batch)
 	cancel()
+	h.clearRun()
 	h.endRun(err)
 
-	if err != nil {
+	// A reset cancels the turn in flight on purpose, so that is not a failure.
+	if err != nil && !errors.Is(err, context.Canceled) {
 		h.logger.Error(
 			"Mutation failed",
 			slog.Int64("post_id", batch[len(batch)-1].ID),
@@ -970,6 +1007,58 @@ func (h *Handlers) endRun(err error) {
 	h.liveMu.Unlock()
 	// The run's turn and any summary have landed by now, version or not.
 	h.hub.publish(topicBusy | topicTurns)
+}
+
+// startRun remembers how to cancel the model call. It returns false when a
+// reset has already stopped work, so the caller drops its batch instead of
+// starting a turn the reset would have to wait for.
+func (h *Handlers) startRun(cancel context.CancelFunc) bool {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	if h.stopped > 0 {
+		return false
+	}
+	h.cancelRun = cancel
+	return true
+}
+
+func (h *Handlers) clearRun() {
+	h.liveMu.Lock()
+	h.cancelRun = nil
+	h.liveMu.Unlock()
+}
+
+// stopWork cancels the model call in flight and drops the queue, so a reset
+// does not wait minutes for a turn it is about to delete. Nothing new starts
+// until every reset that called this has resumed.
+func (h *Handlers) stopWork() {
+	h.liveMu.Lock()
+	h.stopped++
+	h.pending = nil
+	cancel := h.cancelRun
+	h.cancelRun = nil
+	h.liveMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	h.hub.publish(topicBusy)
+}
+
+// resumeWork lets the worker run again. A post that arrived during the reset
+// is still queued, and its wake was used up, so it gets one now.
+func (h *Handlers) resumeWork() {
+	h.liveMu.Lock()
+	if h.stopped > 0 {
+		h.stopped--
+	}
+	queued := h.stopped == 0 && len(h.pending) > 0
+	h.liveMu.Unlock()
+	if queued {
+		select {
+		case h.wake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (h *Handlers) setRunningRound(round int) {
@@ -1057,10 +1146,12 @@ func (h *Handlers) setLastError(message string) {
 	h.liveMu.Unlock()
 }
 
+// resetLive points the live view at the seed. The queue is left alone: a post
+// that landed during the reset is still owed a turn, and stopWork already
+// dropped everything older.
 func (h *Handlers) resetLive(version int64) {
 	h.liveMu.Lock()
 	h.version = version
-	h.pending = nil
 	h.running = nil
 	h.lastError = ""
 	h.liveMu.Unlock()

@@ -827,6 +827,9 @@ document.getElementById("tap").onclick = function () { feed.append({ n: 1 }) }
   clicks too fast). They never throw for that, so no catch is needed. A row
   is {id, key, visitor, payload, match, rules, at}. The payload must be a JSON
   object of at most 600 bytes.
+  Writes are metered per visitor and per key: about 20 a second, after a short
+  burst. For motion, send an update every 60ms or so and interpolate other
+  players between updates; sending every frame just drops rows.
   bd.visitor is the viewer's opaque id: use it for seats and for "your turn".
 - When your script throws, a reduce fails or the server rejects a payload, the
   server writes you a log line from the page's browser with the message. Only

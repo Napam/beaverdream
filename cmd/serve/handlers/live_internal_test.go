@@ -43,3 +43,52 @@ func TestAllowRewriteThrottlesByName(t *testing.T) {
 		t.Fatal("rewrite was still throttled after the cooldown")
 	}
 }
+
+// A 60ms game loop sends about 17 updates a second. That has to fit under the
+// write budget, or motion stutters as rows are dropped.
+func TestJournalBucketKeepsUpWithAGameLoop(t *testing.T) {
+	now := time.Now()
+	bucket := &journalBucket{at: now}
+	for i := 0; i < 200; i++ {
+		now = now.Add(60 * time.Millisecond)
+		if !takeJournalToken(bucket, now) {
+			t.Fatalf("update %d was dropped", i+1)
+		}
+	}
+}
+
+func TestJournalBucketBurstsThenRefills(t *testing.T) {
+	now := time.Now()
+	bucket := &journalBucket{tokens: journalBurst, at: now}
+	for i := 0; i < journalBurst; i++ {
+		if !takeJournalToken(bucket, now) {
+			t.Fatalf("burst write %d was dropped", i+1)
+		}
+	}
+	if takeJournalToken(bucket, now) {
+		t.Fatal("a write past the burst was allowed")
+	}
+	// At 20 a second, one token arrives every 50ms.
+	now = now.Add(50 * time.Millisecond)
+	if !takeJournalToken(bucket, now) {
+		t.Fatal("the bucket did not refill")
+	}
+}
+
+func TestAllowJournalWriteMetersEachVisitorAndKey(t *testing.T) {
+	h := &Handlers{}
+	for i := 0; i < journalBurst; i++ {
+		if !h.allowJournalWrite("dave", "moves") {
+			t.Fatalf("burst write %d was refused", i+1)
+		}
+	}
+	if h.allowJournalWrite("dave", "moves") {
+		t.Fatal("a visitor's burst did not limit them")
+	}
+	if !h.allowJournalWrite("kit", "moves") {
+		t.Fatal("one visitor's burst limited another")
+	}
+	if !h.allowJournalWrite("dave", "chat") {
+		t.Fatal("one key's burst limited another")
+	}
+}

@@ -31,8 +31,10 @@ const (
 	alertRepeatWindow = 2 * time.Minute
 	// A game click is a write, so a plain cooldown would stall play. A small
 	// token bucket allows a burst, then settles at journalRate per second.
-	journalBurst = 12
-	journalRate  = 8
+	// Twenty a second leaves room for a 60ms game loop (about 17/s) without
+	// dropping an update when the timer drifts.
+	journalBurst = 30
+	journalRate  = 20
 )
 
 // journalBucket is one visitor's short-term write allowance for one key.
@@ -361,6 +363,11 @@ func (h *Handlers) allowJournalWrite(visitor, key string) bool {
 		bucket = &journalBucket{tokens: journalBurst, at: now}
 		h.journalBucket[slot] = bucket
 	}
+	return takeJournalToken(bucket, now)
+}
+
+// takeJournalToken refills a bucket and spends one token when it has one.
+func takeJournalToken(bucket *journalBucket, now time.Time) bool {
 	bucket.tokens += now.Sub(bucket.at).Seconds() * journalRate
 	bucket.at = now
 	if bucket.tokens > journalBurst {

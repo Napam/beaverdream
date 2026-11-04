@@ -209,10 +209,7 @@ func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
 	return webmaster.Site{
 		Version:       row.ID,
 		CSS:           row.Css,
-		Note:          row.Note,
-		Header:        row.Header,
-		Board:         row.Board,
-		Footer:        row.Footer,
+		HTML:          row.Html,
 		StateSchema:   row.StateSchema,
 		JournalSchema: row.JournalSchema,
 	}
@@ -239,9 +236,7 @@ func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webm
 
 func sameSiteContent(a, b sqlc.SiteVersion) bool {
 	return a.Css == b.Css &&
-		a.Header == b.Header &&
-		a.Board == b.Board &&
-		a.Footer == b.Footer &&
+		a.Html == b.Html &&
 		normalizeSchema(a.StateSchema) == normalizeSchema(b.StateSchema) &&
 		normalizeSchema(a.JournalSchema) == normalizeSchema(b.JournalSchema)
 }
@@ -494,10 +489,7 @@ func (h *Handlers) mutateHeld(
 		if res.Changed {
 			version, err := insertVersion(finishCtx, q, sqlc.CreateSiteVersionParams{
 				Css:           res.Site.CSS,
-				Note:          res.Site.Note,
-				Header:        res.Site.Header,
-				Board:         res.Site.Board,
-				Footer:        res.Site.Footer,
+				Html:          res.Site.HTML,
 				StateSchema:   normalizeSchema(res.Site.StateSchema),
 				JournalSchema: normalizeSchema(res.Site.JournalSchema),
 				TurnID:        sql.NullInt64{Int64: turn.ID, Valid: true},

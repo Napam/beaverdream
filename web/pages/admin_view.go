@@ -612,12 +612,8 @@ func partColor(name string) string {
 		return "bg-amber-400"
 	case "stylesheet":
 		return "bg-pink-500"
-	case "header":
-		return "bg-emerald-400"
-	case "board":
+	case "html":
 		return "bg-emerald-600"
-	case "footer":
-		return "bg-emerald-300"
 	case "shared state":
 		return "bg-orange-400"
 	case "journal":

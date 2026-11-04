@@ -219,7 +219,7 @@ func TestGamePageOpensItsFeed(t *testing.T) {
 		} `json:"keys"`
 	}
 	var site struct {
-		Board string `json:"board"`
+		HTML string `json:"html"`
 	}
 	for _, call := range gameCalls() {
 		switch call.Function.Name {
@@ -242,7 +242,7 @@ func TestGamePageOpensItsFeed(t *testing.T) {
 		t.Fatalf("encode schema: %v", err)
 	}
 	missing := webmaster.MissingJournalKeys(webmaster.Site{
-		Board:         site.Board,
+		HTML:          site.HTML,
 		JournalSchema: string(raw),
 	})
 	if len(declared) == 0 || len(missing) != 0 {

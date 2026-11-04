@@ -9,12 +9,11 @@ import (
 )
 
 // The size caps exist to stop a runaway write, not to keep the page small. A
-// rewritten board with a game in it passes 20k bytes, so the cap leaves room
-// for the page to keep growing before a whole rewrite is refused.
+// page with a game in it passes 20k bytes, so the cap leaves room for the
+// page to keep growing before a whole rewrite is refused.
 const (
 	maxCSSLen      = 64000
-	maxRegionLen   = 64000
-	minRegionLen   = 8
+	maxHTMLLen     = 192000
 	maxStateKeys   = 8
 	maxStateName   = 32
 	maxStateList   = 100
@@ -99,52 +98,31 @@ func (e *editor) apply(name, arguments string) string {
 	switch name {
 	case "set_site":
 		var in struct {
-			CSS    *string `json:"css"`
-			Header *string `json:"header"`
-			Board  *string `json:"board"`
-			Footer *string `json:"footer"`
+			CSS  *string `json:"css"`
+			HTML *string `json:"html"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 			return e.argumentsRejected(arguments, err)
 		}
-		if in.CSS == nil && in.Header == nil && in.Board == nil && in.Footer == nil {
-			return "rejected: set_site needs at least one field"
+		if in.CSS == nil && in.HTML == nil {
+			return "rejected: set_site needs css, html or both"
 		}
-		// Every field is cleaned before any is assigned, so a rejected call
-		// leaves the whole page as it was.
-		fields := []struct {
-			name   string
-			value  *string
-			target *string
-		}{
-			{editTargetCSS, in.CSS, &e.site.CSS},
-			{RegionHeader, in.Header, &e.site.Header},
-			{RegionBoard, in.Board, &e.site.Board},
-			{RegionFooter, in.Footer, &e.site.Footer},
-		}
-		cleaned := make([]string, len(fields))
-		for i, field := range fields {
-			if field.value == nil {
-				continue
-			}
-			var err error
-			if field.name == editTargetCSS {
-				cleaned[i], err = cleanCSS(*field.value)
-			} else {
-				cleaned[i], err = cleanRegion(field.name, *field.value)
-			}
-			if err != nil {
+		// Both fields are cleaned before either is assigned, so a rejected
+		// call leaves the whole page as it was.
+		css, page := e.site.CSS, e.site.HTML
+		var err error
+		if in.CSS != nil {
+			if css, err = cleanCSS(*in.CSS); err != nil {
 				return "rejected: " + err.Error() + "; nothing was applied"
 			}
 		}
-		changed := false
-		for i, field := range fields {
-			if field.value == nil || cleaned[i] == *field.target {
-				continue
+		if in.HTML != nil {
+			if page, err = cleanHTML(*in.HTML); err != nil {
+				return "rejected: " + err.Error() + "; nothing was applied"
 			}
-			*field.target = cleaned[i]
-			changed = true
 		}
+		changed := css != e.site.CSS || page != e.site.HTML
+		e.site.CSS, e.site.HTML = css, page
 		if !changed {
 			return "ok (no change)"
 		}
@@ -241,9 +219,11 @@ func (e *editor) apply(name, arguments string) string {
 	return fmt.Sprintf("rejected: unknown tool %q", name)
 }
 
-// editTargetCSS names the site stylesheet as an edit target. The regions use
-// their own names.
-const editTargetCSS = "css"
+// The two fields the model writes, as edit targets.
+const (
+	targetCSS  = "css"
+	targetHTML = "html"
+)
 
 // edit changes part of one field of the shared page. The result goes through
 // the same cleaning as a whole-field write, so an edit cannot produce a page
@@ -252,16 +232,12 @@ func (e *editor) edit(target, old, replacement string) string {
 	var field *string
 	var section string
 	switch target {
-	case editTargetCSS:
+	case targetCSS:
 		field, section = &e.site.CSS, "CURRENT STYLESHEET"
-	case RegionHeader:
-		field, section = &e.site.Header, "the header in CURRENT REGIONS"
-	case RegionBoard:
-		field, section = &e.site.Board, "the board in CURRENT REGIONS"
-	case RegionFooter:
-		field, section = &e.site.Footer, "the footer in CURRENT REGIONS"
+	case targetHTML:
+		field, section = &e.site.HTML, "CURRENT HTML"
 	default:
-		return fmt.Sprintf("rejected: unknown target %q, use css, header, board or footer", target)
+		return fmt.Sprintf("rejected: unknown target %q, use css or html", target)
 	}
 
 	next, matches := applyEdit(*field, old, replacement)
@@ -281,10 +257,10 @@ func (e *editor) edit(target, old, replacement string) string {
 	}
 
 	var err error
-	if target == editTargetCSS {
+	if target == targetCSS {
 		next, err = cleanCSS(next)
 	} else {
-		next, err = cleanRegion(target, next)
+		next, err = cleanHTML(next)
 	}
 	if err != nil {
 		return "rejected: " + err.Error() + "; the edit was not applied"
@@ -377,22 +353,24 @@ func punctuationPattern(old string) string {
 	return strings.TrimSuffix(pattern, `\s*`)
 }
 
-func cleanRegion(name, html string) (string, error) {
-	switch name {
-	case RegionHeader, RegionBoard, RegionFooter:
-	default:
-		return "", fmt.Errorf("unknown region %q, use header, board or footer", name)
-	}
-
+// cleanHTML checks the page body. The posts placeholder is the one structural
+// rule: everything around it is the model's. It must appear exactly once: a
+// second copy would make a second post list with the same ids, and the live
+// stream only patches the first.
+func cleanHTML(html string) (string, error) {
 	html = strings.TrimSpace(html)
-	if len(html) < minRegionLen {
-		return "", fmt.Errorf("region is too short to be real")
+	if len(html) > maxHTMLLen {
+		return "", fmt.Errorf("html is longer than %d bytes", maxHTMLLen)
 	}
-	if len(html) > maxRegionLen {
-		return "", fmt.Errorf("region is longer than %d bytes", maxRegionLen)
-	}
-	if name == RegionBoard && !strings.Contains(html, PostsPlaceholder) {
-		return "", fmt.Errorf("board must contain %s, where the posts go", PostsPlaceholder)
+	switch strings.Count(html, PostsPlaceholder) {
+	case 0:
+		return "", fmt.Errorf("html must contain %s, where the posts go", PostsPlaceholder)
+	case 1:
+	default:
+		return "", fmt.Errorf(
+			"html must contain %s exactly once, not in a comment or a script string too",
+			PostsPlaceholder,
+		)
 	}
 	return html, nil
 }

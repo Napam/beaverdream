@@ -240,8 +240,8 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if !strings.Contains(after.Css, "00ff6a") {
 		t.Errorf("new version does not carry the theme: %q", after.Css)
 	}
-	if !strings.Contains(after.Board, webmaster.PostsPlaceholder) {
-		t.Errorf("new board lost the placeholder: %q", after.Board)
+	if !strings.Contains(after.Html, webmaster.PostsPlaceholder) {
+		t.Errorf("new html lost the placeholder: %q", after.Html)
 	}
 
 	runs, err := queries.ListWebmasterTurns(ctx, 10)
@@ -373,8 +373,7 @@ func TestIndexServesModelScripts(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Header: `<script>document.title='owned'</script><h1>owned</h1>`,
-		Board:  webmaster.PostsPlaceholder,
+		Html:   `<script>document.title='owned'</script><h1>owned</h1>` + webmaster.PostsPlaceholder,
 		Reason: "test",
 	}); err != nil {
 		t.Fatalf("create version: %v", err)
@@ -717,10 +716,7 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 	}
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:         seed.Css,
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
+		Html:        seed.Html,
 		StateSchema: `{"votes":{"op":"counter"},"vibes":{"op":"list","max":2},"weather":{"op":"choice","options":["rain","sun"]}}`,
 		Reason:      "state test",
 	}); err != nil {
@@ -794,10 +790,7 @@ func TestResetClearsSharedState(t *testing.T) {
 	}
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:         seed.Css,
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
+		Html:        seed.Html,
 		StateSchema: `{"votes":{"op":"counter"}}`,
 		Reason:      "state test",
 	}); err != nil {
@@ -854,7 +847,7 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 	if restored.ID <= changed.ID {
 		t.Fatalf("undo did not append a version: %d", restored.ID)
 	}
-	if restored.Css != seed.Css || restored.Note != seed.Note {
+	if restored.Css != seed.Css || restored.Html != seed.Html {
 		t.Errorf("undo did not restore the previous version: %+v", restored)
 	}
 }
@@ -899,7 +892,7 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	if healed.ID <= changed.ID {
 		t.Fatalf("heal did not append a version: %d", healed.ID)
 	}
-	if healed.Css != seed.Css || healed.Note != seed.Note || healed.Board != seed.Board {
+	if healed.Css != seed.Css || healed.Html != seed.Html {
 		t.Errorf("heal did not restore the seed: %+v", healed)
 	}
 	posts, err := queries.ListPosts(ctx)
@@ -987,8 +980,8 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	if site.ID != 1 {
 		t.Errorf("current version = %d, want the seed at 1", site.ID)
 	}
-	if site.Note != "welcome. be nice to each other." {
-		t.Errorf("current version is not the seed: %q", site.Note)
+	if !strings.Contains(site.Html, "a small message board") {
+		t.Errorf("current version is not the seed: %q", site.Html)
 	}
 
 	runs, err := queries.ListWebmasterTurns(ctx, 10)
@@ -1000,7 +993,7 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	}
 
 	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
-		Board:  webmaster.PostsPlaceholder,
+		Html:   webmaster.PostsPlaceholder,
 		Reason: "after reset",
 	})
 	if err != nil {
@@ -1695,10 +1688,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 	}
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:           site.Css,
-		Note:          site.Note,
-		Header:        site.Header,
-		Board:         site.Board,
-		Footer:        site.Footer,
+		Html:          site.Html,
 		StateSchema:   `{"taps":{"op":"counter"}}`,
 		JournalSchema: `{"moves":{"max":50,"rules":1}}`,
 		Reason:        "test declares a feed",

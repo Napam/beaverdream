@@ -13,9 +13,7 @@ import (
 func TestSwapKind(t *testing.T) {
 	seed := sqlc.SiteVersion{
 		Css:           "",
-		Header:        "<h1>beaverdream</h1>",
-		Board:         "<main>{{posts}}</main>",
-		Footer:        "<footer></footer>",
+		Html:          "<h1>beaverdream</h1><main>{{posts}}</main><footer></footer>",
 		StateSchema:   "{}",
 		JournalSchema: "{}",
 	}
@@ -25,7 +23,7 @@ func TestSwapKind(t *testing.T) {
 		want   string
 	}{
 		{"css only", func(v *sqlc.SiteVersion) { v.Css = "body{background:#000}" }, "css"},
-		{"markup", func(v *sqlc.SiteVersion) { v.Board += "<p>extra</p>" }, "reload"},
+		{"markup", func(v *sqlc.SiteVersion) { v.Html += "<p>extra</p>" }, "reload"},
 		{"state schema", func(v *sqlc.SiteVersion) {
 			v.StateSchema = `{"likes":{"op":"counter"}}`
 		}, "reload"},

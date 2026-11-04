@@ -60,14 +60,14 @@ func scriptedMutator(t *testing.T, script ...[][2]string) (*Mutator, *int) {
 func TestMutatePausesOnceWhenAnEditHidesThePosts(t *testing.T) {
 	m, calls := scriptedMutator(t,
 		[][2]string{
-			{"edit", `{"target":"header","old":"","new":"<!-- oops"}`},
+			{"edit", `{"target":"html","old":"<main>","new":"<!-- oops<main>"}`},
 			{"done", `{"reason":"a comment"}`},
 		},
 		[][2]string{{"done", `{"reason":"meant it"}`}},
 	)
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Header: "<h1>beaverdream</h1>", Board: "<main>" + PostsPlaceholder + "</main>"},
+		Site{HTML: "<h1>beaverdream</h1><main>" + PostsPlaceholder + "</main>"},
 		Room{},
 		Post{Author: "dave", Body: "hide everything"},
 	)
@@ -87,8 +87,8 @@ func TestMutatePausesOnceWhenAnEditHidesThePosts(t *testing.T) {
 	if !strings.Contains(first, "an unclosed <!-- comment before {{posts}} hides every post") {
 		t.Errorf("done result = %q", first)
 	}
-	if !strings.Contains(res.Site.Header, "<!-- oops") {
-		t.Errorf("the page was sanitized: %q", res.Site.Header)
+	if !strings.Contains(res.Site.HTML, "<!-- oops") {
+		t.Errorf("the page was sanitized: %q", res.Site.HTML)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestMutateDoesNotPauseForAnAlreadyHiddenBoard(t *testing.T) {
 	})
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Header: "<h1>beaverdream</h1><!--", Board: "<main>" + PostsPlaceholder + "</main>"},
+		Site{HTML: "<h1>beaverdream</h1><!--<main>" + PostsPlaceholder + "</main>"},
 		Room{},
 		Post{Author: "dave", Body: "red"},
 	)
@@ -119,76 +119,76 @@ func TestPostsSwallowedBy(t *testing.T) {
 		`<div class="thread">` + PostsPlaceholder + `</div></main>`
 
 	cases := []struct {
-		name, header, board, want string
+		name, start, rest, want string
 	}{
-		{name: "seed page", header: "<h1>beaverdream</h1>", board: board},
+		{name: "seed page", start: "<h1>beaverdream</h1>", rest: board},
 		{
-			name:   "closed raw text",
-			header: "<script>if (a < b) document.title = '<!--'</script><style>p{}</style>",
-			board:  board,
+			name:  "closed raw text",
+			start: "<script>if (a < b) document.title = '<!--'</script><style>p{}</style>",
+			rest:  board,
 		},
 		{
-			name:   "header opens what the board closes",
-			header: "<h1>beaverdream</h1><!-- hidden",
-			board:  "--><main>" + PostsPlaceholder + "</main>",
+			name:  "a comment closed before the posts",
+			start: "<h1>beaverdream</h1><!-- hidden",
+			rest:  "--><main>" + PostsPlaceholder + "</main>",
 		},
 		{
-			name:   "comment after the posts",
-			header: "<h1>beaverdream</h1>",
-			board:  "<main>" + PostsPlaceholder + "</main><!-- trailing",
+			name:  "comment after the posts",
+			start: "<h1>beaverdream</h1>",
+			rest:  "<main>" + PostsPlaceholder + "</main><!-- trailing",
 		},
 		{
-			name:   "unclosed comment",
-			header: "<h1>beaverdream</h1><!-- todo",
-			board:  board,
-			want:   "an unclosed <!-- comment",
+			name:  "unclosed comment",
+			start: "<h1>beaverdream</h1><!-- todo",
+			rest:  board,
+			want:  "an unclosed <!-- comment",
 		},
 		{
-			name:   "unclosed script",
-			header: "<script>let x = 1",
-			board:  board,
-			want:   "an unclosed <script>",
+			name:  "unclosed script",
+			start: "<script>let x = 1",
+			rest:  board,
+			want:  "an unclosed <script>",
 		},
 		{
-			name:   "unclosed style in the board",
-			header: "<h1>beaverdream</h1>",
-			board:  "<style>p{color:red}<main>" + PostsPlaceholder + "</main>",
-			want:   "an unclosed <style>",
+			name:  "unclosed style next to the posts",
+			start: "<h1>beaverdream</h1>",
+			rest:  "<style>p{color:red}<main>" + PostsPlaceholder + "</main>",
+			want:  "an unclosed <style>",
 		},
 		{
-			name:   "unclosed textarea",
-			header: "<h1>beaverdream</h1>",
-			board:  "<textarea name=body><main>" + PostsPlaceholder + "</main>",
-			want:   "an unclosed <textarea>",
+			name:  "unclosed textarea",
+			start: "<h1>beaverdream</h1>",
+			rest:  "<textarea name=body><main>" + PostsPlaceholder + "</main>",
+			want:  "an unclosed <textarea>",
 		},
 		{
-			name:   "unclosed title",
-			header: "<title>beaverdream",
-			board:  board,
-			want:   "an unclosed <title>",
+			name:  "unclosed title",
+			start: "<title>beaverdream",
+			rest:  board,
+			want:  "an unclosed <title>",
 		},
 		{
-			name:   "unclosed attribute quote",
-			header: `<h1 class="big>beaverdream</h1>`,
-			board:  "<main>" + PostsPlaceholder + "</main>",
-			want:   "an unclosed tag or attribute quote",
+			name:  "unclosed attribute quote",
+			start: `<h1 class="big>beaverdream</h1>`,
+			rest:  "<main>" + PostsPlaceholder + "</main>",
+			want:  "an unclosed tag or attribute quote",
 		},
 		{
-			// The next quote in the board closes the attribute, so the
+			// A later quote closes the attribute, so the
 			// browser still reaches the posts.
-			name:   "attribute quote closed by the board",
-			header: `<h1 class="big>beaverdream</h1>`,
-			board:  board,
+			name:  "attribute quote closed later",
+			start: `<h1 class="big>beaverdream</h1>`,
+			rest:  board,
 		},
 		{
-			name:   "board without the placeholder",
-			header: "<!--",
-			board:  "<main></main>",
+			name:  "no placeholder",
+			start: "<!--",
+			rest:  "<main></main>",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := PostsSwallowedBy(Site{Header: tc.header, Board: tc.board})
+			got := PostsSwallowedBy(Site{HTML: tc.start + tc.rest})
 			if got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}

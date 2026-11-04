@@ -11,7 +11,7 @@ func TestRenderLogShowsTheWebmastersOwnTurns(t *testing.T) {
 		{ID: 1, Kind: TurnPost, Author: "dave", Body: "make it pink"},
 		{
 			ID: 2, Kind: TurnWebmaster, Said: "pink, as asked.",
-			Changes: "stylesheet; header", VersionID: 2,
+			Changes: "stylesheet; html", VersionID: 2,
 		},
 		{ID: 3, Kind: TurnPost, Author: "kit", Body: "ugly"},
 		{ID: 4, Kind: TurnWebmaster, Said: "kit is wrong.", Status: "kept"},
@@ -20,7 +20,7 @@ func TestRenderLogShowsTheWebmastersOwnTurns(t *testing.T) {
 	got := RenderLog(log, nil)
 	for _, want := range []string{
 		`#1 dave: make it pink`,
-		`#2 you (v2): "pink, as asked." [stylesheet; header]`,
+		`#2 you (v2): "pink, as asked." [stylesheet; html]`,
 		`#3 kit: ugly`,
 		`#4 you: "kit is wrong." [kept the page]`,
 	} {
@@ -74,14 +74,12 @@ func TestRenderLogBudgetDropsOldestFirst(t *testing.T) {
 
 func TestDescribeChangesNamesFieldsNotMarkup(t *testing.T) {
 	before := Site{
-		CSS:    "old",
-		Header: "<h1>old</h1>",
-		Board:  PostsPlaceholder,
+		CSS:  "old",
+		HTML: "<h1>old</h1>" + PostsPlaceholder,
 	}
 	after := Site{
-		CSS:    "new",
-		Header: "<h1>old</h1>",
-		Board:  PostsPlaceholder,
+		CSS:  "new",
+		HTML: "<h1>old</h1>" + PostsPlaceholder,
 	}
 
 	got := DescribeChanges(before, after)

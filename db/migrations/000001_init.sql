@@ -48,15 +48,13 @@ WHERE
 
 -- site_versions is the render. The current site is simply max(id). Each
 -- mutation appends a row, so a bad render never destroys the previous one.
--- board holds literal {{posts}} where the code-owned post list goes. turn_id
--- names the turn that produced this render, including server events.
+-- html is the page body and holds literal {{posts}} where the code-owned post
+-- list goes. turn_id names the turn that produced this render, including
+-- server events.
 CREATE TABLE site_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   css TEXT NOT NULL DEFAULT '',
-  note TEXT NOT NULL DEFAULT '',
-  header TEXT NOT NULL DEFAULT '',
-  board TEXT NOT NULL DEFAULT '',
-  footer TEXT NOT NULL DEFAULT '',
+  html TEXT NOT NULL DEFAULT '',
   state_schema TEXT NOT NULL DEFAULT '{}',
   -- Journal keys the page may append to. The model declares them; the server
   -- only checks names, sizes and order.
@@ -118,17 +116,30 @@ CREATE TABLE journal (
 CREATE INDEX journal_key_id ON journal (key, id);
 
 -- The seed is a plain light board: a title, a simple post form, and an empty
--- thread. The model takes it from here. The form posts through Datastar, so
--- the page stays put and the post arrives over the live stream; without
--- Datastar it is still a plain form post.
+-- thread. The model takes it from here. Its layout lives in its own
+-- stylesheet, not in the base, so a rewrite starts from nothing it did not
+-- write. The form posts through Datastar, so the page stays put and the post
+-- arrives over the live stream; without Datastar it is still a plain form post.
 INSERT INTO
-  site_versions (css, note, header, board, footer)
+  site_versions (css, html)
 VALUES
   (
-    '',
-    'welcome. be nice to each other.',
-    '<h1>beaverdream</h1><p class="tagline">a small message board</p>',
-    '<main>' ||
+    'body{padding:1.5rem;max-width:48rem;margin:0 auto}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+h1{font-size:1.7em;line-height:1.25;letter-spacing:-.02em;margin:0 0 .4em}
+.tagline{color:var(--muted);margin:0 0 1.25em;font-size:.95em}
+main{margin-top:1.25em}
+.colophon{margin-top:2em;padding-top:.8em;border-top:1px solid var(--border);color:var(--muted);font-size:.8em}
+.postbox{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.9em;display:flex;flex-direction:column;gap:.55em;margin:0 0 1.5em}
+.postbox-title{margin:0;font-weight:700;font-size:.95em}
+.postbox textarea{width:100%;min-height:5.5em;resize:vertical;background:color-mix(in srgb,var(--bg) 90%,#fff 10%);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:.5em .6em;font:inherit;font-size:.95em}
+.postbox textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+.postbox-actions{display:flex;align-items:center;justify-content:space-between;gap:1em;color:var(--muted);font-size:.8em}
+.postbox button{background:var(--accent);color:#fff;border:0;border-radius:3px;padding:.5em 1em;font:inherit;font-weight:600;cursor:pointer}
+.postbox button:hover{filter:brightness(1.08)}',
+    '<h1>beaverdream</h1><p class="tagline">a small message board</p>' ||
+      '<main>' ||
       '<form class="postbox" method="post" action="/posts" data-on:submit="@post(''/posts'', {contentType: ''form''}); el.reset()">' ||
       '<p class="postbox-title">post a message</p>' ||
       '<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>' ||
@@ -136,8 +147,8 @@ VALUES
       '<button type="submit">post</button></div>' ||
       '</form>' ||
       '<div class="thread">{{posts}}</div>' ||
-      '</main>',
-    '<footer class="colophon">beaverdream</footer>'
+      '</main>' ||
+      '<footer class="colophon">beaverdream</footer>'
   );
 
 -- +goose Down

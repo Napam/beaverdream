@@ -105,20 +105,20 @@ func TestCleanJournalSchemaAllowsEmpty(t *testing.T) {
 func TestMissingJournalKeys(t *testing.T) {
 	site := Site{
 		JournalSchema: `{"moves":{"max":10,"rules":1},"chat":{"rules":1}}`,
-		Board:         `<div id="game"></div><script>bd.journal("moves")</script>{{posts}}`,
+		HTML:          `<div id="game"></div><script>bd.journal("moves")</script>{{posts}}`,
 	}
 	missing := MissingJournalKeys(site)
 	if len(missing) != 1 || missing[0] != "chat" {
 		t.Fatalf("missing = %v, want [chat]", missing)
 	}
 
-	site.Board = `<script>var c = bd.journal( 'chat' ); bd.journal("moves")</script>{{posts}}`
+	site.HTML = `<script>var c = bd.journal( 'chat' ); bd.journal("moves")</script>{{posts}}`
 	if missing := MissingJournalKeys(site); len(missing) != 0 {
 		t.Fatalf("missing = %v, want none", missing)
 	}
 
 	// The bare word is prose, not a feed.
-	site.Board = `<p>chat about your moves</p>{{posts}}`
+	site.HTML = `<p>chat about your moves</p>{{posts}}`
 	if missing := MissingJournalKeys(site); len(missing) != 2 {
 		t.Fatalf("missing = %v, want both keys when only prose names them", missing)
 	}
@@ -151,7 +151,7 @@ func TestCleanJournalPayload(t *testing.T) {
 func TestJournalRuntimeIsOnEveryPage(t *testing.T) {
 	doc := SiteDoc(Site{
 		Version:       3,
-		Board:         `<main>{{posts}}</main>`,
+		HTML:          `<main>{{posts}}</main>`,
 		JournalSchema: `{"moves":{"max":10,"rules":1}}`,
 		Journal:       map[string]JournalState{"moves": {Match: 2, Rules: 1, Rows: 4}},
 		Visitor:       "0123456789abcdef",
@@ -228,7 +228,7 @@ func fakeModel(t *testing.T, rounds [][]fakeToolCall) *httptest.Server {
 func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 	server := fakeModel(t, [][]fakeToolCall{
 		{
-			{name: "set_site", args: `{"board":"<main><p>no more moves</p>{{posts}}</main>"}`},
+			{name: "set_site", args: `{"html":"<main><p>no more moves</p>{{posts}}</main>"}`},
 			{name: "done", args: `{"reason":"made it plain"}`},
 		},
 		{
@@ -245,7 +245,7 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 	res, err := m.Mutate(
 		context.Background(),
 		Site{
-			Board:         journalBoard,
+			HTML:          journalBoard,
 			JournalSchema: `{"moves":{"rules":1}}`,
 		},
 		Room{},
@@ -281,7 +281,7 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 // code.
 func TestJournalSchemaKeepsOmittedNumbers(t *testing.T) {
 	site := Site{
-		Board:         `<main>moves {{posts}}</main>`,
+		HTML:          `<main>moves {{posts}}</main>`,
 		JournalSchema: `{"moves":{"max":400,"rules":2}}`,
 	}
 	ed := newEditor(site)
@@ -334,16 +334,16 @@ func mutateWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
 // call is still there, so done ends the turn at once.
 func TestDoneKeepsAProseEditWhenTheCallStays(t *testing.T) {
 	res := mutateWith(t, Site{
-		Board:         journalBoard,
+		HTML:          journalBoard,
 		JournalSchema: `{"moves":{"rules":1}}`,
 	}, [][]fakeToolCall{{
-		{name: "edit", args: `{"target":"board","old":"<h2>moves</h2>","new":"<h2>play</h2>"}`},
+		{name: "edit", args: `{"target":"html","old":"<h2>moves</h2>","new":"<h2>play</h2>"}`},
 		{name: "done", args: `{"reason":"renamed the heading"}`},
 	}})
 	if !res.Done || res.DoneRound != 1 {
 		t.Fatalf("done = %v in round %d, want done in round 1", res.Done, res.DoneRound)
 	}
-	if strings.Contains(res.Site.Board, "<h2>moves</h2>") {
+	if strings.Contains(res.Site.HTML, "<h2>moves</h2>") {
 		t.Fatal("the edit did not land")
 	}
 }
@@ -353,7 +353,7 @@ func TestDoneKeepsAProseEditWhenTheCallStays(t *testing.T) {
 // keeping the declared number keeps the old rows.
 func TestJournalSchemaSkipsStoredRules(t *testing.T) {
 	site := Site{
-		Board:            journalBoard,
+		HTML:             journalBoard,
 		JournalSchema:    `{"moves":{"max":300,"rules":1}}`,
 		JournalRulesUsed: map[string]int{"moves": 3, "chat": 2},
 	}

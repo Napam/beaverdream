@@ -20,14 +20,14 @@ It is a toy. It runs on localhost and calls a local model.
 - `posts` holds the messages. `site_versions` holds full snapshots of the
   design. The current site is the newest version row; each mutation appends a
   new one. Nothing is overwritten.
-- A version has a stylesheet and three HTML regions: `header`, `board`, and
-  `footer`. The board contains the literal placeholder `{{posts}}`, which the
-  server replaces with the code-owned post list. A model write that drops the
-  placeholder is rejected, and a stored board without it gets the posts
-  appended, so a post can never disappear.
+- A version is two fields: `css` and `html`, everything inside `<body>`. The
+  html contains the literal placeholder `{{posts}}`, which the server replaces
+  with the code-owned post list. That is the only structure it enforces. A
+  model write that drops the placeholder is rejected, and a stored page
+  without it gets the posts appended, so a post can never disappear.
 - Everyone sees the same page. The model personalizes in the browser: the
-  viewer's name is on the `<html>` tag as `data-name`, and `{{name}}` in a
-  region becomes the escaped name, so a script or the markup can branch on it.
+  viewer's name is on the `<html>` tag as `data-name`, and `{{name}}` in the
+  html becomes the escaped name, so a script or the markup can branch on it.
 - `GET /` never calls the model. It serves the newest version directly as the
   page: no iframe, no sandbox. The model's markup, CSS and scripts are the
   document. The only code-owned markup is the document shell, Datastar and the
@@ -73,13 +73,13 @@ It is a toy. It runs on localhost and calls a local model.
   HTTP/2 carries every tab's stream over one connection; set `TLS_CERT_FILE`
   and `TLS_KEY_FILE` so browsers get it, or terminate TLS in a proxy that
   speaks h2c to the server.
-- After 20 quiet minutes the board copies the seed forward, keeping the posts
-  and clearing shared state and the journal. The next visitor gets the
-  plain board and the reveal again. The admin panel can trigger the same heal
-  immediately.
+- A quiet board keeps its page however long it sits. The admin panel can
+  heal it: the seed is copied forward, the posts are kept, and shared state
+  and the journal are cleared. The next visitor gets the plain board and the
+  reveal again.
 - A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
-  stylesheet, the regions and shared state, then calls `done`. Small changes go through `edit`, which
-  replaces one exact piece of the stylesheet or a region, or appends to it, so
+  stylesheet, the html and shared state, then calls `done`. Small changes go through `edit`, which
+  replaces one exact piece of the stylesheet or the html, or appends to it, so
   the model does not have to write the whole page out again. `set_site`
   replaces whole parts for a real restyle. If an edit misses, the turn stays
   open so the model can fix it. Each round logs its time, token counts and
@@ -182,7 +182,7 @@ tokens and less latency.
 
 `/admin` is code-owned, never model-generated. It shows:
 
-- the current version and its CSS/regions,
+- the current version and its CSS and html,
 - a form that sends an instruction straight to the model (optionally also
   storing it as a post),
 - the version list, with a restore button that copies an old version forward as

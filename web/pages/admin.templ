@@ -192,7 +192,7 @@ type AdminView struct {
 // version is open. The login cookie rides along with the fetches, so there is
 // no secret to keep here.
 func adminSignals() string {
-	return "{_code: 'board'}"
+	return "{_code: 'html'}"
 }
 
 // fetchPage loads an admin page into #admin-body.
@@ -1041,9 +1041,7 @@ type codeField struct {
 func codeFields(site sqlc.SiteVersion) []codeField {
 	return []codeField{
 		{"css", "css", site.Css},
-		{"header", "header", site.Header},
-		{"board", "board", site.Board},
-		{"footer", "footer", site.Footer},
+		{"html", "html", site.Html},
 		{"state", "state schema", site.StateSchema},
 		{"journal", "journal schema", site.JournalSchema},
 	}
@@ -1076,7 +1074,7 @@ templ AdminVersion(site sqlc.SiteVersion, csrf string) {
 		for _, field := range codeFields(site) {
 			<div
 				data-show={ "$_code == '" + field.Key + "'" }
-				if field.Key != "board" {
+				if field.Key != "html" {
 					style="display: none"
 				}
 			>
@@ -1099,8 +1097,7 @@ templ AdminVersion(site sqlc.SiteVersion, csrf string) {
 }
 
 func versionSize(v sqlc.SiteVersion) int64 {
-	return int64(utf8.RuneCountInString(v.Css) + utf8.RuneCountInString(v.Header) +
-		utf8.RuneCountInString(v.Board) + utf8.RuneCountInString(v.Footer))
+	return int64(utf8.RuneCountInString(v.Css) + utf8.RuneCountInString(v.Html))
 }
 
 func largestVersion(versions []sqlc.SiteVersion) int64 {

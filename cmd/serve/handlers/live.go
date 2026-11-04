@@ -181,7 +181,7 @@ func (h *Handlers) syncPosts(
 	}
 
 	var rows []sqlc.Post
-	mode := datastar.WithModeInner()
+	mode, modeName := datastar.WithModeInner(), "replace"
 	if view.cursor.Post > 0 && latest > view.cursor.Post {
 		rows, err = h.queries.ListPostsAfter(ctx, sqlc.ListPostsAfterParams{
 			ID:    view.cursor.Post,
@@ -191,7 +191,7 @@ func (h *Handlers) syncPosts(
 			h.logRead("Live stream could not load new posts", err)
 			return nil
 		}
-		mode = datastar.WithModePrepend()
+		mode, modeName = datastar.WithModePrepend(), "prepend"
 	}
 	if len(rows) == 0 || len(rows) == livePostBatch {
 		rows, err = h.queries.ListRecentPosts(ctx, livePostBatch)
@@ -199,13 +199,15 @@ func (h *Handlers) syncPosts(
 			h.logRead("Live stream could not load posts", err)
 			return nil
 		}
-		mode = datastar.WithModeInner()
+		mode, modeName = datastar.WithModeInner(), "replace"
 	}
 
 	// Both queries return newest first, the order the board reads.
 	posts := make([]webmaster.Post, len(rows))
+	ids := make([]int64, len(rows))
 	for i, row := range rows {
 		posts[i] = postFromRow(row)
+		ids[i] = row.ID
 	}
 	// A post can land between the id read above and the rows read, so the
 	// cursor follows what the page was handed, not the older id. Otherwise
@@ -222,7 +224,13 @@ func (h *Handlers) syncPosts(
 	); err != nil {
 		return err
 	}
-	return sse.ExecuteScript(fmt.Sprintf("window.bdLive && bdLive.posts(%d)", newest))
+	idList, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	return sse.ExecuteScript(fmt.Sprintf(
+		"window.bdLive && bdLive.posts(%d, %q, %s)", newest, modeName, idList,
+	))
 }
 
 // syncState pushes the shared values as the $shared signal, which model

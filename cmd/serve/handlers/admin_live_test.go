@@ -71,10 +71,7 @@ func TestAdminLivePushesThePanel(t *testing.T) {
 	}
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:         seed.Css,
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
+		Html:        seed.Html,
 		StateSchema: `{"likes":{"op":"counter"}}`,
 		Reason:      "test declares state",
 	}); err != nil {
@@ -416,10 +413,7 @@ func TestAdminActionNeedsTheCSRFToken(t *testing.T) {
 	}
 	if _, err := queries.CreateSiteVersion(context.Background(), sqlc.CreateSiteVersionParams{
 		Css:    seed.Css,
-		Note:   seed.Note,
-		Header: seed.Header,
-		Board:  seed.Board,
-		Footer: seed.Footer,
+		Html:   seed.Html,
 		Reason: "test edit",
 	}); err != nil {
 		t.Fatalf("create version: %v", err)

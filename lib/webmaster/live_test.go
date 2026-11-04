@@ -96,7 +96,7 @@ const steps = {
   typing: () => { listeners.input(); window.bdLive.reload(5) },
   stale: () => listeners['beaverdream:stale'](),
   css: () => window.bdLive.css(6),
-  posts: () => window.bdLive.posts(9),
+  posts: () => window.bdLive.posts(9, 'prepend', [9, 8]),
   state: () => window.bdLive.state({ likes: 3 }),
   save: () => window.bdLive.reload(5),
   dedupe: () => window.bdLive.posts(9)
@@ -236,8 +236,12 @@ func TestLiveScriptAnnouncesNewPosts(t *testing.T) {
 	if got.Attrs["data-post"] != "9" {
 		t.Errorf("data-post = %q, want 9", got.Attrs["data-post"])
 	}
-	if _, ok := eventNamed(got.Events, "beaverdream:post"); !ok {
-		t.Errorf("events = %+v, want beaverdream:post", got.Events)
+	event, ok := eventNamed(got.Events, "beaverdream:post")
+	if !ok {
+		t.Fatalf("events = %+v, want beaverdream:post", got.Events)
+	}
+	if string(event.Detail) != `{"post":9,"mode":"prepend","ids":[9,8]}` {
+		t.Errorf("detail = %s, want the mode and the new ids", event.Detail)
 	}
 }
 

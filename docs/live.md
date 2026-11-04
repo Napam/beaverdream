@@ -99,7 +99,10 @@ The code-owned live script owns the parts Datastar does not:
   reading position, then replaces the page with `/?v=N`.
 - `bdLive.css` moves `data-version` and dispatches `beaverdream:update`.
 - `bdLive.posts` moves `data-post`, drops duplicate post ids and dispatches
-  `beaverdream:post`; posts are already in the DOM.
+  `beaverdream:post`; posts are already in the DOM. The event detail carries
+  `mode` (`prepend` for new posts on top, `replace` for a whole new list) and
+  the `ids` the patch carried, so a page script that places posts knows which
+  ones to place.
 - `bdLive.state` updates the `bd-state` tag and dispatches
   `beaverdream:state`.
 - `beaverdream:stale`, from the journal runtime, reloads the page.

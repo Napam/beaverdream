@@ -32,7 +32,7 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
@@ -45,8 +45,8 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	if !strings.Contains(res.Site.CSS, "00ff6a") {
 		t.Errorf("css does not carry the matrix palette: %q", res.Site.CSS)
 	}
-	if !strings.Contains(res.Site.Board, PostsPlaceholder) {
-		t.Errorf("board lost the posts placeholder: %q", res.Site.Board)
+	if !strings.Contains(res.Site.HTML, PostsPlaceholder) {
+		t.Errorf("html lost the posts placeholder: %q", res.Site.HTML)
 	}
 	if res.Reason == "" {
 		t.Error("done reason was not recorded")
@@ -59,8 +59,11 @@ func TestMutateAppliesMockTheme(t *testing.T) {
 	if res.Messages[0].Role != "system" || res.Messages[1].Role != "user" {
 		t.Fatalf("unexpected prefix: %q, %q", res.Messages[0].Role, res.Messages[1].Role)
 	}
-	if len(res.Messages[2].ToolCalls) != 1 {
-		t.Fatalf("first round called %d tools, want 1", len(res.Messages[2].ToolCalls))
+	if len(res.Messages[2].ToolCalls) != 2 {
+		t.Fatalf(
+			"first round called %d tools, want the css edit and set_site",
+			len(res.Messages[2].ToolCalls),
+		)
 	}
 	for _, call := range res.Messages[2].ToolCalls {
 		if call.Result != "ok" {
@@ -96,7 +99,7 @@ func TestMutateStreamsTheRound(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
@@ -183,7 +186,7 @@ func TestMutateEchoesStreamedReasoning(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "paint it"},
 	)
@@ -211,7 +214,7 @@ func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockedit the heading red"},
 	)
@@ -230,7 +233,7 @@ func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
 
 	theme, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
@@ -249,7 +252,7 @@ func TestMutatePatchesAValueInPlace(t *testing.T) {
 
 	first, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "hello"},
 	)
@@ -272,7 +275,7 @@ func TestMutatePatchesAValueInPlace(t *testing.T) {
 		strings.Contains(res.Site.CSS, "--accent:#9db4ff") {
 		t.Errorf("accent was not patched: %q", res.Site.CSS)
 	}
-	if res.Site.Board != first.Site.Board {
+	if res.Site.HTML != first.Site.HTML {
 		t.Error("a stylesheet edit changed the board")
 	}
 }
@@ -287,7 +290,7 @@ func TestMutateDefersDoneAfterARejectedEdit(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
@@ -320,7 +323,7 @@ func TestMutateAcceptsDoneOnTheLastRound(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
@@ -343,7 +346,7 @@ func TestMutateRecordsRoundStats(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
@@ -395,7 +398,7 @@ func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -427,7 +430,7 @@ func TestMutateRequiresAToolCall(t *testing.T) {
 
 	if _, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	); err != nil {
@@ -452,7 +455,7 @@ func TestMutateStopsOnAProseReply(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockprose"},
 	)
@@ -488,7 +491,7 @@ func TestMutateNamesTheOutputCap(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{CSS: "body{margin:0}", Board: PostsPlaceholder},
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "hello"},
 	)
@@ -507,7 +510,7 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 	m, closeServer := testMutator(t)
 	defer closeServer()
 
-	original := Site{CSS: "body{color:red}", Board: PostsPlaceholder}
+	original := Site{CSS: "body{color:red}", HTML: PostsPlaceholder}
 	res, err := m.Mutate(
 		context.Background(),
 		original,
@@ -529,7 +532,7 @@ func TestMutateNoopKeepsSite(t *testing.T) {
 }
 
 func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
-	site := Site{Version: 8, Board: PostsPlaceholder, ChangesSinceHeal: 7}
+	site := Site{Version: 8, HTML: PostsPlaceholder, ChangesSinceHeal: 7}
 	room := Room{Log: []Turn{{
 		ID:     1,
 		Kind:   TurnPost,
@@ -568,7 +571,7 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 		"ROOM LOG AFTER THAT",
 		"YOUR NOTES:",
 		"CURRENT STYLESHEET:",
-		"CURRENT REGIONS:",
+		"CURRENT HTML:",
 		"CURRENT SHARED STATE:",
 		"BOARD IS PLAIN:",
 		"NEW POST #9",
@@ -592,7 +595,7 @@ func TestUserPromptSectionsTileThePrompt(t *testing.T) {
 	room := Room{Summary: "old news", Notes: "keep an eye on dave", Log: []Turn{{
 		ID: 1, Kind: TurnPost, Author: "kit", Body: "hi",
 	}}}
-	site := Site{CSS: "body{}", Header: "<h1>hi</h1>", Board: "{{posts}}", Footer: "<p>bye</p>"}
+	site := Site{CSS: "body{}", HTML: "<h1>hi</h1>{{posts}}"}
 	prompt, sections := userPromptSections(site, room, []Post{{ID: 9, Author: "dave", Body: "yo"}})
 
 	if prompt != userPrompt(site, room, []Post{{ID: 9, Author: "dave", Body: "yo"}}) {
@@ -603,9 +606,7 @@ func TestUserPromptSectionsTileThePrompt(t *testing.T) {
 		"room log":          "ROOM LOG AFTER THAT",
 		"notes":             "YOUR NOTES:",
 		"stylesheet":        "CURRENT STYLESHEET:",
-		"header":            "CURRENT REGIONS:\nheader:",
-		"board":             "board:\n{{posts}}",
-		"footer":            "footer:\n<p>bye</p>",
+		"html":              "CURRENT HTML:\n<h1>hi</h1>{{posts}}",
 		"shared state":      "CURRENT SHARED STATE:",
 		"journal":           "CURRENT JOURNAL:",
 		"flags":             "BOARD IS PLAIN:",
@@ -812,7 +813,7 @@ func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -884,7 +885,7 @@ func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -928,7 +929,7 @@ func TestMutateNamesASchemaMismatch(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -976,7 +977,7 @@ func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -1009,7 +1010,7 @@ func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
 
 	res, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
@@ -1061,7 +1062,7 @@ func TestMutateReplaysDeepSeekReasoning(t *testing.T) {
 
 	if _, err := m.Mutate(
 		context.Background(),
-		Site{Board: PostsPlaceholder},
+		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	); err != nil {

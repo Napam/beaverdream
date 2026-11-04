@@ -165,12 +165,12 @@ func gameCalls() []toolCall {
 		"max":   200,
 		"rules": 1,
 	}}}
-	board := `<h2 class="board-title">tic tac toe</h2>` +
+	page := `<h2 class="board-title">tic tac toe</h2>` +
 		`<div id="game" class="ttt" data-journal="moves"></div>` +
 		GameScript + postForm + `{{posts}}`
 	site := map[string]string{
-		"css":   `:root{--bg:#0d1117;--fg:#e6edf3;--accent:#f78166;--muted:#8b949e;--panel:#161b22;--border:#30363d}`,
-		"board": board,
+		"css":  `:root{--bg:#0d1117;--fg:#e6edf3;--accent:#f78166;--muted:#8b949e;--panel:#161b22;--border:#30363d}`,
+		"html": page,
 	}
 	return []toolCall{
 		{
@@ -372,20 +372,23 @@ const postForm = `<form class="postbox" method="post" action="/posts" ` +
 	`<div class="postbox-actions"><span>posting as {{name}}</span>` +
 	`<button type="submit">post</button></div></form>`
 
+// The theme's rules are appended, so the seed's layout stays under them.
 func (t theme) calls() []toolCall {
+	header := t.header
+	if header == "" {
+		header = `<h1>beaverdream</h1>`
+	}
 	site := map[string]string{
-		"css":   t.css,
-		"board": `<h2 class="board-title">` + t.title + `</h2>` + postForm + `{{posts}}`,
+		"html": header + `<h2 class="board-title">` + t.title + `</h2>` + postForm + `{{posts}}`,
 	}
-	if t.header != "" {
-		site["header"] = t.header
+	return []toolCall{
+		editCall(map[string]string{"target": "css", "old": "", "new": t.css}),
+		{
+			ID:       "call_site",
+			Type:     "function",
+			Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
+		},
 	}
-	calls := []toolCall{{
-		ID:       "call_site",
-		Type:     "function",
-		Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
-	}}
-	return calls
 }
 
 // thinking is the mock's reasoning, a line naming what it is about to call,

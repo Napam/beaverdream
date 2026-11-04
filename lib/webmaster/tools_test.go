@@ -16,24 +16,24 @@ func args(t *testing.T, v any) string {
 }
 
 // The page is intentionally unsandboxed. Scripts and event handlers in a
-// region are the point of the toy, so they must survive the editor.
+// page are the point of the toy, so they must survive the editor.
 func TestSetSiteKeepsScriptsAndHandlers(t *testing.T) {
 	html := `<script>document.body.remove()</script>` +
-		`<div onclick="alert(1)">click</div>`
-	ed := newEditor(Site{Header: "original"})
-	got := ed.run("set_site", args(t, map[string]string{"header": html}))
+		`<div onclick="alert(1)">click</div>` + PostsPlaceholder
+	ed := newEditor(Site{HTML: "original " + PostsPlaceholder})
+	got := ed.run("set_site", args(t, map[string]string{"html": html}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}
-	if ed.site.Header != html {
-		t.Fatalf("region was altered: %q", ed.site.Header)
+	if ed.site.HTML != html {
+		t.Fatalf("html was altered: %q", ed.site.HTML)
 	}
 }
 
 func TestSetSiteEnforcesLength(t *testing.T) {
 	ed := newEditor(Site{})
 	got := ed.run("set_site", args(t, map[string]string{
-		"board": PostsPlaceholder + strings.Repeat("x", maxRegionLen),
+		"html": PostsPlaceholder + strings.Repeat("x", maxHTMLLen),
 	}))
 	if !strings.HasPrefix(got, "rejected:") {
 		t.Fatalf("got %q, want a rejection", got)
@@ -41,15 +41,48 @@ func TestSetSiteEnforcesLength(t *testing.T) {
 }
 
 // The placeholder is where the posts go. One rule covers every path that
-// writes a board, so a whole rewrite cannot drop it either.
-func TestBoardWithoutPlaceholderIsRejected(t *testing.T) {
-	ed := newEditor(Site{Board: "<main>" + PostsPlaceholder + "</main>"})
-	got := ed.run("set_site", args(t, map[string]string{"board": "<main>no posts</main>"}))
+// writes the html, so a whole rewrite cannot drop it either.
+func TestHTMLWithoutPlaceholderIsRejected(t *testing.T) {
+	ed := newEditor(Site{HTML: "<main>" + PostsPlaceholder + "</main>"})
+	got := ed.run("set_site", args(t, map[string]string{"html": "<main>no posts</main>"}))
 	if !strings.Contains(got, "{{posts}}") || !strings.HasPrefix(got, "rejected:") {
 		t.Fatalf("got %q, want a placeholder rejection", got)
 	}
-	if ed.dirty || ed.site.Board != "<main>"+PostsPlaceholder+"</main>" {
-		t.Fatalf("board changed: %q", ed.site.Board)
+	if ed.dirty || ed.site.HTML != "<main>"+PostsPlaceholder+"</main>" {
+		t.Fatalf("html changed: %q", ed.site.HTML)
+	}
+}
+
+// A second placeholder would make a second post list with the same ids, and
+// the live stream patches only the first. Edits and whole writes both refuse it.
+func TestHTMLWithTwoPlaceholdersIsRejected(t *testing.T) {
+	page := "<main>" + PostsPlaceholder + "</main>"
+	ed := newEditor(Site{HTML: page})
+	got := ed.run("set_site", args(t, map[string]string{
+		"html": page + "<!-- " + PostsPlaceholder + " -->",
+	}))
+	if !strings.HasPrefix(got, "rejected:") || !strings.Contains(got, "exactly once") {
+		t.Fatalf("set_site: got %q, want an exactly-once rejection", got)
+	}
+	got = ed.run("edit", args(t, map[string]string{
+		"target": "html", "old": "", "new": "<script>x='" + PostsPlaceholder + "'</script>",
+	}))
+	if !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("edit: got %q, want a rejection", got)
+	}
+	if ed.dirty || ed.site.HTML != page {
+		t.Fatalf("html changed: %q", ed.site.HTML)
+	}
+}
+
+// The placeholder is the only structure: a page that is nothing else is fine.
+func TestHTMLCanBeJustThePosts(t *testing.T) {
+	ed := newEditor(Site{HTML: "<main>" + PostsPlaceholder + "</main>"})
+	if got := ed.run(
+		"set_site",
+		args(t, map[string]string{"html": PostsPlaceholder}),
+	); got != "ok" {
+		t.Fatalf("got %q, want ok", got)
 	}
 }
 
@@ -72,15 +105,15 @@ func TestEditAppendsOnANewLine(t *testing.T) {
 }
 
 func TestEditReplacesAUniqueMatch(t *testing.T) {
-	ed := newEditor(Site{Footer: `<footer class="colophon">beaverdream</footer>`})
+	ed := newEditor(Site{HTML: PostsPlaceholder + `<footer class="colophon">beaverdream</footer>`})
 	got := ed.run("edit", args(t, map[string]string{
-		"target": "footer", "old": ">beaverdream<", "new": ">beaver nightmare<",
+		"target": "html", "old": ">beaverdream<", "new": ">beaver nightmare<",
 	}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}
-	if ed.site.Footer != `<footer class="colophon">beaver nightmare</footer>` {
-		t.Fatalf("footer = %q", ed.site.Footer)
+	if ed.site.HTML != PostsPlaceholder+`<footer class="colophon">beaver nightmare</footer>` {
+		t.Fatalf("html = %q", ed.site.HTML)
 	}
 }
 
@@ -181,29 +214,29 @@ func TestEditPunctuationMatchStillRejectsAmbiguity(t *testing.T) {
 
 func TestEditCannotRemoveThePlaceholder(t *testing.T) {
 	board := `<main><div class="thread">` + PostsPlaceholder + `</div></main>`
-	ed := newEditor(Site{Board: board})
+	ed := newEditor(Site{HTML: board})
 	got := ed.run("edit", args(t, map[string]string{
-		"target": "board", "old": PostsPlaceholder, "new": "",
+		"target": "html", "old": PostsPlaceholder, "new": "",
 	}))
-	if !strings.HasPrefix(got, "rejected: board must contain {{posts}}") {
+	if !strings.HasPrefix(got, "rejected: html must contain {{posts}}") {
 		t.Fatalf("got %q, want a placeholder rejection", got)
 	}
-	if ed.site.Board != board {
-		t.Fatalf("board changed: %q", ed.site.Board)
+	if ed.site.HTML != board {
+		t.Fatalf("html changed: %q", ed.site.HTML)
 	}
 }
 
 func TestEditEnforcesTheLimits(t *testing.T) {
-	ed := newEditor(Site{CSS: "body{}", Header: "<h1>beaverdream</h1>"})
+	ed := newEditor(Site{CSS: "body{}", HTML: PostsPlaceholder})
 	if got := ed.run("edit", args(t, map[string]string{
 		"target": "css", "old": "", "new": strings.Repeat("x", maxCSSLen),
 	})); !strings.HasPrefix(got, "rejected:") {
 		t.Errorf("oversized stylesheet: got %q", got)
 	}
 	if got := ed.run("edit", args(t, map[string]string{
-		"target": "header", "old": "<h1>beaverdream</h1>", "new": "<b>",
+		"target": "html", "old": "", "new": strings.Repeat("x", maxHTMLLen),
 	})); !strings.HasPrefix(got, "rejected:") {
-		t.Errorf("tiny header: got %q", got)
+		t.Errorf("oversized html: got %q", got)
 	}
 	if ed.dirty {
 		t.Fatal("a rejected edit marked the site dirty")
@@ -211,15 +244,15 @@ func TestEditEnforcesTheLimits(t *testing.T) {
 }
 
 func TestEditsApplyInOrder(t *testing.T) {
-	ed := newEditor(Site{Header: "<h1>beaverdream</h1>"})
+	ed := newEditor(Site{HTML: "<h1>beaverdream</h1>" + PostsPlaceholder})
 	ed.run("edit", args(t, map[string]string{
-		"target": "header", "old": "beaverdream", "new": "beaver dream",
+		"target": "html", "old": "beaverdream", "new": "beaver dream",
 	}))
 	got := ed.run("edit", args(t, map[string]string{
-		"target": "header", "old": "beaver dream", "new": "BEAVER DREAM",
+		"target": "html", "old": "beaver dream", "new": "BEAVER DREAM",
 	}))
-	if got != "ok" || ed.site.Header != "<h1>BEAVER DREAM</h1>" {
-		t.Fatalf("got %q, header %q", got, ed.site.Header)
+	if got != "ok" || ed.site.HTML != "<h1>BEAVER DREAM</h1>"+PostsPlaceholder {
+		t.Fatalf("got %q, html %q", got, ed.site.HTML)
 	}
 }
 
@@ -244,25 +277,15 @@ func TestEditWithoutAChangeIsNotDirty(t *testing.T) {
 // The stylesheet is served as-is too. A breakout is a legitimate (if rude)
 // way for a visitor to change the page.
 func TestSetSiteUpdatesOnlyProvidedFields(t *testing.T) {
-	ed := newEditor(Site{
-		CSS:    "old css",
-		Header: "<h1>old header</h1>",
-		Board:  "<main>old board</main>",
-		Footer: "<footer>old footer</footer>",
-	})
-	got := ed.run("set_site", args(t, map[string]any{
-		"css":   "body{color:red}",
-		"board": "<main>{{posts}}</main>",
-	}))
+	ed := newEditor(Site{CSS: "old css", HTML: "<main>old " + PostsPlaceholder + "</main>"})
+	got := ed.run("set_site", args(t, map[string]any{"css": "body{color:red}"}))
 	if got != "ok" {
 		t.Fatalf("got %q, want ok", got)
 	}
 	if ed.site.CSS != "body{color:red}" {
 		t.Errorf("provided fields were not applied: %+v", ed.site)
 	}
-	if ed.site.Header != "<h1>old header</h1>" ||
-		ed.site.Board != "<main>{{posts}}</main>" ||
-		ed.site.Footer != "<footer>old footer</footer>" {
+	if ed.site.HTML != "<main>old "+PostsPlaceholder+"</main>" {
 		t.Errorf("untouched fields changed: %+v", ed.site)
 	}
 }
@@ -271,30 +294,27 @@ func TestSetSiteUpdatesOnlyProvidedFields(t *testing.T) {
 // carry a stylesheet that slipped in before the rejection.
 func TestSetSiteRejectsTheWholeCall(t *testing.T) {
 	original := Site{
-		CSS:    "body{margin:0}",
-		Header: "<h1>beaverdream</h1>",
-		Board:  "<main>" + PostsPlaceholder + "</main>",
+		CSS:  "body{margin:0}",
+		HTML: "<h1>beaverdream</h1><main>" + PostsPlaceholder + "</main>",
 	}
 	ed := newEditor(original)
 	got := ed.run("set_site", args(t, map[string]string{
-		"css":    "body{background:red}",
-		"header": "<h1>a new header</h1>",
-		"board":  "<main>no posts</main>",
+		"css":  "body{background:red}",
+		"html": "<main>no posts</main>",
 	}))
 	if !strings.HasPrefix(got, "rejected:") {
 		t.Fatalf("got %q, want a rejection", got)
 	}
-	if ed.site.CSS != original.CSS || ed.site.Header != original.Header ||
-		ed.site.Board != original.Board || ed.dirty {
+	if ed.site.CSS != original.CSS || ed.site.HTML != original.HTML || ed.dirty {
 		t.Fatalf("a rejected set_site changed the page: %+v, dirty %v", ed.site, ed.dirty)
 	}
 }
 
 func TestSetSiteWithIdenticalContentIsNotDirty(t *testing.T) {
-	ed := newEditor(Site{CSS: "body{margin:0}", Board: "<main>" + PostsPlaceholder + "</main>"})
+	ed := newEditor(Site{CSS: "body{margin:0}", HTML: "<main>" + PostsPlaceholder + "</main>"})
 	got := ed.run("set_site", args(t, map[string]string{
-		"css":   "  body{margin:0}\n",
-		"board": "<main>" + PostsPlaceholder + "</main>",
+		"css":  "  body{margin:0}\n",
+		"html": "<main>" + PostsPlaceholder + "</main>",
 	}))
 	if got != "ok (no change)" || ed.dirty {
 		t.Fatalf("got %q, dirty %v", got, ed.dirty)
@@ -371,7 +391,7 @@ func TestDoneStopsAndKeepsReason(t *testing.T) {
 
 func TestSiteDocSubstitutesPosts(t *testing.T) {
 	doc := SiteDoc(
-		Site{Version: 3, Header: "<h1>hi</h1>", Board: "<main>" + PostsPlaceholder + "</main>"},
+		Site{Version: 3, HTML: "<h1>hi</h1><main>" + PostsPlaceholder + "</main>"},
 		[]Post{{ID: 7, Author: "dave", Body: "hello", When: "today"}},
 	)
 	if !strings.Contains(doc, "hello") || !strings.Contains(doc, `id="p7"`) {
@@ -389,8 +409,15 @@ func TestSiteDocSubstitutesPosts(t *testing.T) {
 	if strings.Contains(doc, "beaver-controls") {
 		t.Fatal("server injected the old composer")
 	}
-	if !strings.Contains(doc, ".postbox{") {
-		t.Fatal("base stylesheet is missing the post form styles")
+}
+
+// The base stylesheet styles only code-owned markup. Layout and the form are
+// the model's, so a rewrite does not start inside a column it has to undo.
+func TestBaseCSSHasNoLayout(t *testing.T) {
+	for _, layout := range []string{"max-width", ".postbox", "main{", "h1"} {
+		if strings.Contains(BaseCSS, layout) {
+			t.Errorf("base stylesheet carries layout %q", layout)
+		}
 	}
 }
 
@@ -415,9 +442,19 @@ func TestRenderPostsAddsBoardConventions(t *testing.T) {
 	}
 }
 
+// Page scripts read a post's fields from data attributes, not by scraping its
+// spans. The author is visitor input, so the attribute is escaped too.
+func TestRenderPostsCarriesDataAttributes(t *testing.T) {
+	got := RenderPosts([]Post{{ID: 3, Author: `d"><b>`, When: "Nov 4 21:00", Body: "hi"}})
+	want := `<article class="post" id="p3" data-id="3" data-author="d&#34;&gt;&lt;b&gt;" data-when="Nov 4 21:00">`
+	if !strings.HasPrefix(got, want) {
+		t.Errorf("got %s, want it to start with %s", got, want)
+	}
+}
+
 func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 	doc := SiteDoc(
-		Site{Version: 4, CSS: "body{background:#000}", Board: PostsPlaceholder},
+		Site{Version: 4, CSS: "body{background:#000}", HTML: PostsPlaceholder},
 		nil,
 	)
 	for _, want := range []string{`id="bd-css"`, `data-version="4"`} {
@@ -429,13 +466,13 @@ func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 		t.Error("the page still renders a note above the board")
 	}
 	if strings.Index(doc, "beaverdream:update") > strings.Index(doc, "</head>") {
-		t.Error("live script is not in the head, where regions cannot swallow it")
+		t.Error("live script is not in the head, where model markup cannot swallow it")
 	}
 }
 
 func TestSiteDocSubstitutesTheVisitorName(t *testing.T) {
 	doc := SiteDoc(
-		Site{Name: `<b>dave</b>`, Board: `<p>{{name}}</p>` + PostsPlaceholder},
+		Site{Name: `<b>dave</b>`, HTML: `<p>{{name}}</p>` + PostsPlaceholder},
 		nil,
 	)
 	if !strings.Contains(doc, `&lt;b&gt;dave&lt;/b&gt;`) {
@@ -449,7 +486,7 @@ func TestSiteDocSubstitutesTheVisitorName(t *testing.T) {
 func TestSiteDocEmbedsSharedStateSafely(t *testing.T) {
 	doc := SiteDoc(
 		Site{
-			Board:       PostsPlaceholder,
+			HTML:        PostsPlaceholder,
 			StateSchema: `{"votes":{"op":"counter"}}`,
 			State: map[string]json.RawMessage{
 				"votes": json.RawMessage(`{"html":"<b>x</b>"}`),
@@ -470,7 +507,7 @@ func TestSiteDocEmbedsSharedStateSafely(t *testing.T) {
 
 func TestSiteDocKeepsPostsWhenPlaceholderMissing(t *testing.T) {
 	doc := SiteDoc(
-		Site{Board: "<main>no placeholder here</main>"},
+		Site{HTML: "<main>no placeholder here</main>"},
 		[]Post{{ID: 1, Body: "still here"}},
 	)
 	if !strings.Contains(doc, "still here") {
@@ -479,7 +516,7 @@ func TestSiteDocKeepsPostsWhenPlaceholderMissing(t *testing.T) {
 }
 
 func TestSiteDocEscapesPostBodies(t *testing.T) {
-	doc := SiteDoc(Site{Board: PostsPlaceholder}, []Post{{ID: 1, Body: `<script>x</script>`}})
+	doc := SiteDoc(Site{HTML: PostsPlaceholder}, []Post{{ID: 1, Body: `<script>x</script>`}})
 	if strings.Contains(doc, "<script>x</script>") {
 		t.Fatalf("post body was not escaped: %s", doc)
 	}
@@ -493,8 +530,7 @@ func TestSiteDocServesModelMarkupInline(t *testing.T) {
 		Site{
 			Version: 1,
 			CSS:     `body{background:#000}`,
-			Header:  `<script>document.title='owned'</script>`,
-			Board:   PostsPlaceholder,
+			HTML:    `<script>document.title='owned'</script>` + PostsPlaceholder,
 		},
 		nil,
 	)

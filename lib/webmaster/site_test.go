@@ -10,7 +10,7 @@ import (
 // changes, no enter/leave classes.
 func TestThePageSwitchesWithoutATransition(t *testing.T) {
 	doc := SiteDoc(
-		Site{Header: "<h1>beaverdream</h1>", Board: PostsPlaceholder},
+		Site{HTML: "<h1>beaverdream</h1>" + PostsPlaceholder},
 		nil,
 	)
 	for _, banned := range []string{
@@ -30,7 +30,7 @@ func TestThePageSwitchesWithoutATransition(t *testing.T) {
 func TestThePagesCarryTheBeaverIcon(t *testing.T) {
 	icon := `<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`
 	for name, doc := range map[string]string{
-		"board": SiteDoc(Site{Board: PostsPlaceholder}, nil),
+		"board": SiteDoc(Site{HTML: PostsPlaceholder}, nil),
 		"name":  IdentityDoc(""),
 	} {
 		if !strings.Contains(doc, icon) {
@@ -55,7 +55,7 @@ func stripBusy(doc string) string {
 // The busy spinner is the one animation the shell owns. It starts hidden and
 // the live stream patches it while a rewrite is queued or running.
 func TestThePageShowsWhenTheSiteIsRewriting(t *testing.T) {
-	doc := SiteDoc(Site{Board: PostsPlaceholder}, nil)
+	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
 	for _, want := range []string{
 		`id="bd-busy"`,
 		`display:none!important`,
@@ -79,7 +79,7 @@ func TestThePageShowsWhenTheSiteIsRewriting(t *testing.T) {
 func TestThePageOpensTheLiveStream(t *testing.T) {
 	doc := SiteDoc(Site{
 		Version:       4,
-		Board:         `<main>{{posts}}</main>`,
+		HTML:          `<main>{{posts}}</main>`,
 		StateSchema:   `{"likes":{"op":"counter"}}`,
 		State:         map[string]json.RawMessage{"likes": json.RawMessage("2")},
 		JournalCursor: 12,
@@ -93,7 +93,7 @@ func TestThePageOpensTheLiveStream(t *testing.T) {
 		`filterSignals: {include: /^_bd\./`,
 		`&#34;_bd&#34;:{&#34;version&#34;:4,&#34;post&#34;:9,&#34;journal&#34;:12}`,
 		`&#34;shared&#34;:{&#34;likes&#34;:2}`,
-		`<main><div id="bd-posts" style="display:contents"><article class="post" id="p9">`,
+		`<main><div id="bd-posts" style="display:contents"><article class="post" id="p9" `,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("the page is missing %q", want)
@@ -104,7 +104,7 @@ func TestThePageOpensTheLiveStream(t *testing.T) {
 		t.Error("the code-owned page still polls")
 	}
 
-	hashed := SiteDoc(Site{Board: PostsPlaceholder, Datastar: "/static/datastar.abc.js"}, nil)
+	hashed := SiteDoc(Site{HTML: PostsPlaceholder, Datastar: "/static/datastar.abc.js"}, nil)
 	if !strings.Contains(hashed, `src="/static/datastar.abc.js"`) {
 		t.Error("the page ignores the hashed Datastar path")
 	}
@@ -114,7 +114,7 @@ func TestThePageOpensTheLiveStream(t *testing.T) {
 // the name is substituted, so the name cannot mint a second post container.
 func TestANameCannotAddAPostContainer(t *testing.T) {
 	doc := SiteDoc(
-		Site{Name: "{{posts}}", Board: "<main>{{name}}{{posts}}</main>"},
+		Site{Name: "{{posts}}", HTML: "<main>{{name}}{{posts}}</main>"},
 		[]Post{{ID: 1, Author: "a", Body: "hi"}},
 	)
 	if n := strings.Count(doc, `id="bd-posts"`); n != 1 {
@@ -126,7 +126,7 @@ func TestANameCannotAddAPostContainer(t *testing.T) {
 // the page personal without reading the HttpOnly cookie.
 func TestThePageCarriesTheViewersName(t *testing.T) {
 	doc := SiteDoc(
-		Site{Name: "O'Brien", Board: PostsPlaceholder},
+		Site{Name: "O'Brien", HTML: PostsPlaceholder},
 		nil,
 	)
 	if !strings.Contains(doc, `data-name="O&#39;Brien"`) {
@@ -142,12 +142,12 @@ func TestThePageCarriesTheNewestPostID(t *testing.T) {
 		{ID: 9, Author: "b", Body: "out of order"},
 		{ID: 3, Author: "c", Body: "oldest"},
 	}
-	doc := SiteDoc(Site{Version: 4, Board: PostsPlaceholder}, posts)
+	doc := SiteDoc(Site{Version: 4, HTML: PostsPlaceholder}, posts)
 	if !strings.Contains(doc, `data-post="9"`) {
 		t.Errorf("page does not carry the newest post id: %.200s", doc)
 	}
 
-	empty := SiteDoc(Site{Version: 4, Board: PostsPlaceholder}, nil)
+	empty := SiteDoc(Site{Version: 4, HTML: PostsPlaceholder}, nil)
 	if !strings.Contains(empty, `data-post="0"`) {
 		t.Errorf("empty board does not carry data-post=0: %.200s", empty)
 	}

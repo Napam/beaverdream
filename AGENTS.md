@@ -81,16 +81,30 @@ prefer simple, readable code over production hardening.
 - Keeping the page is a real turn. `done` with no edits writes no version and
   records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
   no-op: the plain-board rule lives in the prompt, not in code.
-- The board region must keep the literal `{{posts}}` placeholder; the server
-  substitutes the escaped post list. `cleanRegion` rejects a board without it,
-  for `set_site` and `edit` alike. `SiteDoc` still appends the
-  posts if a stored board lacks it. Never let posts be stored inside
-  model-controlled HTML.
+- A version is two model fields: `css` and `html` (everything inside body).
+  Enforce only what keeps the site working as an ever-mutating board: the
+  `{{posts}}` placeholder, the form contract in the prompt, the size caps and
+  the code-owned shell. Do not add regions, required elements or layout rules.
+  `BaseCSS` styles only code-owned markup (posts, the name link) and the color
+  variables; the seed's layout lives in the seed's own stylesheet.
+- The html must keep the literal `{{posts}}` placeholder exactly once; the
+  server substitutes the escaped post list. `cleanHTML` rejects html without
+  it or with a second copy, for `set_site` and `edit` alike, because a second
+  list would repeat the post ids and the stream patches only the first.
+  `SiteDoc` still appends the posts if a stored page lacks it. Never let posts
+  be stored inside model-controlled HTML.
+- Posts stay server markup; the model places them, it does not render them.
+  Each `article.post` carries escaped `data-id`, `data-author` and
+  `data-when` for page scripts, and the prompt tells the model to position
+  the articles inside `#bd-posts` (it has `display:contents`), never move
+  them out or rebuild them, and never put visitor text through `innerHTML`.
+  Do not add a parallel post data API: it would be a second source of truth
+  and its copies would repeat the `#pN` ids.
 - The model changes the page with `edit` (replace one exact, unique piece of
-  the stylesheet or a region, or append when `old` is empty) and `set_site`
-  (whole fields, for a real restyle). Output tokens are the latency, so the
-  prompt steers small changes to `edit`. An edit result goes through the same
-  `cleanCSS` / `cleanRegion` as a whole write, and a rejected edit leaves the
+  the stylesheet or the html, or append when `old` is empty) and `set_site`
+  (whole fields, for a restyle or a different kind of page). Output tokens
+  are the latency, so the prompt steers small changes to `edit`. An edit
+  result goes through the same `cleanCSS` / `cleanHTML` as a whole write, and a rejected edit leaves the
   field alone. When a response calls
   `done` next to a rejected call and rounds remain, the loop defers that
   `done` so the model can fix the call; its reason and notes stay as the
@@ -98,8 +112,8 @@ prefer simple, readable code over production hardening.
   that changes nothing is "ok (no change)". Matching for `old` tries exact
   text, then loose whitespace between words, then loose whitespace around
   `{}:;,>`, and stops at the first step that finds anything.
-- `PostsSwallowedBy` reads header and board as the browser would and names an
-  unclosed comment, raw-text element or tag that hides `{{posts}}`. When this
+- `PostsSwallowedBy` reads the html before `{{posts}}` as the browser would
+  and names an unclosed comment, raw-text element or tag that hides `{{posts}}`. When this
   turn's edits caused it and rounds remain, `done` is deferred once with the
   reason; calling `done` again keeps the page. It never rewrites markup.
 - Every completion sends `tool_choice: required`; `done` is the only way to
@@ -123,7 +137,7 @@ prefer simple, readable code over production hardening.
   inline-styled and patched by the stream while a rewrite is queued or
   running, so a model stylesheet cannot move or hide it. The server also
   replaces `{{name}}`
-  in the model's regions with the escaped cookie name, and puts the same name
+  in the model's html with the escaped cookie name, and puts the same name
   on `<html data-name="...">` so model scripts can personalize in the browser.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
@@ -140,7 +154,10 @@ prefer simple, readable code over production hardening.
 - New posts are patched into `#bd-posts`: a prepend, or an inner replace when
   the page is more than one batch behind or a reset rewound the ids. A new
   post never reloads the page. The client drops a post id the board already
-  shows, so a reconnect cannot double a prepend. A stylesheet-only change
+  shows, so a reconnect cannot double a prepend. `bdLive.posts` emits
+  `beaverdream:post` with `mode` (`prepend` or `replace`) and the patched
+  `ids`, so a script that places posts knows which ones to place. A
+  stylesheet-only change
   patches `<style id="bd-css">` and calls `bdLive.css`; anything else calls
   `bdLive.reload`, which waits for the visitor to stop typing and saves the
   draft and reading position first. Shared state arrives as the `$shared`

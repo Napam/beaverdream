@@ -37,10 +37,7 @@ func declareJournal(t *testing.T, queries *sqlc.Queries, schema string) {
 	}
 	if _, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:           site.Css,
-		Note:          site.Note,
-		Header:        site.Header,
-		Board:         site.Board,
-		Footer:        site.Footer,
+		Html:          site.Html,
 		StateSchema:   site.StateSchema,
 		JournalSchema: schema,
 		Reason:        "test declares a journal",
@@ -315,14 +312,14 @@ func TestGameRequestShipsAWorkingFeed(t *testing.T) {
 		site, err := queries.CurrentSite(ctx)
 		return err == nil &&
 			strings.Contains(site.JournalSchema, `"moves"`) &&
-			strings.Contains(site.Board, `bd.journal("moves")`)
+			strings.Contains(site.Html, `bd.journal("moves")`)
 	})
 
 	site, err := queries.CurrentSite(ctx)
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
-	if !strings.Contains(site.Board, "{{posts}}") {
+	if !strings.Contains(site.Html, "{{posts}}") {
 		t.Fatal("the game page dropped the posts placeholder")
 	}
 

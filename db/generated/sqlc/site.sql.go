@@ -12,19 +12,16 @@ import (
 
 const createSiteVersion = `-- name: CreateSiteVersion :one
 INSERT INTO
-  site_versions (css, note, header, board, footer, state_schema, journal_schema, turn_id, reason)
+  site_versions (css, html, state_schema, journal_schema, turn_id, reason)
 VALUES
-  (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (?, ?, ?, ?, ?, ?)
 RETURNING
-  id, css, note, header, board, footer, state_schema, journal_schema, turn_id, reason, created_at
+  id, css, html, state_schema, journal_schema, turn_id, reason, created_at
 `
 
 type CreateSiteVersionParams struct {
 	Css           string
-	Note          string
-	Header        string
-	Board         string
-	Footer        string
+	Html          string
 	StateSchema   string
 	JournalSchema string
 	TurnID        sql.NullInt64
@@ -34,10 +31,7 @@ type CreateSiteVersionParams struct {
 func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionParams) (SiteVersion, error) {
 	row := q.db.QueryRowContext(ctx, createSiteVersion,
 		arg.Css,
-		arg.Note,
-		arg.Header,
-		arg.Board,
-		arg.Footer,
+		arg.Html,
 		arg.StateSchema,
 		arg.JournalSchema,
 		arg.TurnID,
@@ -47,10 +41,7 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 	err := row.Scan(
 		&i.ID,
 		&i.Css,
-		&i.Note,
-		&i.Header,
-		&i.Board,
-		&i.Footer,
+		&i.Html,
 		&i.StateSchema,
 		&i.JournalSchema,
 		&i.TurnID,
@@ -62,7 +53,7 @@ func (q *Queries) CreateSiteVersion(ctx context.Context, arg CreateSiteVersionPa
 
 const currentSite = `-- name: CurrentSite :one
 SELECT
-  id, css, note, header, board, footer, state_schema, journal_schema, turn_id, reason, created_at
+  id, css, html, state_schema, journal_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -77,10 +68,7 @@ func (q *Queries) CurrentSite(ctx context.Context) (SiteVersion, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Css,
-		&i.Note,
-		&i.Header,
-		&i.Board,
-		&i.Footer,
+		&i.Html,
 		&i.StateSchema,
 		&i.JournalSchema,
 		&i.TurnID,
@@ -106,7 +94,7 @@ func (q *Queries) CurrentVersionID(ctx context.Context) (interface{}, error) {
 
 const getSiteVersion = `-- name: GetSiteVersion :one
 SELECT
-  id, css, note, header, board, footer, state_schema, journal_schema, turn_id, reason, created_at
+  id, css, html, state_schema, journal_schema, turn_id, reason, created_at
 FROM
   site_versions
 WHERE
@@ -119,10 +107,7 @@ func (q *Queries) GetSiteVersion(ctx context.Context, id int64) (SiteVersion, er
 	err := row.Scan(
 		&i.ID,
 		&i.Css,
-		&i.Note,
-		&i.Header,
-		&i.Board,
-		&i.Footer,
+		&i.Html,
 		&i.StateSchema,
 		&i.JournalSchema,
 		&i.TurnID,
@@ -134,7 +119,7 @@ func (q *Queries) GetSiteVersion(ctx context.Context, id int64) (SiteVersion, er
 
 const listSiteVersions = `-- name: ListSiteVersions :many
 SELECT
-  id, css, note, header, board, footer, state_schema, journal_schema, turn_id, reason, created_at
+  id, css, html, state_schema, journal_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -155,10 +140,7 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 		if err := rows.Scan(
 			&i.ID,
 			&i.Css,
-			&i.Note,
-			&i.Header,
-			&i.Board,
-			&i.Footer,
+			&i.Html,
 			&i.StateSchema,
 			&i.JournalSchema,
 			&i.TurnID,
@@ -180,7 +162,7 @@ func (q *Queries) ListSiteVersions(ctx context.Context, limit int64) ([]SiteVers
 
 const seedSiteVersion = `-- name: SeedSiteVersion :one
 SELECT
-  id, css, note, header, board, footer, state_schema, journal_schema, turn_id, reason, created_at
+  id, css, html, state_schema, journal_schema, turn_id, reason, created_at
 FROM
   site_versions
 ORDER BY
@@ -195,10 +177,7 @@ func (q *Queries) SeedSiteVersion(ctx context.Context) (SiteVersion, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Css,
-		&i.Note,
-		&i.Header,
-		&i.Board,
-		&i.Footer,
+		&i.Html,
 		&i.StateSchema,
 		&i.JournalSchema,
 		&i.TurnID,

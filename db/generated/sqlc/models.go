@@ -41,10 +41,7 @@ type SiteState struct {
 type SiteVersion struct {
 	ID            int64
 	Css           string
-	Note          string
-	Header        string
-	Board         string
-	Footer        string
+	Html          string
 	StateSchema   string
 	JournalSchema string
 	TurnID        sql.NullInt64

@@ -156,9 +156,9 @@ func journalCall(key string) *regexp.Regexp {
 	return regexp.MustCompile(`bd\.journal\(\s*["']` + regexp.QuoteMeta(key) + `["']\s*\)`)
 }
 
-// journalText is every part of the page the model wrote.
+// journalText is the markup the model wrote, where its scripts live.
 func journalText(site Site) string {
-	return site.Header + "\n" + site.Board + "\n" + site.Footer
+	return site.HTML
 }
 
 // MissingJournalKeys names declared keys the page no longer opens with
@@ -263,7 +263,7 @@ const JournalRuntime = `<script>
   }
 
   // No line number: it counts lines of the whole served document, which the
-  // model never sees, so it points nowhere in the regions it edits.
+  // model never sees, so it points nowhere in the html it edits.
   window.addEventListener('error', function (e) {
     report(e.message || 'script error')
   })

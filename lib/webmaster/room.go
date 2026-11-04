@@ -151,14 +151,8 @@ func DescribeChanges(before, after Site) string {
 	if before.CSS != after.CSS {
 		parts = append(parts, "stylesheet")
 	}
-	if before.Header != after.Header {
-		parts = append(parts, "header")
-	}
-	if before.Board != after.Board {
-		parts = append(parts, "board")
-	}
-	if before.Footer != after.Footer {
-		parts = append(parts, "footer")
+	if before.HTML != after.HTML {
+		parts = append(parts, "html")
 	}
 	if normalizeSchema(before.StateSchema) != normalizeSchema(after.StateSchema) {
 		parts = append(parts, "shared state")

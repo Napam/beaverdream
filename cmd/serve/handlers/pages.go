@@ -172,9 +172,7 @@ func (h *Handlers) Version(w http.ResponseWriter, r *http.Request) {
 // without a navigation. A stylesheet that breaks out of its style tag also forces a
 // reload, because in-place text cannot remove the elements it created.
 func swapKind(previous, current sqlc.SiteVersion) string {
-	if previous.Header != current.Header ||
-		previous.Board != current.Board ||
-		previous.Footer != current.Footer ||
+	if previous.Html != current.Html ||
 		previous.StateSchema != current.StateSchema ||
 		normalizeSchema(previous.JournalSchema) != normalizeSchema(current.JournalSchema) {
 		return "reload"

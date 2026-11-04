@@ -74,21 +74,27 @@ func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
 	}
 
 	calls := got.Choices[0].Message.ToolCalls
-	if len(calls) != 1 || calls[0].Function.Name != "set_site" {
-		t.Fatalf("want one set_site call, got %+v", calls)
+	if len(calls) != 2 || calls[0].Function.Name != "edit" || calls[1].Function.Name != "set_site" {
+		t.Fatalf("want an edit and a set_site call, got %+v", calls)
+	}
+	var edit struct {
+		Target string `json:"target"`
+		New    string `json:"new"`
+	}
+	if err := json.Unmarshal([]byte(calls[0].Function.Arguments), &edit); err != nil {
+		t.Fatalf("decode edit: %v", err)
+	}
+	if edit.Target != "css" || !strings.Contains(edit.New, "00ff6a") {
+		t.Errorf("edit does not append the matrix palette: %+v", edit)
 	}
 	var site struct {
-		CSS   string `json:"css"`
-		Board string `json:"board"`
+		HTML string `json:"html"`
 	}
-	if err := json.Unmarshal([]byte(calls[0].Function.Arguments), &site); err != nil {
-		t.Fatalf("decode args: %v", err)
+	if err := json.Unmarshal([]byte(calls[1].Function.Arguments), &site); err != nil {
+		t.Fatalf("decode site: %v", err)
 	}
-	if !strings.Contains(site.CSS, "00ff6a") {
-		t.Errorf("css is not the matrix palette: %s", site.CSS)
-	}
-	if !strings.Contains(site.Board, "{{posts}}") {
-		t.Errorf("board lost the posts placeholder: %s", site.Board)
+	if !strings.Contains(site.HTML, "{{posts}}") {
+		t.Errorf("html lost the posts placeholder: %s", site.HTML)
 	}
 }
 
@@ -176,20 +182,20 @@ func TestChaosPromptIncludesScript(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	var header string
+	var page string
 	for _, call := range got.Choices[0].Message.ToolCalls {
 		if call.Function.Name != "set_site" {
 			continue
 		}
 		var args struct {
-			Header string `json:"header"`
+			HTML string `json:"html"`
 		}
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 			t.Fatalf("decode args: %v", err)
 		}
-		header = args.Header
+		page = args.HTML
 	}
-	if !strings.Contains(header, "<script>") {
-		t.Fatalf("chaos theme has no script: %q", header)
+	if !strings.Contains(page, "<script>") {
+		t.Fatalf("chaos theme has no script: %q", page)
 	}
 }

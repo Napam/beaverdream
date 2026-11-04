@@ -80,10 +80,7 @@ func (h *Handlers) carryVersionAfter(
 		}
 		created, err := insertVersion(ctx, q, sqlc.CreateSiteVersionParams{
 			Css:           source.Css,
-			Note:          source.Note,
-			Header:        source.Header,
-			Board:         source.Board,
-			Footer:        source.Footer,
+			Html:          source.Html,
 			StateSchema:   normalizeSchema(source.StateSchema),
 			JournalSchema: normalizeSchema(source.JournalSchema),
 			TurnID:        sql.NullInt64{Int64: turn.ID, Valid: true},

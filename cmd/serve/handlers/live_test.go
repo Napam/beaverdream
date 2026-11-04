@@ -223,7 +223,7 @@ func TestLiveStreamPushesPostsInPlace(t *testing.T) {
 		t.Fatalf("datastar post: status = %d, want 204", rec.Code)
 	}
 	live.next(t, []string{"selector #bd-posts", "mode inner", "first mocknoop"})
-	live.next(t, []string{"bdLive.posts(1)"})
+	live.next(t, []string{`bdLive.posts(1, "replace", [1])`})
 	live.next(t, []string{cursorSignal(cursor{Version: version, Post: 1})})
 
 	// Another name, so the rewrite cooldown does not matter.
@@ -236,6 +236,9 @@ func TestLiveStreamPushesPostsInPlace(t *testing.T) {
 		[]string{"selector #bd-posts", "mode prepend", "second mocknoop"},
 		"first mocknoop",
 	)
+	// The webmaster turn may reserve its id before or after this post, so the
+	// id itself varies.
+	live.next(t, []string{`bdLive.posts(`, `"prepend", [`})
 }
 
 // A page that reconnects sends the cursor it holds and gets only what it
@@ -453,10 +456,7 @@ func TestLiveStreamPushesSharedState(t *testing.T) {
 	}
 	site, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
 		Css:         seed.Css,
-		Note:        seed.Note,
-		Header:      seed.Header,
-		Board:       seed.Board,
-		Footer:      seed.Footer,
+		Html:        seed.Html,
 		StateSchema: `{"likes":{"op":"counter"},"poll":{"op":"choice","options":["yes","no"]}}`,
 		Reason:      "test declares state",
 	})

@@ -220,7 +220,6 @@ Under `task`, shell variables win over Taskfile values, which win over `.env`.
 | `OPENAI_SESSION_ID` | generated | `x-opencode-session` value for `opencode.ai` |
 | `OPENAI_REASONING_EFFORT` | empty | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |
-| `MAX_MUTATIONS_PER_DAY` | `500` | cost cap, `0` disables |
 | `MUTATION_ROUNDS` | `3` | tool rounds per mutation |
 
 ## Development

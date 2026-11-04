@@ -38,7 +38,6 @@ type LiveView struct {
 	Version int64
 	Pending int
 	Today   int64
-	Cap     int
 	Detail  string
 	Error   string
 }
@@ -89,12 +88,8 @@ func stateText(states []StateView) string {
 	return strings.Join(lines, "\n")
 }
 
-// todayText is the mutation count against the daily cap, or just the count
-// when no cap is set.
+// todayText is the number of mutations so far today.
 func todayText(live LiveView) string {
-	if live.Cap > 0 {
-		return strconv.FormatInt(live.Today, 10) + " / " + strconv.Itoa(live.Cap)
-	}
 	return strconv.FormatInt(live.Today, 10)
 }
 

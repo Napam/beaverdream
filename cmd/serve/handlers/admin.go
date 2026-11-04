@@ -419,7 +419,6 @@ func (h *Handlers) adminLiveView(ctx context.Context) pages.LiveView {
 		Version: version,
 		Pending: pending,
 		Today:   today,
-		Cap:     h.cfg.MaxMutationsPerDay,
 		Detail:  "waiting for a post",
 		Error:   lastError,
 	}
@@ -575,11 +574,6 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.overDailyCap(r.Context()) {
-		h.adminDone(w, r, overviewPanel, "daily mutation cap reached")
-		return
-	}
-
 	res, err := h.mutate(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
@@ -643,9 +637,6 @@ func (h *Handlers) runRetry(
 	}
 	if turn.Status != "error" {
 		return webmaster.Result{}, "only a turn that errored can be retried", nil
-	}
-	if h.overDailyCap(ctx) {
-		return webmaster.Result{}, "daily mutation cap reached", nil
 	}
 
 	kind, instruction := "post", ""

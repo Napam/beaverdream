@@ -57,8 +57,6 @@ type Config struct {
 	AdminPort string
 	// Port is the board's port, used for the link back from the admin pages.
 	Port string
-	// MaxMutationsPerDay is a cost kill switch. Zero disables the cap.
-	MaxMutationsPerDay int
 	// CompactAfterTokens is the estimated transcript size that triggers
 	// compaction. Zero uses the default (128k).
 	CompactAfterTokens int
@@ -934,14 +932,6 @@ func (h *Handlers) runPending() {
 		h.hub.publish(topicBusy)
 		return
 	}
-	if h.overDailyCap(context.Background()) {
-		h.setLastError("daily mutation cap reached")
-		h.hub.publish(topicBusy)
-		h.logger.Warn("Mutation skipped: daily cap reached",
-			slog.Int("posts", len(batch)),
-		)
-		return
-	}
 	if len(batch) > maxBatchPosts {
 		batch = batch[len(batch)-maxBatchPosts:]
 	}
@@ -1208,12 +1198,6 @@ func (h *Handlers) setVersion(version int64) {
 	}
 }
 
-func (h *Handlers) setLastError(message string) {
-	h.liveMu.Lock()
-	h.lastError = message
-	h.liveMu.Unlock()
-}
-
 // resetLive points the live view at the seed. The queue is left alone: a post
 // that landed during the reset is still owed a turn, and stopWork already
 // dropped everything older.
@@ -1362,19 +1346,7 @@ func (h *Handlers) allowRewrite(name string) bool {
 	return true
 }
 
-// overDailyCap reports whether the cost kill switch has tripped.
-func (h *Handlers) overDailyCap(ctx context.Context) bool {
-	if h.cfg.MaxMutationsPerDay <= 0 {
-		return false
-	}
-	count, err := h.queries.CountWebmasterTurnsSince(ctx, utcDayStart())
-	if err != nil {
-		h.logger.Error("Failed to count mutations", slog.Any("error", err))
-		return false
-	}
-	return count >= int64(h.cfg.MaxMutationsPerDay)
-}
-
+// utcDayStart is the timestamp the "today" mutation count starts from.
 func utcDayStart() string {
 	return time.Now().UTC().Format("2006-01-02T00:00:00.000Z")
 }

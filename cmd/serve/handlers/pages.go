@@ -90,7 +90,6 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		h.postDone(w, r)
 		return
 	}
-	rewrite := h.allowRewrite(author)
 	body = truncate(body, maxBodyLen)
 
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
@@ -104,12 +103,8 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	h.hub.publish(topicPosts)
 
-	capped := h.overDailyCap(r.Context())
-	if !rewrite || capped {
-		h.logger.Warn("Post stored without a rewrite",
-			slog.Bool("throttled", !rewrite),
-			slog.Bool("capped", capped),
-		)
+	if !h.allowRewrite(author) {
+		h.logger.Warn("Post stored without a rewrite", slog.Bool("throttled", true))
 		h.postDone(w, r)
 		return
 	}

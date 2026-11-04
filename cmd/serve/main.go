@@ -101,11 +101,10 @@ func run(logger *slog.Logger) error {
 	}
 
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
-		AdminToken:         adminToken,
-		AdminPort:          env.Vars.AdminPort,
-		Port:               env.Vars.Port,
-		MaxMutationsPerDay: env.Vars.MaxMutationsPerDay,
-		DatastarSrc:        beaverdream.StaticRootPath("static/datastar.js"),
+		AdminToken:  adminToken,
+		AdminPort:   env.Vars.AdminPort,
+		Port:        env.Vars.Port,
+		DatastarSrc: beaverdream.StaticRootPath("static/datastar.js"),
 	})
 	defer h.Close()
 

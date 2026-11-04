@@ -41,8 +41,6 @@ type Env = struct {
 	// the origin that holds the admin login cookie. Defaults to the port after
 	// PORT, skipping the live reload proxy.
 	AdminPort string
-	// Cost kill switch: mutations allowed per UTC day. Zero disables the cap.
-	MaxMutationsPerDay int
 	// Tool rounds per mutation before the loop gives up.
 	MutationRounds int
 	// TLS certificate and key. With both set the server speaks TLS, so
@@ -72,7 +70,6 @@ func init() {
 		DBPath:                GetEnv("DB_PATH", "./data/sqlite.db"),
 		AdminToken:            os.Getenv("ADMIN_TOKEN"),
 		AdminPort:             adminPort(GetEnv("PORT", "6930")),
-		MaxMutationsPerDay:    GetEnvInt("MAX_MUTATIONS_PER_DAY", 500),
 		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
 		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),

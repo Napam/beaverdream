@@ -261,6 +261,10 @@ const JournalRuntime = `<script>
     this.reduce = null
     this.render = null
     this.started = false
+    // loaded is true once a whole read has landed. Until then a pushed row
+    // has no history to fold onto, so it starts the read again and waits in
+    // held for it.
+    this.loaded = false
     // held collects pushed rows while a read is out. null means no read is.
     this.held = null
     this.stale = false
@@ -317,6 +321,7 @@ const JournalRuntime = `<script>
   // the feed reads it whole.
   Journal.prototype.receive = function (rows) {
     if (this.stale || !this.started) return
+    if (!this.loaded) this.load()
     if (this.held) {
       for (var i = 0; i < rows.length; i++) this.held.push(rows[i])
       return
@@ -338,8 +343,9 @@ const JournalRuntime = `<script>
 
   // load reads the whole feed. The rules number is not taken from the reply:
   // a different one expires the page instead. A failed read leaves the board
-  // as it was, so a server hiccup never draws an empty game. Only one read is
-  // out at a time; rows pushed meanwhile wait in held.
+  // as it was, so a server hiccup never draws an empty game, and a feed that
+  // never loaded tries again on the next push. Only one read is out at a
+  // time; rows pushed meanwhile wait in held.
   Journal.prototype.load = function () {
     var self = this
     if (self.stale || self.held) return Promise.resolve()
@@ -354,13 +360,16 @@ const JournalRuntime = `<script>
       self.match = d.match || 1
       self.rows = []
       self.seen = {}
+      self.loaded = true
       self.add(d.rows || [])
       self.draw()
       if (held.length) self.receive(held)
     }, function () {
       var held = self.held
       self.held = null
-      if (held.length) self.receive(held)
+      // Before the first read lands, held rows would fold onto nothing. The
+      // next push asks for the whole feed again.
+      if (held.length && self.loaded) self.receive(held)
     })
   }
 

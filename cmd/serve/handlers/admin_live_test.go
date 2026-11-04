@@ -118,6 +118,31 @@ func TestAdminLivePatchesHistoryAfterARewrite(t *testing.T) {
 	live.next(t, []string{`id="admin-history"`, "mockedit please"})
 }
 
+// A run that keeps the page writes no version, and its turn still reaches the
+// panel's history.
+func TestAdminLivePatchesHistoryAfterAKeptTurn(t *testing.T) {
+	h, _ := setup(t)
+	live := openAdminLive(t, h, testAdminToken)
+	live.next(t, []string{`id="admin-history"`, `nothing yet`})
+
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop please"}})
+	live.next(t, []string{`id="admin-history"`, "mocknoop please"})
+}
+
+// An admin instruction stored as a post reaches open boards, even when the
+// run changes nothing.
+func TestAdminPostReachesOpenBoards(t *testing.T) {
+	h, queries := setup(t)
+	live := openLive(t, h, cursor{Version: currentVersion(t, queries)})
+	live.next(t, []string{`"shared":`})
+
+	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+		"instruction": {"mocknoop from the admin"},
+		"also_post":   {"on"},
+	})
+	live.next(t, []string{"selector #bd-posts", "mocknoop from the admin"})
+}
+
 // A Datastar action patches the panel in place, flash included, so no redirect
 // has to carry the token.
 func TestAdminActionPatchesThePanel(t *testing.T) {

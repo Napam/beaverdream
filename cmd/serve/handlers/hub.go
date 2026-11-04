@@ -14,8 +14,11 @@ const (
 	topicBusy
 	topicState
 	topicJournal
+	// topicTurns is a finished webmaster run, with or without a new version.
+	// Only the admin panel reads it.
+	topicTurns
 
-	topicAll = topicPosts | topicSite | topicBusy | topicState | topicJournal
+	topicAll = topicPosts | topicSite | topicBusy | topicState | topicJournal | topicTurns
 )
 
 // hub fans topics out to the open streams. Each subscriber keeps a bitmask of

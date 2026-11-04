@@ -852,16 +852,18 @@ func (h *Handlers) runPending() {
 	batch := h.pending
 	h.pending = nil
 	h.liveMu.Unlock()
-	// A batch that turns out empty or capped never starts a run, so the
-	// spinner has to hear about the drained queue here.
-	h.hub.publish(topicBusy)
 
+	// A batch that turns out empty or capped never starts a run, so the
+	// spinner hears about the drained queue here. A batch that runs is
+	// published by beginRun, without a not-busy flash in between.
 	batch = h.liveOnly(context.Background(), batch)
 	if len(batch) == 0 {
+		h.hub.publish(topicBusy)
 		return
 	}
 	if h.overDailyCap(context.Background()) {
 		h.setLastError("daily mutation cap reached")
+		h.hub.publish(topicBusy)
 		h.logger.Warn("Mutation skipped: daily cap reached",
 			slog.Int("posts", len(batch)),
 		)
@@ -954,7 +956,8 @@ func (h *Handlers) endRun(err error) {
 		h.lastError = err.Error()
 	}
 	h.liveMu.Unlock()
-	h.hub.publish(topicBusy)
+	// The run's turn and any summary have landed by now, version or not.
+	h.hub.publish(topicBusy | topicTurns)
 }
 
 func (h *Handlers) setRunningRound(round int) {

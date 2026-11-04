@@ -120,12 +120,12 @@ prefer simple, readable code over production hardening.
 - The read side is one Datastar stream per open page, `GET /live`. Commands
   (`POST /posts`, `/x/state/{key}`, `/j/{key}`, every admin action, the
   worker) write the database and then publish a topic. Topics are a bitmask:
-  posts, site, busy, state, journal. Every stream re-reads the parts its page
-  is missing and pushes them; a subscriber coalesces a burst into one sync, so
-  the hub never blocks and never drops. The page holds its cursor as the `_bd`
-  signal (`version`, `post`, `journal`) and the stream patches it as it
-  pushes, so a reconnect resumes from what the page already shows and gets
-  nothing twice.
+  posts, site, busy, state, journal, and turns for the admin panel. Every
+  stream re-reads the parts its page is missing and pushes them; a subscriber
+  coalesces a burst into one sync, so the hub never blocks and never drops.
+  The page holds its cursor as the `_bd` signal (`version`, `post`, `journal`)
+  and the stream patches it as it pushes, so a reconnect resumes from what the
+  page already shows and gets nothing twice.
 - New posts are patched into `#bd-posts`: a prepend, or an inner replace when
   the page is more than one batch behind or a reset rewound the ids. A new
   post never reloads the page. The client drops a post id the board already

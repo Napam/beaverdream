@@ -75,6 +75,8 @@ func (h *Handlers) syncAdmin(
 		if err := h.patchAdminVersion(ctx, sse); err != nil {
 			return err
 		}
+	}
+	if t&(topicSite|topicTurns) != 0 {
 		if err := h.patchAdminMemory(ctx, sse); err != nil {
 			return err
 		}
@@ -147,8 +149,7 @@ func (h *Handlers) patchAdminVersion(
 	)
 }
 
-// patchAdminMemory brings the compacted history forward. A summary written
-// after the turn landed appears on the next site change.
+// patchAdminMemory brings the compacted history forward.
 func (h *Handlers) patchAdminMemory(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,

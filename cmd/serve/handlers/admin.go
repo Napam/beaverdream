@@ -363,6 +363,7 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		} else {
 			converted := createdPost(post)
 			trigger = &converted
+			h.hub.publish(topicPosts)
 		}
 	}
 

@@ -16,7 +16,9 @@ Every write path publishes a topic after it commits:
 - restore, undo, heal, inject and reset
 - the worker, when a queued post starts and when a run ends
 
-A topic is a bit in a mask: posts, site, busy, state, journal. It carries no
+A topic is a bit in a mask: posts, site, busy, state, journal, turns. Turns is
+a finished webmaster run, version or not; only the admin panel reads it. A
+topic carries no
 data, so a stream cannot apply an event twice or out of order; it only learns
 that something changed and reads the current state. A subscriber keeps the
 mask of what changed since it last looked, so a burst coalesces into one sync.
@@ -62,6 +64,12 @@ cursor patch. A failed read is logged and skipped; the next change to that part
 retries it. Only a failed write ends the stream, and the page reconnects with
 its cursor.
 
+Known gap: a reset rewinds every id. Open streams hear the reset and resync,
+but a tab whose stream was down through it reconnects with old cursors. If new
+ids have climbed back to exactly its cursor, it keeps stale posts or markup
+until the next change or a reload. A board epoch in the cursor would close
+this; for a toy it is not worth the extra signal.
+
 ## The page
 
 Datastar is a module script, so it starts after the model's markup has parsed.
@@ -97,7 +105,8 @@ The code-owned live script owns the parts Datastar does not:
 The admin panel uses the same idea on a second stream, `GET /admin/live`. It
 subscribes to the same hub and patches `#admin-live`, `#admin-version`,
 `#admin-versions`, `#admin-memory`, `#admin-history` and `#admin-feeds` as
-topics arrive, so the panel follows a rewrite while it happens.
+topics arrive. The status card moves with every round, and history and memory
+move when a run ends, including a run that kept the page or failed.
 
 Admin auth is a password, not a session. `GET /admin` without the token returns
 only the password form; the form POSTs the token and gets the panel. The token
@@ -113,7 +122,7 @@ the same page with a 200, so the panel still works with scripting off and in
 tests. The stream mount sits outside `#admin-body`, so a patch never opens a
 second stream.
 
-
+## HTTP/2
 
 A stream per tab is only cheap over HTTP/2. Browsers cap HTTP/1.1 at six
 connections per origin, so the seventh tab would stall. The server enables

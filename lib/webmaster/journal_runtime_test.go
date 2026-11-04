@@ -137,6 +137,19 @@ const steps = {
     state.read = 'fail'
     await feed.load()
   },
+  // A feed whose first read failed has nothing to fold onto: a push reads
+  // the whole feed again and keeps the pushed row.
+  failedFirstRead: async () => {
+    state.read = 'fail'
+    start()
+    await settle()
+    window.bd._rows([row(3)])
+    await settle()
+    results.push(feed.rows.length)
+    state.read = 'ok'
+    window.bd._rows([row(4)])
+    await settle()
+  },
   // A pushed row under other rules means this page's reducer is the wrong
   // one: stop and ask for a full reload, never fold it.
   rulesChange: async () => {
@@ -305,6 +318,30 @@ func TestJournalRuntimeKeepsTheBoardOnAFailedRead(t *testing.T) {
 	}
 	if got.Stale {
 		t.Error("a failed read expired the page")
+	}
+}
+
+// A push to a feed that never loaded must not fold onto an empty history.
+func TestJournalRuntimeRecoversFromAFailedFirstRead(t *testing.T) {
+	got := runRuntime(t, "failedFirstRead")
+
+	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
+		t.Fatalf("rows after a push to an unloaded feed = %s, want 0", got.Results)
+	}
+	if want := []int64{1, 2, 4}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v once a read succeeds", got.IDs, want)
+	}
+	reads := 0
+	for _, f := range got.Fetches {
+		if strings.HasSuffix(f, "since=0") {
+			reads++
+		}
+	}
+	if reads != 3 {
+		t.Errorf("reads = %d, want the start and one per push (%v)", reads, got.Fetches)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the read landed")
 	}
 }
 

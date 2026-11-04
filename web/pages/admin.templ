@@ -10,6 +10,10 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
 
+// resetConfirm asks before the one destructive action. Both the plain form and
+// the Datastar click ask the same question.
+const resetConfirm = "confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
+
 // RunView pairs a stored run with its parsed conversation, so the admin
 // template never touches JSON.
 type RunView struct {
@@ -232,14 +236,14 @@ templ AdminBody(view AdminView) {
 			<form
 				method="post"
 				action="/admin/reset"
-				onsubmit="return confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
+				onsubmit={ templ.JSUnsafeFuncCall("return " + resetConfirm) }
 			>
 				<input type="hidden" name="token" value={ view.Token }/>
 				<button
 					type="submit"
 					data-indicator:_resetting
 					data-attr:disabled="$_resetting"
-					data-on:click="if (confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')) { evt.preventDefault(); @post('/admin/reset', {contentType: 'form'}) } else evt.preventDefault()"
+					data-on:click={ "evt.preventDefault(); if (" + resetConfirm + ") @post('/admin/reset', {contentType: 'form'})" }
 					class="cursor-pointer rounded-sm border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 disabled:cursor-default disabled:opacity-50"
 				>reset the board</button>
 			</form>
@@ -250,8 +254,8 @@ templ AdminBody(view AdminView) {
 	</div>
 }
 
-// AdminMemory is the compacted history. The stream patches it when a version
-// lands, so a summary written during compaction shows without a reload.
+// AdminMemory is the compacted history. The stream patches it when a run
+// ends, so a summary written during compaction shows without a reload.
 templ AdminMemory(summary string, through int64) {
 	<section id="admin-memory" class={ adminCard }>
 		<p class={ adminLabel }>compacted memory</p>

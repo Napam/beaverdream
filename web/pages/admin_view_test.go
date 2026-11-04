@@ -75,6 +75,54 @@ func storedTurn() (sqlc.ListWebmasterTurnsRow, []webmaster.Message) {
 	}
 }
 
+// A queue row reads like a turn row: who posted, the first body with a count,
+// and the whole batch in its title.
+func TestNewQueueNamesTheBatch(t *testing.T) {
+	view := NewQueue([]sqlc.Post{
+		{Author: "dave", Body: "first"},
+		{Author: "kit", Body: "second"},
+		{Author: "dave", Body: "third"},
+		{Author: "", Body: "anonymous"},
+	})
+	if view.Posts != 4 {
+		t.Errorf("posts = %d, want 4", view.Posts)
+	}
+	if view.Authors != "dave, kit, anon" {
+		t.Errorf("authors = %q", view.Authors)
+	}
+	if view.Text != "first (+3 more)" {
+		t.Errorf("text = %q", view.Text)
+	}
+	for _, want := range []string{
+		"dave: first", "kit: second", "dave: third", "anon: anonymous",
+	} {
+		if !strings.Contains(view.Title, want) {
+			t.Errorf("title is missing %q", want)
+		}
+	}
+	if empty := NewQueue(nil); empty.Posts != 0 {
+		t.Errorf("an empty queue has %d posts", empty.Posts)
+	}
+}
+
+func TestHistoryCountNamesTurnsAndQueue(t *testing.T) {
+	for _, tc := range []struct {
+		turns  int
+		queued int
+		want   string
+	}{
+		{0, 0, "0 turns, newest first"},
+		{1, 0, "1 turn, newest first"},
+		{2, 1, "2 turns · 1 queued, newest first"},
+		{0, 3, "0 turns · 3 queued, newest first"},
+	} {
+		if got := historyCount(tc.turns, tc.queued); got != tc.want {
+			t.Errorf("historyCount(%d, %d) = %q, want %q",
+				tc.turns, tc.queued, got, tc.want)
+		}
+	}
+}
+
 // A row sums the rounds and names what the turn answered, without carrying
 // the conversation.
 func TestNewTurnRowSumsRounds(t *testing.T) {

@@ -52,6 +52,64 @@ func NewTurnRow(run sqlc.ListWebmasterTurnsRow, messages []webmaster.Message) Tu
 	return row
 }
 
+// QueueView is the batch of posts waiting for the next turn. The worker
+// coalesces a burst into one turn, so the list shows it as one queued row.
+type QueueView struct {
+	Posts   int
+	Authors string
+	Text    string
+	Title   string
+}
+
+// queueTitleRunes caps the tooltip, since the visible row is one line and a
+// burst can carry a lot of text.
+const queueTitleRunes = 500
+
+// NewQueue lays the pending posts out the way a turn row reads: who posted,
+// what the batch says, and a count when more than one post is waiting.
+func NewQueue(posts []sqlc.Post) QueueView {
+	if len(posts) == 0 {
+		return QueueView{}
+	}
+	view := QueueView{Posts: len(posts)}
+	seen := make(map[string]bool, len(posts))
+	authors := make([]string, 0, len(posts))
+	title := make([]string, 0, len(posts))
+	for _, post := range posts {
+		// The worker names an empty author "anon" in the running row, so the
+		// queued row says the same.
+		author := post.Author
+		if author == "" {
+			author = "anon"
+		}
+		if !seen[author] {
+			seen[author] = true
+			authors = append(authors, author)
+		}
+		title = append(title, author+": "+post.Body)
+	}
+	view.Authors = strings.Join(authors, ", ")
+	view.Text = posts[0].Body
+	if len(posts) > 1 {
+		view.Text += fmt.Sprintf(" (+%d more)", len(posts)-1)
+	}
+	view.Title = strings.Join(title, "\n\n")
+	if runes := []rune(view.Title); len(runes) > queueTitleRunes {
+		view.Title = string(runes[:queueTitleRunes]) + "…"
+	}
+	return view
+}
+
+// historyCount is the turns table's subtitle: the stored turns, plus the
+// posts waiting for the next one.
+func historyCount(turns, queued int) string {
+	count := plural(turns, "turn")
+	if queued > 0 {
+		count += " · " + itoa(queued) + " queued"
+	}
+	return count + ", newest first"
+}
+
 // newPostText is the body of the prompt's new post section without its
 // heading and closing line.
 func newPostText(message webmaster.Message) string {
@@ -639,6 +697,8 @@ func statusTone(status string) string {
 		return "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300"
 	case "running":
 		return "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300"
+	case "queued":
+		return "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
 	}
 	return "bg-gray-100 text-gray-700 dark:bg-neutral-800 dark:text-neutral-300"
 }

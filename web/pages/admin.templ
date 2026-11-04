@@ -185,6 +185,9 @@ type AdminView struct {
 	// Run is the turn in flight, for the inspector to show before the
 	// conversation is stored. Nil when nothing runs.
 	Run *RunProgress
+	// Queue is the posts waiting for the next turn, shown above the turns as
+	// one row with status "queued".
+	Queue QueueView
 }
 
 // adminSignals are the page's local signals: which code tab of the current
@@ -349,7 +352,7 @@ templ overviewPage(view AdminView) {
 templ turnsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
-		@AdminHistory(view.Turns, view.Panel.Turn)
+		@AdminHistory(view.Turns, view.Panel.Turn, view.Queue)
 		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run, view.CSRF)
 	</div>
 }
@@ -596,16 +599,17 @@ templ AdminMemory(summary string, through int64) {
 	</section>
 }
 
-// AdminHistory lists the newest turns as a table, one link per row. The stream
-// patches it when a run ends, so a turn appears without a reload. picked is
-// the turn the page shows, or 0 for the newest.
-templ AdminHistory(turns []TurnRow, picked int64) {
+// AdminHistory lists the queued batch and the newest turns as a table, one
+// link per turn. The stream patches it when a run ends or a post arrives, so
+// a turn appears without a reload. picked is the turn the page shows, or 0
+// for the newest.
+templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
 	<section id="admin-history" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
 			<p class={ adminLabel }>turns</p>
-			<p class={ adminMuted }>{ plural(len(turns), "turn") }, newest first</p>
+			<p class={ adminMuted }>{ historyCount(len(turns), queue.Posts) }</p>
 		</div>
-		if len(turns) == 0 {
+		if len(turns) == 0 && queue.Posts == 0 {
 			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
 		} else {
 			<div class="max-h-80 overflow-y-auto">
@@ -619,6 +623,22 @@ templ AdminHistory(turns []TurnRow, picked int64) {
 					<span class="text-right">time</span>
 				</div>
 				<ol>
+					if queue.Posts > 0 {
+						<li>
+							<div
+								title={ queue.Title }
+								class={ historyGrid + " border-l-2 border-transparent px-3 py-1.5 text-sm" }
+							>
+								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">next</span>
+								<span class="justify-self-start">@statusBadge("queued")</span>
+								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(queue.Authors) }</span>
+								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(queue.Text)) }</span>
+								<span></span>
+								<span></span>
+								<span></span>
+							</div>
+						</li>
+					}
 					for i, row := range turns {
 						<li>
 							<a

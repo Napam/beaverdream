@@ -547,6 +547,60 @@ func TestAdminRedirectsToItsOwnPort(t *testing.T) {
 	}
 }
 
+// A post waiting for the worker shows in the turns table as one queued row
+// above the newest turn, because the worker answers a burst as one turn.
+func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	// A stored turn, so the test can check the queued row sits above it.
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop earlier"}})
+	waitFor(t, "the earlier turn", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		return err == nil && len(turns) == 1 && turns[0].Status != "running"
+	})
+
+	for _, post := range []sqlc.CreatePostParams{
+		{Author: "dave", Body: "first queued"},
+		{Author: "kit", Body: "second queued"},
+	} {
+		row, err := queries.CreatePost(ctx, post)
+		if err != nil {
+			t.Fatalf("create queued post: %v", err)
+		}
+		h.HoldPost(createdPostRow(row))
+	}
+
+	body := getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	for _, want := range []string{
+		"queued",
+		">next<",
+		"dave, kit",
+		"first queued (+1 more)",
+		"1 turn · 2 queued, newest first",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the queued row is missing %q", want)
+		}
+	}
+	next := strings.Index(body, ">next<")
+	earlier := strings.Index(body, "mocknoop earlier")
+	if next < 0 || earlier < 0 || next > earlier {
+		t.Errorf("the queued row at %d is not above the stored turn at %d",
+			next, earlier)
+	}
+
+	// The stream drops the row as soon as the worker drains the queue.
+	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live.next(t, []string{`id="admin-history"`, ">next<"})
+	go h.RunPending()
+	live.next(t, []string{`id="admin-history"`}, ">next<")
+	waitFor(t, "the queued batch to finish", func() bool {
+		turns, err := queries.ListWebmasterTurns(ctx, 2)
+		return err == nil && len(turns) == 2 && turns[0].Status != "running"
+	})
+}
+
 // A turn in flight shows its finished rounds on the turns page before the
 // conversation is stored, then the stored turn replaces them when it lands.
 func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {

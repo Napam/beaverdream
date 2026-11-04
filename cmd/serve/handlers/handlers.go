@@ -1221,6 +1221,14 @@ func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
 	return h.version, len(h.pending), running, h.lastError
 }
 
+// queuedPosts copies the posts waiting for the next turn, so a page can show
+// the batch without holding the lock while it renders.
+func (h *Handlers) queuedPosts() []sqlc.Post {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	return append([]sqlc.Post(nil), h.pending...)
+}
+
 // runProgress is the live turn for the inspector, or nil when nothing runs.
 func (h *Handlers) runProgress() *pages.RunProgress {
 	h.liveMu.Lock()

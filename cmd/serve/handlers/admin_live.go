@@ -259,7 +259,7 @@ func (h *Handlers) patchAdminTurns(
 		ctx,
 		sse,
 		"admin-history",
-		pages.AdminHistory(turns, picked),
+		pages.AdminHistory(turns, picked, pages.NewQueue(h.queuedPosts())),
 	); err != nil {
 		return err
 	}

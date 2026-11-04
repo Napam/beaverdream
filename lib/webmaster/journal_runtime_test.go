@@ -17,7 +17,10 @@ const scenario = process.argv[3]
 
 const config = JSON.stringify({
   visitor: 'me',
-  keys: { moves: { match: 1, rules: 1 } }
+  keys: {
+    moves: { match: 1, rules: 1 },
+    cut: { match: 1, rules: 1, max: 3 }
+  }
 })
 
 function node() {
@@ -57,6 +60,12 @@ Object.defineProperty(global, 'navigator', {
 global.Blob = function (parts) { this.body = JSON.parse(parts[0]) }
 global.CustomEvent = function (name, init) { this.name = name; this.detail = init && init.detail }
 global.setInterval = () => { throw new Error('the runtime must not poll') }
+// The browser draws on the next frame; tests flush it on the next tick. A
+// hidden tab parses this as a pause, so asking for a frame is an error there.
+global.requestAnimationFrame = (fn) => {
+  if (document.hidden) throw new Error('requestAnimationFrame does not run hidden')
+  return setTimeout(fn, 0)
+}
 process.on('unhandledRejection', () => { unhandled++ })
 
 function reply(status, body) {
@@ -105,6 +114,17 @@ function start() {
     (s) => { draws.push(s) }
   )
 }
+
+const cut = window.bd.journal('cut')
+function startCut() {
+  cut.start(
+    (rows) => rows.map((r) => r.id),
+    () => {}
+  )
+}
+const cutRow = (id) => ({
+  id: id, key: 'cut', visitor: 'them', payload: { n: id }, match: 1, rules: 1
+})
 
 const steps = {
   // Pushed rows join the feed in order, and a row that comes back twice, from
@@ -188,6 +208,47 @@ const steps = {
     state.post = 409
     state.postError = 'the page is out of date'
     results.push(await feed.append({ n: 1 }))
+  },
+  // The feed keeps at most the key's max rows, the same window the server
+  // keeps, and a trimmed row cannot come back from a late echo.
+  trim: async () => {
+    startCut()
+    await settle()
+    window.bd._rows([
+      cutRow(11), cutRow(12), cutRow(13),
+      cutRow(14), cutRow(15), cutRow(16)
+    ])
+    await settle()
+    results.push(cut.rows.map((r) => r.id))
+    results.push(Object.keys(cut.seen).length)
+    window.bd._rows([cutRow(11)])
+    await settle()
+    results.push(cut.rows.map((r) => r.id))
+  },
+  // Rows that arrive in one burst cost one draw, on the next frame.
+  oneDrawPerFrame: async () => {
+    start()
+    await settle()
+    const before = draws.length
+    window.bd._rows([row(4)])
+    window.bd._rows([row(5)])
+    window.bd._rows([row(6)])
+    results.push(draws.length - before)
+    await settle()
+    results.push(draws.length - before)
+  },
+  // A hidden tab still renders, so a title or sound set in render fires.
+  hiddenStillDraws: async () => {
+    start()
+    await settle()
+    document.hidden = true
+    try {
+      window.bd._rows([row(4)])
+      await settle()
+      results.push(draws[draws.length - 1])
+    } finally {
+      document.hidden = false
+    }
   }
 }
 
@@ -342,6 +403,72 @@ func TestJournalRuntimeRecoversFromAFailedFirstRead(t *testing.T) {
 	}
 	if got.Held {
 		t.Error("the feed still holds rows after the read landed")
+	}
+}
+
+// The feed keeps the same newest rows the server keeps, so a long-open tab and
+// a reloaded one fold the same history. A trimmed row cannot return on a late
+// echo.
+func TestJournalRuntimeKeepsTheServerRowWindow(t *testing.T) {
+	got := runRuntime(t, "trim")
+
+	if len(got.Results) != 3 {
+		t.Fatalf("results = %s, want ids, seen count and ids again", got.Results)
+	}
+	var ids []int64
+	if err := json.Unmarshal(got.Results[0], &ids); err != nil {
+		t.Fatalf("decode ids: %v", err)
+	}
+	if want := []int64{14, 15, 16}; !sameIDs(ids, want) {
+		t.Fatalf("rows = %v, want %v", ids, want)
+	}
+	var seen int
+	if err := json.Unmarshal(got.Results[1], &seen); err != nil {
+		t.Fatalf("decode seen count: %v", err)
+	}
+	if seen != 3 {
+		t.Errorf("seen ids = %d, want 3: trimmed ids must not stay in memory", seen)
+	}
+	if err := json.Unmarshal(got.Results[2], &ids); err != nil {
+		t.Fatalf("decode ids after the echo: %v", err)
+	}
+	if want := []int64{14, 15, 16}; !sameIDs(ids, want) {
+		t.Fatalf("rows = %v after a trimmed echo, want %v", ids, want)
+	}
+}
+
+// A burst of pushed rows costs one reduce and one render, on the next frame.
+func TestJournalRuntimeDrawsOncePerFrame(t *testing.T) {
+	got := runRuntime(t, "oneDrawPerFrame")
+
+	if len(got.Results) != 2 {
+		t.Fatalf("results = %s, want the count before and after the frame", got.Results)
+	}
+	if string(got.Results[0]) != "0" {
+		t.Errorf("draws in the same tick = %s, want 0", got.Results[0])
+	}
+	if string(got.Results[1]) != "1" {
+		t.Errorf("draws after the frame = %s, want 1", got.Results[1])
+	}
+	if want := []int64{1, 2, 4, 5, 6}; !sameIDs(got.LastDraw, want) {
+		t.Errorf("last draw = %v, want every row, %v", got.LastDraw, want)
+	}
+}
+
+// A hidden tab parks requestAnimationFrame, so the runtime must fall back to
+// a timer there. Otherwise a title or sound set in render never fires.
+func TestJournalRuntimeRendersInAHiddenTab(t *testing.T) {
+	got := runRuntime(t, "hiddenStillDraws")
+
+	if len(got.Results) != 1 {
+		t.Fatalf("results = %s, want the draw from the hidden tab", got.Results)
+	}
+	var ids []int64
+	if err := json.Unmarshal(got.Results[0], &ids); err != nil {
+		t.Fatalf("decode ids: %v", err)
+	}
+	if want := []int64{1, 2, 4}; !sameIDs(ids, want) {
+		t.Fatalf("rows in the hidden draw = %v, want %v", ids, want)
 	}
 }
 

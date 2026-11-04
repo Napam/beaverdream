@@ -173,8 +173,11 @@ prefer simple, readable code over production hardening.
   refuses a mismatch with 409, and a mismatch anywhere reloads the page, never
   just the feed. A rules bump in `set_journal_schema` skips past every number
   stored rows carry, declared key or not. A feed loads its rows once and the
-  stream pushes every new row after that, so nothing polls. The client runtime
-  is code-owned; the model writes `reduce` and `render` only.
+  stream pushes every new row after that, so nothing polls. The feed keeps the
+  same newest `max` rows the server trims to, so a reloaded tab and a
+  long-open tab fold the same history, and it folds a burst once per frame. A
+  hidden tab renders on a timer, because it parks animation frames. The client
+  runtime is code-owned; the model writes `reduce` and `render` only.
   The log is public, so the reducer, not the server, rejects illegal rows.
 - A browser error is a turn, not a console line. `/x/err` records one `alert`
   turn per message per stretch, labelled as visitor-reported, and never

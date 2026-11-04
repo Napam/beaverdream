@@ -437,19 +437,20 @@ func IdentityDoc(name string) string {
 
 // journalKeyConfig is one key as the client runtime gets it. Rules is the
 // number this page's code was written for; the runtime holds it for the life
-// of the tab.
+// of the tab. Max is the same row window the server keeps.
 type journalKeyConfig struct {
 	Match int `json:"match"`
 	Rules int `json:"rules"`
+	Max   int `json:"max,omitempty"`
 }
 
 // journalConfig is the data the client runtime needs: who is looking, and the
-// declared journal keys with their current match and rules number. The row
-// count and recent rows the prompt uses stay out of the page.
+// declared journal keys with their current match, rules number and row limit.
+// The row count and recent rows the prompt uses stay out of the page.
 func journalConfig(site Site) []byte {
 	keys := make(map[string]journalKeyConfig, len(site.Journal))
 	for key, state := range site.Journal {
-		keys[key] = journalKeyConfig{Match: state.Match, Rules: state.Rules}
+		keys[key] = journalKeyConfig{Match: state.Match, Rules: state.Rules, Max: state.Max}
 	}
 	data, err := json.Marshal(struct {
 		Visitor string                      `json:"visitor"`

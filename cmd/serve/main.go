@@ -309,5 +309,12 @@ func openSQLite(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	// Every live stream reads on every publish, so several readers are always
+	// in flight. Go keeps two idle connections by default and opens a new one
+	// when they are busy; each new one reruns the pragmas, and closing it again
+	// costs a worker thread. Under 20 players that churn was thousands of
+	// connections a second and most of the CPU. Keep one small fixed pool.
+	dbConn.SetMaxOpenConns(16)
+	dbConn.SetMaxIdleConns(16)
 	return dbConn, nil
 }

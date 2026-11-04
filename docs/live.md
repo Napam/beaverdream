@@ -52,7 +52,9 @@ On a sync the stream reads only the topics that changed, in this order:
   batch behind or the ids rewound,
 - state: the `$shared` signal plus `bdLive.state(...)`,
 - journal: rows after the cursor through `bd._rows([...])`, or `bd._resync()`
-  after a rewind or a full 500-row batch,
+  after a rewind or a full 500-row batch. A feed keeps its key's newest `max`
+  rows, the same window the server trims to, and folds a burst once per frame.
+  A hidden tab uses a timer, since it parks animation frames.
 - busy: the spinner element, from `webmaster.BusyIndicator`.
 
 The cursor is patched last, so a stream that dies mid-sync leaves the page
@@ -192,6 +194,34 @@ reserved ids, `$shared`, and the three page events. The form example uses
 seed and every restyle keep an in-place composer. A plain form post still
 works.
 
+## Measured limits
+
+A one-off benchmark of the append path, the hub and the stream's reads
+(20 players at 60ms, 20 tabs, a 10-core M2 Pro) sets the order of what gives
+out first:
+
+- The SQLite pool. With Go's default of two idle connections, every stream
+  opening while another reads churns a connection, and each one reruns the
+  pragmas. That was 3,100 connections a second, `stateMu` held 89% of the
+  time and 4 cores. Bounding the pool to 16 open and idle took the same load
+  to 0 churn, 16% of the lock and 68% of a core, with the append median
+  falling from 37ms to 5ms.
+- Fan-out. A sync finishes before the next row arrives, so the hub rarely
+  coalesces and each row is its own push to each tab. Bounded, that is fine to
+  roughly 20,000 syncs a second (appends times tabs).
+- Bandwidth. Every tab receives every row, about 180 bytes. 20 players is
+  about 60 KB/s per tab, so 100 tabs fill a home uplink. A batch interval
+  changes pushes, not bytes.
+- The single writer. One append holds `stateMu` for roughly 400us, which is
+  fine to about 2,000 appends a second (around 120 players at 16 Hz). It takes
+  three pooled reads in a row while holding the lock, so with many tabs an
+  append can also wait for a connection. That wait is the next cost to appear
+  as tabs grow.
+
+A 50ms minimum interval between syncs is the next step, and only when appends
+times tabs passes about 20,000. It coalesces the wake, not the data: rows stay
+in SQLite and the stream reads everything after its cursor once per beat.
+
 ## Evidence in the tree
 
 - `cmd/serve/handlers/live_test.go` opens real streams and checks posts
@@ -203,7 +233,7 @@ works.
   typing wait, stale reload, posts, stylesheet, state.
 - `lib/webmaster/journal_runtime_test.go` runs the journal runtime in node or
   bun: pushed rows, held rows, failed reads, rules changes, matches, resync,
-  refusals.
+  refusals, the row window and one draw per frame.
 - `cmd/serve/handlers/admin_live_test.go` covers each page's stream and its
   patches, a held turn the stream leaves alone, the turn page, the remembered
   login, the origin gate, the host split, signing out, and an action that

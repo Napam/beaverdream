@@ -363,18 +363,20 @@ func TestJournalSchemaSkipsStoredRules(t *testing.T) {
 	}
 }
 
-// The page config carries only what the runtime reads: match and rules.
+// The page config carries only what the runtime reads: match, rules and the
+// row window.
 func TestJournalConfigLeavesOutPromptData(t *testing.T) {
 	data := string(journalConfig(Site{
 		Visitor: "0123456789abcdef",
 		Journal: map[string]JournalState{"moves": {
 			Match: 2,
 			Rules: 3,
+			Max:   300,
 			Rows:  9,
 			Last:  []JournalTailRow{{ID: 1, Payload: json.RawMessage(`{"secret":1}`)}},
 		}},
 	}))
-	want := `{"visitor":"0123456789abcdef","keys":{"moves":{"match":2,"rules":3}}}`
+	want := `{"visitor":"0123456789abcdef","keys":{"moves":{"match":2,"rules":3,"max":300}}}`
 	if data != want {
 		t.Fatalf("config = %s, want %s", data, want)
 	}

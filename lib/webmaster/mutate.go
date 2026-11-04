@@ -562,7 +562,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			Name: "set_journal_schema",
 			Description: openai.String(
 				"Declare the append-only event logs the page writes and folds. " +
-					"One key is one feed: a game's moves, a chat, votes, a guestbook.",
+					"One key is one feed: a game's moves, a chat, votes, a guestbook. " +
+					"Send every key you keep: a key left out is removed and its rows are lost.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -577,14 +578,18 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 									"description": "Lowercase letters, digits, _ or -. Also put this string in the page.",
 								},
 								"max": map[string]any{
-									"type":        "integer",
-									"description": "Rows to keep, newest wins. Default 300, max 1000.",
+									"type": "integer",
+									"description": "Rows this key keeps across all matches; older rows " +
+										"are deleted for everyone. Omit to keep the current value; a " +
+										"new key starts at 300, max 1000. At 16 updates a second " +
+										"from 5 players, 300 rows is 4 seconds.",
 								},
 								"rules": map[string]any{
 									"type": "integer",
-									"description": "Bump this when you change reduce(). " +
-										"Rows written under older rules are ignored, so a rules " +
-										"change does not replay old moves through new code.",
+									"description": "Omit to keep the current number. Raise it only " +
+										"when old rows would mean something different to the new " +
+										"reduce(); a style or render change keeps it. Rows under " +
+										"older rules are ignored.",
 								},
 							},
 							"required": []string{"name"},
@@ -798,41 +803,76 @@ const journalPrompt = `The journal:
   illegal or nonsense, so a bad row changes nothing for anyone.
 - Declare keys with set_journal_schema, and open each one in a page script
   with bd.journal("KEY"). A done call whose page no longer calls bd.journal
-  for a declared key is rejected, because the rows behind it would be
+  for a declared key is sent back once, because the rows behind it would be
   unreachable.
-- Bump rules when you change reduce(). Rows written under an older rules number
-  are ignored, so a rules change starts a clean board instead of replaying old
-  moves through new code. Open tabs still running the old code reload
-  themselves, and the server refuses their writes until they do. A bump skips
-  past any rules number stored rows already carry; the tool result says so.
-- The runtime is code-owned. Your page writes only reduce and render:
+- Raise rules only when old rows would mean something different to the new
+  reduce(); a style or render change does not. Omit rules to keep the current
+  number. Rows written under an older rules number are ignored, so a bump
+  starts a clean board instead of replaying old moves through new code. Open
+  tabs still running the old code reload themselves, and the server refuses
+  their writes until they do. A bump skips past any rules number stored rows
+  already carry; the tool result says so.
+- Each key keeps only its newest max rows, and older rows are deleted for
+  everyone. At 16 updates a second from 5 players, 300 rows is 4 seconds. Split
+  a fast key from a slow one: motion in a key with a small max, and anything
+  that must last (seats, scores, chat) in its own key that is written rarely.
+  A tally that must last belongs in a shared state counter, not the journal.
+- The runtime is code-owned. Your page writes only reduce and render. This is
+  the shape for a game with slow seats and fast motion:
 
 <script>
-var feed = bd.journal("taps")
-feed.start(
-  function (rows) {
-    var total = 0
-    for (var i = 0; i < rows.length; i++) total += rows[i].payload.n || 1
-    return total
-  },
-  function (total) { document.getElementById("taps").textContent = total }
-)
-document.getElementById("tap").onclick = function () { feed.append({ n: 1 }) }
+var seats = bd.journal("seats")   // joins and scores: slow, max 300
+var moves = bd.journal("moves")   // positions: fast, max 200
+var players = {}, pos = {}
+seats.start(function (rows) {
+  var s = {}
+  for (var i = 0; i < rows.length; i++) {
+    var c = rows[i].payload.color
+    if (typeof c === 'string') s[rows[i].visitor] = c   // the referee
+  }
+  return s
+}, function (s) { players = s })
+moves.start(function (rows) {
+  var p = {}
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i]
+    var x = Number(r.payload.x), y = Number(r.payload.y)
+    if (isFinite(x) && isFinite(y)) p[r.visitor] = { x: x, y: y }  // the referee
+  }
+  return p
+}, function (p) { pos = p })
+setInterval(function () {          // a local send timer, not a network poll
+  moves.append({ x: me.x, y: me.y })
+}, 60)
+function frame() { draw(pos, players); requestAnimationFrame(frame) }
+requestAnimationFrame(frame)
 </script>
 
+  me and draw stand for your own local player and your canvas code.
 - bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
   once; after that the server pushes every new row as it is written, so each
-  open page redraws within a moment. reduce(rows) returns any state you like and render(state,
-  feed) draws it. feed.append(payload) writes one row; feed.newMatch(payload)
-  opens the next match. Both resolve with the stored row, or with null when
-  the server refused it (someone opened the next match first, or the visitor
-  clicks too fast). They never throw for that, so no catch is needed. A row
-  is {id, key, visitor, payload, match, rules, at}. The payload must be a JSON
-  object of at most 600 bytes.
+  open page redraws within a moment. reduce(rows) gets the rows of the current
+  match under the current rules, oldest first, plus your own row once append
+  resolves. It returns any state you like and render(state, feed) draws it.
+  Keep render cheap: it runs when rows arrive. It runs on the next frame, and
+  a hidden tab renders on a timer, so a title or sound set there still fires.
+  For animation, let render store the state and draw from a
+  requestAnimationFrame loop, easing other players toward their newest
+  position.
+  feed.append(payload) writes one row; feed.newMatch(payload) opens the next
+  match. Both resolve with the stored row, or with null when the server refused
+  it (someone opened the next match first, or the visitor clicks too fast).
+  They never throw for that, so no catch is needed. A row is {id, key, visitor,
+  payload, match, rules, at}. The payload must be a JSON object of at most 600
+  bytes.
   Writes are metered per visitor and per key: about 20 a second, after a short
-  burst. For motion, send an update every 60ms or so and interpolate other
-  players between updates; sending every frame just drops rows.
+  burst. Each key has its own allowance, so a click on another key is not
+  dropped by a 60ms motion loop on this one. For motion, send an update every
+  60ms or so and interpolate other players between updates; sending every frame
+  just drops rows.
   bd.visitor is the viewer's opaque id: use it for seats and for "your turn".
+  row.visitor is set by the server and cannot be faked; on your own rows it
+  equals bd.visitor. Trust it for seats, never a player id in the payload.
 - When your script throws, a reduce fails or the server rejects a payload, the
   server writes you a log line from the page's browser with the message. Only
   the current page reports; errors from replaced pages are dropped. Fix what

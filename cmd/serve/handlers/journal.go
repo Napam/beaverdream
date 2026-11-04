@@ -423,7 +423,7 @@ func (h *Handlers) journalState(
 		if rules <= 0 {
 			rules = 1
 		}
-		site := webmaster.JournalState{Match: 1, Rules: rules}
+		site := webmaster.JournalState{Match: 1, Rules: rules, Max: def.Max}
 		if latest, err := h.queries.JournalLatest(ctx, key); err == nil {
 			if latest.CurrentMatch > 0 {
 				site.Match = int(latest.CurrentMatch)

@@ -31,6 +31,7 @@ type JournalKey struct {
 type JournalState struct {
 	Match int
 	Rules int
+	Max   int
 	Rows  int
 	Last  []JournalTailRow
 }
@@ -217,6 +218,18 @@ const JournalRuntime = `<script>
   var keys = conf.keys || {}
   var cache = Object.create(null)
 
+  // A burst of rows must not re-reduce the whole feed for every row, so a
+  // draw is deferred to the next frame. A hidden tab parks
+  // requestAnimationFrame, so it gets a timer there and still renders titles
+  // and sounds.
+  var nextFrame = window.requestAnimationFrame || function (fn) {
+    return setTimeout(fn, 16)
+  }
+  function schedule(fn) {
+    if (document.hidden) return setTimeout(fn, 16)
+    return nextFrame(fn)
+  }
+
   // The version tells the server which page threw. An error from a page that
   // has since been replaced is about code nobody is served any more.
   function report(message) {
@@ -256,6 +269,7 @@ const JournalRuntime = `<script>
     this.key = key
     this.match = def.match || 1
     this.rules = def.rules || 1
+    this.max = def.max || 0
     this.rows = []
     this.seen = {}
     this.reduce = null
@@ -267,6 +281,8 @@ const JournalRuntime = `<script>
     this.loaded = false
     // held collects pushed rows while a read is out. null means no read is.
     this.held = null
+    // pending is true while a draw waits for the next frame.
+    this.pending = false
     this.stale = false
   }
 
@@ -282,7 +298,8 @@ const JournalRuntime = `<script>
     document.dispatchEvent(new CustomEvent('beaverdream:stale', { detail: { key: this.key } }))
   }
 
-  // add merges rows without ever repeating one, and keeps them in id order.
+  // add merges rows without ever repeating one, keeps them in id order, and
+  // trims to max, the same window the server keeps.
   Journal.prototype.add = function (rows) {
     var changed = false
     for (var i = 0; i < rows.length; i++) {
@@ -296,12 +313,33 @@ const JournalRuntime = `<script>
     }
     if (changed) {
       this.rows.sort(function (a, b) { return a.id - b.id })
+      this.trim()
     }
     return changed
   }
 
+  // trim keeps only the newest max rows, so a long-open tab folds the same
+  // history a reloaded one gets. A late echo of a dropped row sorts to the
+  // front and falls off again here.
+  Journal.prototype.trim = function () {
+    if (this.max <= 0 || this.rows.length <= this.max) return
+    var drop = this.rows.splice(0, this.rows.length - this.max)
+    for (var i = 0; i < drop.length; i++) delete this.seen[drop[i].id]
+  }
+
+  // draw schedules one reduce and render for the next frame, so a burst of
+  // rows costs one draw instead of one per row.
   Journal.prototype.draw = function () {
-    if (!this.render) return
+    if (!this.render || this.pending) return
+    var self = this
+    this.pending = true
+    schedule(function () {
+      self.pending = false
+      self.paint()
+    })
+  }
+
+  Journal.prototype.paint = function () {
     var state
     try {
       state = this.reduce ? this.reduce(this.rows) : this.rows

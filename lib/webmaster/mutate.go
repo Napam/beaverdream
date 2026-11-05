@@ -1203,7 +1203,8 @@ func (b *promptBuilder) close() {
 // new message the model has to answer. The history comes first because it only
 // grows at the end, so a provider can cache everything up to the end of the
 // log. The notes, the page and the new post can change every turn, so they
-// come after it.
+// come after it. The controls reference follows the new post on turns that
+// may build a world, so it never shifts the cached prefix.
 func userPrompt(site Site, room Room, triggers []Post) string {
 	prompt, _ := userPromptSections(site, room, triggers)
 	return prompt
@@ -1274,6 +1275,12 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 			fmt.Fprintf(&b.Builder, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
 		}
 		b.WriteString("The posters are looking at their own posts.\n")
+	}
+
+	if wantsControls(site, triggers) {
+		b.WriteString("\n")
+		b.section("controls")
+		b.WriteString(controlsReference)
 	}
 
 	b.close()

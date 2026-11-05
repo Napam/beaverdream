@@ -72,6 +72,10 @@ prefer simple, readable code over production hardening.
   `CompactAfterTurns` turns, so its start never slides before compaction.
 - The user prompt is ordered for the prompt cache: compacted history, room
   log, then the notes, the page and the new post, which change every turn.
+  The controls reference comes last, after the new post, and only when
+  `wantsControls` finds a post that asks for a world or a page that already
+  moves something with keys, so it never shifts the cached prefix. Go picks
+  only whether it is sent; the model picks the genre.
   The system prompt is one static string and includes `BaseCSS` and a sample
   post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo and restore

@@ -812,6 +812,31 @@ func triggerLabel(row TurnRow) string {
 	return "post"
 }
 
+// turnError is the reason a turn failed, or "" for any other turn.
+func turnError(row TurnRow) string {
+	if row.Run.Status != "error" {
+		return ""
+	}
+	return row.Run.ErrorText
+}
+
+// turnText is the list row's text. A failed turn shows its error, since that
+// is what the admin scans for; the trigger stays in the tooltip.
+func turnText(row TurnRow) string {
+	if failure := turnError(row); failure != "" {
+		return failure
+	}
+	return row.Trigger
+}
+
+// turnTextTone colors the list row's text red when it is an error.
+func turnTextTone(row TurnRow) string {
+	if turnError(row) != "" {
+		return "text-red-700 dark:text-red-400"
+	}
+	return "text-gray-900 dark:text-neutral-100"
+}
+
 // statusLabel is the status as the admin reads it. The stored value for a turn
 // that never called done is "silent", which sounds chosen; it is unfinished.
 func statusLabel(status string) string {
@@ -834,6 +859,12 @@ func turnTitle(row TurnRow) string {
 		row.Rounds)
 	if reply := strings.TrimSpace(row.Run.Said); reply != "" {
 		title += "\nreply: " + reply
+	}
+	if failure := turnError(row); failure != "" {
+		if row.Trigger != "" {
+			title += "\n" + triggerLabel(row) + ": " + row.Trigger
+		}
+		title += "\nerror: " + failure
 	}
 	return title
 }

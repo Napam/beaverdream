@@ -157,6 +157,29 @@ func TestNewTurnRowSumsRounds(t *testing.T) {
 
 // The trigger box is named for what started the turn, and a turn that never
 // called done reads as unfinished.
+// A failed turn shows its error on the list row, and keeps the trigger in the
+// tooltip, since the row has one text column.
+func TestErroredTurnShowsItsError(t *testing.T) {
+	run, messages := storedTurn()
+	run.Status = "error"
+	run.ErrorText = "model timed out"
+	row := NewTurnRow(run, messages)
+	if got := turnText(row); got != "model timed out" {
+		t.Errorf("row text = %q, want the error", got)
+	}
+	title := turnTitle(row)
+	for _, want := range []string{"post: " + row.Trigger, "error: model timed out"} {
+		if !strings.Contains(title, want) {
+			t.Errorf("title = %q, want %q", title, want)
+		}
+	}
+	run.Status = "changed"
+	row = NewTurnRow(run, messages)
+	if got := turnText(row); got != row.Trigger {
+		t.Errorf("a changed turn's row text = %q, want the trigger %q", got, row.Trigger)
+	}
+}
+
 func TestTriggerAndStatusLabels(t *testing.T) {
 	run, messages := storedTurn()
 	row := NewTurnRow(run, messages)

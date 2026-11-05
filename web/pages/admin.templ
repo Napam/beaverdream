@@ -698,7 +698,7 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
 								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">#{ i64(row.Run.ID) }</span>
 								<span class="justify-self-start">@statusBadge(row.Run.Status)</span>
 								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ turnAuthor(row) }</span>
-								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(row.Trigger)) }</span>
+								<span class={ "truncate " + turnTextTone(row) }>{ dash(oneLine(turnText(row))) }</span>
 								<span class="truncate font-mono text-[11px] text-gray-400 dark:text-neutral-500">
 									if row.Run.VersionID.Valid {
 										v{ i64(row.Run.VersionID.Int64) }

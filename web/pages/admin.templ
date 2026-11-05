@@ -1214,7 +1214,7 @@ templ callBlock(call CallView) {
 			}
 		}
 		if call.Result != "" {
-			<pre class={ "rounded-md px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words " + callResultTone(call) }>{ "→ " + call.Result }</pre>
+			<pre class={ "max-h-96 overflow-auto rounded-md px-3 py-2 font-mono text-xs whitespace-pre-wrap break-words " + callResultTone(call) }>{ "→ " + call.Result }</pre>
 		}
 	</div>
 }

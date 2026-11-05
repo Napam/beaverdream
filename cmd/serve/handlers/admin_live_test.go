@@ -823,3 +823,24 @@ func TestAdminLiveHoldsARunningTurn(t *testing.T) {
 	live.next(t, []string{`id="admin-turn"`, "h1{color:red}"}, "in flight")
 	live.quiet(t, "in flight", 200*time.Millisecond)
 }
+
+// An admin instruction waiting behind a running turn shows as its own queued
+// row, and the form sends on Enter and clears the field.
+func TestAdminTurnsShowsAWaitingInstruction(t *testing.T) {
+	h, _ := setup(t)
+	h.HoldInstruction("make it pink")
+
+	body := getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	for _, want := range []string{">next<", "make it pink", "1 queued"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the waiting instruction is missing %q", want)
+		}
+	}
+
+	overview := getAdmin(t, h.Admin, "/admin").Body.String()
+	for _, want := range []string{"requestSubmit()", "elements.instruction.value"} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("the instruction form is missing %q", want)
+		}
+	}
+}

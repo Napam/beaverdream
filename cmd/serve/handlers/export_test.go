@@ -39,3 +39,7 @@ func (h *Handlers) HoldPost(post sqlc.Post) {
 	h.pending = append(h.pending, post)
 	h.liveMu.Unlock()
 }
+
+// HoldInstruction shows an admin instruction as waiting for a turn, the way a
+// real one does while it waits for the mutation lock.
+func (h *Handlers) HoldInstruction(text string) { h.addWaiting(text) }

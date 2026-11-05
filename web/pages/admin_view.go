@@ -55,13 +55,20 @@ func NewTurnRow(run sqlc.ListWebmasterTurnsRow, messages []webmaster.Message) Tu
 	return row
 }
 
-// QueueView is the batch of posts waiting for the next turn. The worker
-// coalesces a burst into one turn, so the list shows it as one queued row.
+// QueueView is what waits for a turn: the batch of posts, which the worker
+// coalesces into one turn and the list shows as one queued row, and the admin
+// instructions, which each get their own row.
 type QueueView struct {
-	Posts   int
-	Authors string
-	Text    string
-	Title   string
+	Posts        int
+	Authors      string
+	Text         string
+	Title        string
+	Instructions []string
+}
+
+// Count is how many posts and instructions are waiting.
+func (q QueueView) Count() int {
+	return q.Posts + len(q.Instructions)
 }
 
 // queueTitleRunes caps the tooltip, since the visible row is one line and a
@@ -70,11 +77,11 @@ const queueTitleRunes = 500
 
 // NewQueue lays the pending posts out the way a turn row reads: who posted,
 // what the batch says, and a count when more than one post is waiting.
-func NewQueue(posts []sqlc.Post) QueueView {
+func NewQueue(posts []sqlc.Post, instructions []string) QueueView {
 	if len(posts) == 0 {
-		return QueueView{}
+		return QueueView{Instructions: instructions}
 	}
-	view := QueueView{Posts: len(posts)}
+	view := QueueView{Posts: len(posts), Instructions: instructions}
 	seen := make(map[string]bool, len(posts))
 	authors := make([]string, 0, len(posts))
 	title := make([]string, 0, len(posts))
@@ -104,7 +111,7 @@ func NewQueue(posts []sqlc.Post) QueueView {
 }
 
 // historyCount is the turns table's subtitle: the stored turns, plus the
-// posts waiting for the next one.
+// queued rows waiting for a turn.
 func historyCount(turns, queued int) string {
 	count := plural(turns, "turn")
 	if queued > 0 {

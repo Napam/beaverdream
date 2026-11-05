@@ -407,7 +407,7 @@ templ sitePage(view AdminView) {
 templ adminInstruct(csrf string) {
 	<section class={ adminCard }>
 		<p class={ adminLabel }>talk to the webmaster</p>
-		<form method="post" action="/admin/mutate" class="mt-2 flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'})" data-indicator:_sending>
+		<form method="post" action="/admin/mutate" class="mt-2 flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" data-indicator:_sending>
 			@csrfInput(csrf)
 			<textarea
 				name="instruction"
@@ -415,6 +415,7 @@ templ adminInstruct(csrf string) {
 				required
 				maxlength="2000"
 				placeholder="make it look like a 1998 guestbook"
+				data-on:keydown="if (evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) { evt.preventDefault(); evt.target.form.requestSubmit() }"
 				class={ adminInput }
 			></textarea>
 			<div class="flex items-center justify-between gap-4">
@@ -638,9 +639,9 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
 	<section id="admin-history" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
 			<p class={ adminLabel }>turns</p>
-			<p class={ adminMuted }>{ historyCount(len(turns), queue.Posts) }</p>
+			<p class={ adminMuted }>{ historyCount(len(turns), queue.Count()) }</p>
 		</div>
-		if len(turns) == 0 && queue.Posts == 0 {
+		if len(turns) == 0 && queue.Count() == 0 {
 			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
 		} else {
 			<div class="max-h-80 overflow-y-auto">
@@ -664,6 +665,22 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
 								<span class="justify-self-start">@statusBadge("queued")</span>
 								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(queue.Authors) }</span>
 								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(queue.Text)) }</span>
+								<span></span>
+								<span></span>
+								<span></span>
+							</div>
+						</li>
+					}
+					for _, text := range queue.Instructions {
+						<li>
+							<div
+								title={ text }
+								class={ historyGrid + " border-l-2 border-transparent px-3 py-1.5 text-sm" }
+							>
+								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">next</span>
+								<span class="justify-self-start">@statusBadge("queued")</span>
+								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">admin</span>
+								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(text)) }</span>
 								<span></span>
 								<span></span>
 								<span></span>

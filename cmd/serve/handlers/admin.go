@@ -230,7 +230,7 @@ func (h *Handlers) loadAdmin(
 		}
 		view.Turns = turns
 		view.Turn = detail
-		view.Queue = pages.NewQueue(h.queuedPosts())
+		view.Queue = pages.NewQueue(h.queuedWork())
 		if live {
 			view.Run = run
 			view.Panel.Live = true

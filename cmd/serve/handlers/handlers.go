@@ -117,9 +117,12 @@ type Handlers struct {
 
 	// The worker coalesces posts that arrive while a mutation is running, so
 	// a burst becomes one rewrite instead of a queue of them.
-	liveMu        sync.Mutex
-	version       int64
-	pending       []sqlc.Post
+	liveMu  sync.Mutex
+	version int64
+	pending []sqlc.Post
+	// waiting holds the admin instructions that have been sent and are
+	// waiting for the mutation lock, so the panel can show them queued.
+	waiting       []string
 	running       *runState
 	lastError     string
 	lastRewriteAt map[string]time.Time
@@ -326,9 +329,36 @@ func (h *Handlers) mutateBatch(
 	instruction string,
 	triggers []sqlc.Post,
 ) (webmaster.Result, error) {
+	if kind == "admin" {
+		h.addWaiting(instruction)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if kind == "admin" {
+		h.removeWaiting(instruction)
+	}
 	return h.mutateLocked(ctx, kind, instruction, triggers)
+}
+
+// addWaiting and removeWaiting show an admin instruction as queued while it
+// waits for the mutation lock behind a running turn.
+func (h *Handlers) addWaiting(instruction string) {
+	h.liveMu.Lock()
+	h.waiting = append(h.waiting, instruction)
+	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
+}
+
+func (h *Handlers) removeWaiting(instruction string) {
+	h.liveMu.Lock()
+	for i, text := range h.waiting {
+		if text == instruction {
+			h.waiting = append(h.waiting[:i], h.waiting[i+1:]...)
+			break
+		}
+	}
+	h.liveMu.Unlock()
+	h.hub.publish(topicBusy)
 }
 
 // mutateLocked runs one mutation with h.mu held. A caller that has to read the
@@ -1294,15 +1324,16 @@ func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
 		copied := *h.running
 		running = &copied
 	}
-	return h.version, len(h.pending), running, h.lastError
+	return h.version, len(h.pending) + len(h.waiting), running, h.lastError
 }
 
-// queuedPosts copies the posts waiting for the next turn, so a page can show
-// the batch without holding the lock while it renders.
-func (h *Handlers) queuedPosts() []sqlc.Post {
+// queuedWork copies the posts waiting for the next turn and the admin
+// instructions waiting behind the running one, so a page can show them
+// without holding the lock while it renders.
+func (h *Handlers) queuedWork() ([]sqlc.Post, []string) {
 	h.liveMu.Lock()
 	defer h.liveMu.Unlock()
-	return append([]sqlc.Post(nil), h.pending...)
+	return append([]sqlc.Post(nil), h.pending...), append([]string(nil), h.waiting...)
 }
 
 // runProgress is the live turn for the inspector, or nil when nothing runs.

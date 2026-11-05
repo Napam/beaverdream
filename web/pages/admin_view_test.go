@@ -83,7 +83,7 @@ func TestNewQueueNamesTheBatch(t *testing.T) {
 		{Author: "kit", Body: "second"},
 		{Author: "dave", Body: "third"},
 		{Author: "", Body: "anonymous"},
-	})
+	}, nil)
 	if view.Posts != 4 {
 		t.Errorf("posts = %d, want 4", view.Posts)
 	}
@@ -100,8 +100,22 @@ func TestNewQueueNamesTheBatch(t *testing.T) {
 			t.Errorf("title is missing %q", want)
 		}
 	}
-	if empty := NewQueue(nil); empty.Posts != 0 {
+	if empty := NewQueue(nil, nil); empty.Posts != 0 {
 		t.Errorf("an empty queue has %d posts", empty.Posts)
+	}
+}
+
+// An admin instruction waiting behind a running turn is its own queued row.
+func TestNewQueueCountsInstructionsSeparately(t *testing.T) {
+	view := NewQueue(
+		[]sqlc.Post{{Author: "dave", Body: "hi"}},
+		[]string{"make it pink", "undo that"},
+	)
+	if got := view.Count(); got != 3 {
+		t.Errorf("count = %d, want one post plus two instructions", got)
+	}
+	if got := NewQueue(nil, []string{"x"}).Count(); got != 1 {
+		t.Errorf("instruction-only count = %d, want 1", got)
 	}
 }
 

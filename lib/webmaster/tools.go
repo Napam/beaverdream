@@ -8,30 +8,6 @@ import (
 	"unicode"
 )
 
-// The size caps exist to stop a runaway write, not to keep the page small. A
-// page with a game in it passes 20k bytes, so the cap leaves room for the
-// page to keep growing before a whole rewrite is refused.
-const (
-	maxCSSLen     = 64000
-	maxHTMLLen    = 192000
-	maxStateKeys  = 8
-	maxStateName  = 32
-	maxStateList  = 100
-	maxStateOpts  = 10
-	maxStateValue = 200
-	// maxReasonLen is the longest done reason kept. The done tool says so, so
-	// the model fits its sentence instead of being cut off.
-	maxReasonLen   = 200
-	minStateOpts   = 2
-	defaultListMax = 20
-	maxNotesLen    = 1000
-)
-
-// providerToolMarkup is DeepSeek's native tool-call delimiter, U+FF5C on each
-// side of DSML. A provider can leak it into the arguments; no call has a
-// reason to carry it, and applying it would put the markup in the page.
-const providerToolMarkup = "\uff5cDSML\uff5c"
-
 // StateKey is one model-declared shared value. Op decides how a visitor may
 // change it; the handler owns the actual application.
 type StateKey struct {
@@ -221,12 +197,6 @@ func (e *editor) apply(name, arguments string) string {
 
 	return fmt.Sprintf("rejected: unknown tool %q", name)
 }
-
-// The two fields the model writes, as edit targets.
-const (
-	targetCSS  = "css"
-	targetHTML = "html"
-)
 
 // edit changes part of one field of the shared page. The result goes through
 // the same cleaning as a whole-field write, so an edit cannot produce a page

@@ -12,19 +12,6 @@ import (
 // The summarizer is the only extra model call the board makes. It runs once
 // per chunk of old turns, never per mutation, and it writes prose only. The
 // page stays the artifact; this is the webmaster's memory of it.
-//
-// A summary folds up to a chunk of 1000 turns, and one compaction can follow a
-// transcript of 128k tokens. 6000 characters (about 1500 tokens) is room for
-// the promises, grudges and running jokes of that much conversation, and still
-// small next to the page and the log that follow it. The cap applies to the
-// text stored per row, and each chained summary starts from the previous one,
-// so the memory never grows past it: older detail fades by design.
-// summaryMaxTokens leaves headroom over the character cap.
-const (
-	summaryMaxTokens = 2000
-	summaryMaxLen    = 6000
-)
-
 const summarySystemText = `You are the memory of the webmaster of beaverdream, a
 small anonymous message board. The webmaster has no text channel: it answers
 by rewriting the page. Summarize a stretch of the room so it can continue the

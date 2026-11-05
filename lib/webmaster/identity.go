@@ -5,9 +5,6 @@ import (
 	"unicode"
 )
 
-// MaxIdentityLen caps a display name in runes.
-const MaxIdentityLen = 32
-
 // CleanIdentity keeps a display name to letters, digits, spaces and a few
 // harmless punctuation marks, collapses runs of whitespace, and caps the
 // result. The handlers run every cookie value through it, so a name on a post

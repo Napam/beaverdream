@@ -20,22 +20,6 @@ type Turn struct {
 	VersionID int64
 }
 
-// Turn kinds. Posts and webmaster turns alternate; the rest are events the
-// server writes so the webmaster's memory matches the page.
-const (
-	TurnPost      = "post"
-	TurnWebmaster = "webmaster"
-	TurnHeal      = "heal"
-	TurnUndo      = "undo"
-	TurnRestore   = "restore"
-	// TurnJournal is the admin clearing one journal key. The page's data
-	// changed under the webmaster, so the room log says so.
-	TurnJournal = "journal"
-	// TurnAlert is a browser error the page reported about itself, so the
-	// webmaster can see that its own script broke.
-	TurnAlert = "alert"
-)
-
 // Room is the conversation the webmaster reads before it answers again.
 // Summary is the compacted history: one message standing in for everything
 // older than Log. Notes are its own private memory, carried forward
@@ -45,11 +29,6 @@ type Room struct {
 	Log     []Turn
 	Notes   string
 }
-
-// roomLogBudget bounds the room log in runes. It matches the 128k-token
-// compaction threshold at four runes per token. The oldest lines are dropped
-// first: the newest conversation is what the next turn has to continue.
-const roomLogBudget = 512_000
 
 // RenderLog writes the room as plain text. Nothing here is markup: the page
 // stays in the CURRENT sections, and full tool calls stay in the admin view.

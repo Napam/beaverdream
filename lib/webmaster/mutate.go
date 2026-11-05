@@ -14,26 +14,6 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// maxOutputTokens caps a single completion. Reasoning models count their
-// thinking against this cap, so a small one can leave no room for the tool
-// call and the turn ends silent with finish_reason "length". A page or a
-// stylesheet needs much less, and an unused cap costs nothing.
-const maxOutputTokens = 131072
-
-// maxBrokenArgumentRounds stops a provider that answers round after round
-// with tool calls whose arguments are not JSON. Such a round is not a wrong
-// edit the model can see and fix: the call arrived as raw tool markup.
-const maxBrokenArgumentRounds = 5
-
-// maxStallStreak ends a turn whose rounds keep stalling or ending without a
-// finish reason, one after another. A stall is the provider's fault, so the
-// turn stops with an error and the page stays as it was.
-const maxStallStreak = 3
-
-// defaultStallPause is the wait before a stalled round is sent again, plus up
-// to as much again in jitter, so a retry is not a hammer.
-const defaultStallPause = 2 * time.Second
-
 // Mutator asks the model to rewrite the site.
 type Mutator struct {
 	client    openai.Client

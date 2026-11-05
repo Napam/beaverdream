@@ -76,6 +76,14 @@ func TestJournalPromptQuotesTheConstants(t *testing.T) {
 	}
 }
 
+// The runtime harness runs exampleMotion in place of the example. The block
+// must appear in the prompt whole and in order, so the copy cannot drift.
+func TestJournalPromptHasTheExampleMotion(t *testing.T) {
+	if !strings.Contains(systemPrompt(), exampleMotion) {
+		t.Error("prompt does not contain the example motion block the harness runs")
+	}
+}
+
 func TestCleanJournalSchemaRejects(t *testing.T) {
 	cases := map[string][]journalKeyInput{
 		"bad name":   {{Name: "Moves!"}},

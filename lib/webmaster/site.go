@@ -272,7 +272,11 @@ const liveScript = `<script>
   var reloading = false
   var restored = false
 
-  document.addEventListener('input', function () { typingAt = Date.now() }, true)
+  // Keys and input both count as typing. Capture sees them even when a page
+  // script stops propagation.
+  function markTyping() { typingAt = Date.now() }
+  document.addEventListener('input', markTyping, true)
+  document.addEventListener('keydown', markTyping, true)
   // The journal runtime sends this when the server has journal rules this
   // page's code was not written for. Only a fresh page has the right code.
   document.addEventListener('beaverdream:stale', function () {

@@ -545,3 +545,75 @@ func TestHealKeepsTheJournalWhenTheWriteFails(t *testing.T) {
 		t.Fatalf("journal rows after a heal = %d (%v), want 0", count, err)
 	}
 }
+
+// A read between an append and its trim sees one row over the limit. The first
+// load must keep the newest rows, in ascending order.
+func TestJournalFirstReadKeepsNewestRows(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+	declareJournal(t, queries, `{"moves":{"max":1000,"rules":1}}`)
+
+	// One statement with no trim, so 1001 rows sit under the key.
+	if err := h.ExecForTest(ctx, `
+		WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001)
+		INSERT INTO journal (key, visitor, payload, match, rules)
+		SELECT 'moves', 'seed', '{"n":' || i || '}', 1, 1 FROM n`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	if count, err := queries.CountJournal(ctx); err != nil || count != 1001 {
+		t.Fatalf("rows = %d (%v), want 1001 before the read", count, err)
+	}
+
+	out, rec := readJournal(t, h.JournalRead, "moves", 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d", rec.Code)
+	}
+	if len(out.Rows) != 1000 {
+		t.Fatalf("rows = %d, want 1000", len(out.Rows))
+	}
+	first, last := out.Rows[0], out.Rows[len(out.Rows)-1]
+	if string(first.Payload) != `{"n":2}` || string(last.Payload) != `{"n":1001}` {
+		t.Errorf("rows run from %s to %s, want n 2 to n 1001", first.Payload, last.Payload)
+	}
+	for i := 1; i < len(out.Rows); i++ {
+		if out.Rows[i].ID <= out.Rows[i-1].ID {
+			t.Fatalf("row %d (id %d) is not after row %d (id %d)",
+				i, out.Rows[i].ID, i-1, out.Rows[i-1].ID)
+		}
+	}
+}
+
+// A cursor read returns the rows after the cursor in ascending order, so the
+// page can keep the last id it received as its cursor.
+func TestJournalCursorReadStaysAscending(t *testing.T) {
+	h, queries := setup(t)
+	declareJournal(t, queries, `{"moves":{"max":10,"rules":1}}`)
+
+	for _, payload := range []string{`{"n":1}`, `{"n":2}`, `{"n":3}`} {
+		if rec := appendJournal(
+			t,
+			h.JournalAppend,
+			"moves",
+			payload,
+			0,
+			visitorA,
+		); rec.Code != http.StatusOK {
+			t.Fatalf("append = %d", rec.Code)
+		}
+	}
+
+	all, _ := readJournal(t, h.JournalRead, "moves", 0)
+	if len(all.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(all.Rows))
+	}
+	out, rec := readJournal(t, h.JournalRead, "moves", all.Rows[0].ID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d", rec.Code)
+	}
+	if len(out.Rows) != 2 {
+		t.Fatalf("rows after the cursor = %d, want 2", len(out.Rows))
+	}
+	if string(out.Rows[0].Payload) != `{"n":2}` || string(out.Rows[1].Payload) != `{"n":3}` {
+		t.Errorf("rows = %s then %s, want n 2 then n 3", out.Rows[0].Payload, out.Rows[1].Payload)
+	}
+}

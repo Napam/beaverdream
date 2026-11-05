@@ -210,10 +210,11 @@ const JournalMatchClosed = "that match is not open"
 // append-and-fold runtime the model's page script calls. It owns the feed,
 // seat identity and error reporting. The model only writes reduce and render.
 //
-// A feed reads its rows once when it starts. After that the page's live
-// stream pushes every new row through bd._rows, so there is no poll. Rows that
-// arrive while a read is out are held and merged when it lands, so a row
-// written between the read and the push is never lost.
+// A feed reads its rows once. The runtime starts that read at load and
+// start() takes it. After that the page's live stream pushes every new row
+// through bd._rows, so there is no poll. Rows that arrive while a read is out
+// are held and merged when it lands, so a row written between the read and
+// the push is never lost.
 //
 // The rules number in the config is the one the page's code was written for,
 // and it never changes in this tab. Every append carries it. When the server
@@ -295,6 +296,8 @@ const JournalRuntime = `<script>
     // has no history to fold onto, so it starts the read again and waits in
     // held for it.
     this.loaded = false
+    // retried is true once a failed first read has been retried.
+    this.retried = false
     // held collects pushed rows while a read is out. null means no read is.
     this.held = null
     // pending is true while a draw waits for the next frame.
@@ -401,14 +404,15 @@ const JournalRuntime = `<script>
 
   // load reads the whole feed. The rules number is not taken from the reply:
   // a different one expires the page instead. A failed read leaves the board
-  // as it was, so a server hiccup never draws an empty game, and a feed that
-  // never loaded tries again on the next push. Only one read is out at a
-  // time; rows pushed meanwhile wait in held.
-  Journal.prototype.load = function () {
+  // as it was, so a server hiccup never draws an empty game. A feed that
+  // never loaded tries once more after a second, then on the next push. Only
+  // one read is out at a time; rows pushed meanwhile wait in held. preloaded
+  // is a read the runtime already sent; without one, load sends a new read.
+  Journal.prototype.load = function (preloaded) {
     var self = this
     if (self.stale || self.held) return Promise.resolve()
     self.held = []
-    return read(self.key).then(function (d) {
+    return (preloaded || read(self.key)).then(function (d) {
       var held = self.held
       self.held = null
       if (d.rules !== self.rules) {
@@ -428,6 +432,13 @@ const JournalRuntime = `<script>
       // Before the first read lands, held rows would fold onto nothing. The
       // next push asks for the whole feed again.
       if (held.length && self.loaded) self.receive(held)
+      // A first read that fails is tried once more after a second, so a page
+      // that waits on the feed before its first write still loads on a quiet
+      // board.
+      if (!self.loaded && !self.retried) {
+        self.retried = true
+        setTimeout(function () { if (!self.loaded) self.load() }, 1000)
+      }
     })
   }
 
@@ -481,9 +492,26 @@ const JournalRuntime = `<script>
     this.reduce = reduce
     this.render = render
     this.started = true
-    this.load()
+    // The read taken at load is used once, and only if no row was pushed for
+    // this key since then. Any later load reads again.
+    var pre = preloads[this.key]
+    delete preloads[this.key]
+    this.load(pre && !pre.missed ? pre.read : null)
     return this
   }
+
+  // Every declared key is read as soon as the runtime loads, so a feed that
+  // starts a moment later may already have its rows. start() takes the read
+  // once. A row pushed for the key before then is not in the read, so the
+  // feed reads again instead. A failed read is caught here, so the rejection
+  // is not reported as unhandled. start() still takes it, and load retries a
+  // failed first read.
+  var preloads = Object.create(null)
+  Object.keys(keys).forEach(function (key) {
+    var p = read(key)
+    p.then(null, function () {})
+    preloads[key] = { read: p, missed: false }
+  })
 
   window.bd = {
     visitor: visitor,
@@ -500,6 +528,7 @@ const JournalRuntime = `<script>
       var byKey = Object.create(null)
       for (var i = 0; i < rows.length; i++) {
         var key = rows[i].key
+        if (preloads[key]) preloads[key].missed = true // the read at load may predate it
         if (!cache[key]) continue
         if (!byKey[key]) byKey[key] = []
         byKey[key].push(rows[i])
@@ -507,6 +536,8 @@ const JournalRuntime = `<script>
       for (var k in byKey) cache[k].receive(byKey[k])
     },
     _resync: function () {
+      // A read taken at load may predate the change, so start() must not use it.
+      for (var p in preloads) preloads[p].missed = true
       for (var k in cache) if (cache[k].started) cache[k].load()
     }
   }

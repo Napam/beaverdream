@@ -1021,7 +1021,7 @@ var journalPrompt = fmt.Sprintf(`The journal:
 <script>
 var seats = bd.journal("seats")   // joins and scores: slow, max %d
 var moves = bd.journal("moves")   // positions: fast, max 200
-var score = { players: [], scores: {}, winner: '' }, pos = {}
+var score = { players: [], scores: {}, winner: '' }
 
 seats.start(function (rows) {
   var s = { players: [], scores: {}, winner: '' }
@@ -1042,6 +1042,9 @@ seats.start(function (rows) {
   return s
 }, function (s) { score = s; showScore(s) })     // rematch only when s.winner
 
+var me = { x: 50, y: 50 }        // fixed spawn, never random
+var pos = {}, ready = false
+
 moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
@@ -1050,15 +1053,26 @@ moves.start(function (rows) {
     p[r.visitor] = { x: x, y: y }                // the referee: in bounds only
   }
   return p
-}, function (p) { pos = p })
+}, function (p) {
+  pos = p
+  if (!ready) {                                  // first render: put the visitor back
+    var mine = p[bd.visitor]
+    if (mine) { me.x = mine.x; me.y = mine.y }
+    ready = true
+  }
+})
 
-setInterval(function () { moves.append({ x: me.x, y: me.y }) }, 60)
+setInterval(function () {
+  if (ready) moves.append({ x: me.x, y: me.y })
+}, 60)
 function frame() { draw(pos); requestAnimationFrame(frame) }
 requestAnimationFrame(frame)
 function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winner
 </script>
 
-  me, draw and showScore stand for your own player, canvas and markup.
+  draw and showScore stand for your canvas and markup. me is the viewer's own
+  position: it starts at the spawn, and the first render moves it to their
+  newest row.
 - bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
   once; after that the server pushes every new row as it is written, so each
   open page redraws within a moment. reduce(rows) gets the rows of the current
@@ -1088,6 +1102,16 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
   server writes you a log line from the page's browser with the message. Only
   the current page reports; errors from replaced pages are dropped. Fix what
   it names.
+- Any change to your html or scripts reloads every open page, and your script
+  starts over. Rebuild the world and the visitor from journal rows.
+- Spawn the viewer at their own newest row (row.visitor === bd.visitor), and
+  fall back to a fixed spawn point. Do not send before the first render.
+- Put everything the viewer must get back after a reload in the same payload
+  as the position: whether they are inside the world, which room.
+- Keep the world seed and layout as a constant in the page, never a random
+  value.
+- For a visitor who stands still, keep sending on the timer, or write a slow
+  presence key, so the newest row stays in the window.
 `, defaultJournalMax, defaultJournalMax, maxJournalPayload, JournalRate, JournalBurst)
 
 const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write

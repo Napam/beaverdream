@@ -1,30 +1,31 @@
 # Keeping the world across reloads: assessment and plan
 
 Any html or script change makes every open page do a full reload
-(`bdLive.reload`, `lib/webmaster/site.go:346-357`; `swapKind`,
-`cmd/serve/handlers/pages.go:169-178`). A stylesheet-only change and a new post
+(`bdLive.reload`, `lib/webmaster/site.go:350-361`; `swapKind`,
+`cmd/serve/handlers/pages.go:169-179`). A stylesheet-only change and a new post
 do not. The reload is a real navigation, `location.replace('/?v=N')`, so the new
 page starts with empty script memory. The goal is that a multiplayer page, such
 as a 3D world where visitors walk around, puts each visitor back where they
 were after a reload. Reducing reloads and patching html in place are out of
 scope.
 
-The claims below were checked by reading the code unless marked otherwise.
-Nothing here was run.
+The claims about the code before the change were checked by reading it. Steps
+1 to 4 are built and covered by the harness and Go tests under Tests.
 
-## What survives a reload today
+## What survived a reload before the change
 
 - **Draft text and scroll position.** The live script saves them in
-  `sessionStorage` inside `maybeReload` before it navigates (`site.go:286-308`,
-  `site.go:355`). A manual browser reload saves nothing. The navigation drops
+  `sessionStorage` inside `maybeReload` before it navigates (`site.go:290-312`,
+  `site.go:359`). A manual browser reload saves nothing. The navigation drops
   any URL hash.
-- **Journal rows.** A reloaded page runs `read(key)` with `since=0` when a feed
-  starts. The server returns the key's rows in ascending id order, up to
-  `maxJournalRead` = 1000 (`cmd/serve/handlers/journal.go:28,249-253`,
-  `db/queries/journal.sql:9-20`). The client filters by match and rules and
-  keeps the newest `max` (`lib/webmaster/journal.go:315-340`). `bd.visitor` is a
-  hash of a 365-day cookie (`handlers/journal.go:24,80-117`), so it is stable,
-  and a page can find its own newest row.
+- **Journal rows.** A reloaded page ran `read(key)` with `since=0` when a feed
+  started. The server returned the oldest `maxJournalRead` = 1000 rows in
+  ascending id order (`cmd/serve/handlers/journal.go`, `db/queries/journal.sql`).
+  Step 3 changed the first load to take the newest rows and return them oldest
+  first. The client filters by match and rules and keeps the newest `max`
+  (`lib/webmaster/journal.go`). `bd.visitor` is a hash of a 365-day cookie
+  (`handlers/journal.go`), so it is stable, and a page can find its own newest
+  row.
 - **Shared state.** Counter, list and choice only. Heal clears it. It cannot
   hold positions.
 
@@ -33,35 +34,33 @@ generated at random, Datastar signals, and anything else that lives only in JS
 memory.
 
 The system prompt forbids `localStorage`, `sessionStorage` and cookies
-(`lib/webmaster/mutate.go:1109`). The journal is the intended store.
+(`lib/webmaster/mutate.go:1133`). The journal is the intended store.
 
-## What is really at risk
+## What was really at risk before the change
 
-**The primary cause is the prompt's own example.** The journal example in the
-system prompt (`mutate.go:1021-1059`) is the pattern models copy for motion. In
-it:
+**The primary cause was the prompt's own example.** The journal example in the
+system prompt (`mutate.go`) was the pattern models copied for motion. In it:
 
-- `me`, the visitor's own position, is a plain page variable. Nothing ever sets
-  it from the journal. `render` fills only `pos`, the other players
-  (`mutate.go:1045-1053`).
-- `setInterval(function () { moves.append({ x: me.x, y: me.y }) }, 60)`
-  (`mutate.go:1055`) sends `me` from the first tick, with no condition.
+- `me`, the visitor's own position, was a plain page variable. Nothing set it
+  from the journal. `render` filled only `pos`, the other players.
+- `setInterval(function () { moves.append({ x: me.x, y: me.y }) }, 60)` sent
+  `me` from the first tick, with no condition.
 
-After a reload, `me` holds whatever start the page's script declares. The first
-tick runs about 60 ms in, which can be before `start()`'s read lands
-(`journal.go:478-485`, an async `fetch`). That append makes the default spawn
-the visitor's newest row. The reducer keeps each visitor's newest row
-(`mutate.go:1050`), so every page, this one included, now shows the visitor at
-spawn. The page writes over the very row that would have restored it.
+After a reload, `me` held whatever start the page's script declared. The first
+tick ran about 60 ms in, which could be before `start()`'s read landed (an async
+`fetch`). That append made the default spawn the visitor's newest row. The
+reducer keeps each visitor's newest row, so every page, this one included,
+showed the visitor at spawn. The page wrote over the very row that would have
+restored it.
 
-The rows are read (`start()` always loads), and the reducer folds them. The loss
-is that the example never feeds the visitor's own row back into `me`, and its
-timer overwrites that row. A page that follows the example loses the position
-on every reload whether or not the row survived the trim.
+The rows were read, and the reducer folded them. The loss was that the example
+never fed the visitor's own row back into `me`, and its timer overwrote that
+row. A page that followed the example lost the position on every reload,
+whether or not the row survived the trim.
 
-The prompt does say that a markup change reloads every tab and that signals
-reset on reload (`mutate.go:894-896,910`). It does not say that script state
-starts over, or that the page must restore the player from the journal.
+The prompt did say that a markup change reloads every tab and that signals
+reset on reload (`mutate.go`). It did not say that script state starts over,
+or that the page must restore the player from the journal. Step 1 added both.
 
 Secondary risks, once the restore works:
 
@@ -74,17 +73,19 @@ Secondary risks, once the restore works:
   inside or outside the world, which room, which character. It belongs in the
   same row as the position.
 - **A random world seed** changes the terrain on every reload.
-- **The reload lands mid-stride.** `maybeReload` waits only while `input`
-  events fire (`site.go:275,350`). Walking with keys on a canvas fires none.
+- **The reload lands mid-stride.** `maybeReload` waited only while `input`
+  events fired (`site.go:278,350`). Walking with keys on a canvas fired none.
+  Step 2 fixes it.
 - **A rules bump discards old rows** by design. A rewritten reducer starts a
   clean world.
 - **The first paint is an empty world.** The page loads, its script starts a
   fetch, the rows arrive, then the world pops in.
 - **An edge case in `read`.** Append and trim run under `stateMu` as two
-  statements (`handlers/journal.go:177-211`); the read takes no lock and is
-  ascending with `LIMIT 1000` (`handlers/journal.go:230-258`). On a key with
+  statements (`handlers/journal.go:178-212`); the read takes no lock and is
+  ascending with `LIMIT 1000` (`JournalRead`). On a key with
   `max: 1000` it can land between an append and its trim, see 1001 rows, and
-  return the oldest 1000, missing the newest. Narrow. Not tested.
+  return the oldest 1000, missing the newest. Narrow. Step 3 fixes it, and a Go
+  test covers the new order.
 
 ## Decisions
 
@@ -110,9 +111,9 @@ Secondary risks, once the restore works:
 
 ## Plan
 
-### 1. Fix the example and the prompt (primary, no runtime code)
+### 1. Fix the example and the prompt (primary, no runtime code) (done)
 
-Change the motion half of the example in `journalPrompt` (`mutate.go`) to this
+The motion half of the example in `journalPrompt` (`mutate.go`) now has this
 shape:
 
 ```js
@@ -120,7 +121,7 @@ var me = { x: 50, y: 50 }        // fixed spawn, never random
 var pos = {}, ready = false
 
 moves.start(function (rows) {
-  // same referee as today: newest in-bounds row per visitor
+  // the referee: newest in-bounds row per visitor
 }, function (p) {
   pos = p
   if (!ready) {                  // first render: put the visitor back
@@ -135,12 +136,13 @@ setInterval(function () {
 }, 60)
 ```
 
-The first render runs after the first read lands, even with no rows
-(`journal.go:423`), so `ready` always flips on a successful load. A failed first
-read leaves `ready` false, so the page sends nothing instead of writing the
-spawn over the visitor's row.
+The first render runs after the first read lands, even with no rows, so `ready`
+flips on a successful load. A failed first read leaves `ready` false, so the
+page sends nothing instead of writing the spawn over the visitor's row. The
+runtime retries a failed first read once, after a second. If that retry also
+fails, `ready` stays false until a pushed row or a resync reads again.
 
-Add these lines to the journal section:
+These lines were added to the journal section:
 
 - Any change to your html or scripts reloads every open page, and your script
   starts over. Rebuild the world and the visitor from journal rows.
@@ -153,23 +155,25 @@ Add these lines to the journal section:
 - For a visitor who stands still, keep sending on the timer, or write a slow
   presence key, so the newest row stays in the window.
 
-### 2. Reload at a pause
+### 2. Reload at a pause (done)
 
-Treat `keydown` like `input` in the typing wait (`site.go:275`). Held keys
+Treat `keydown` like `input` in the typing wait (`site.go:278-279`). Held keys
 auto-repeat, so the reload lands at a real pause in walking. The 15 s cap still
 applies. Do not add `pointermove`: mouse-look is constant on a 3D page, so the
 cap would always bind, and the old page would keep running old code meanwhile.
 
-### 3. Fix the `read` edge case
+### 3. Fix the `read` edge case (done)
 
-Read newest-first with the limit, then reverse, so a read between append and
-trim drops the oldest row, not the newest.
+The first load reads newest-first with the limit, then reverses, so a read
+between append and trim drops the oldest row, not the newest.
 
-### 4. Start the read earlier (lower priority, does not fix the reset)
+### 4. Start the read earlier (done, lower priority, does not fix the reset)
 
-At runtime init, fire `read()` for every declared key and let `start()` consume
-the promise. About 10 lines of JS, no cursor risk. It shortens the empty first
-frame. It does nothing for the reset, which step 1 fixes.
+At runtime init, every declared key is read and `start()` consumes the promise.
+It shortens the empty first frame. On a busy key whose script starts late, a
+pushed row usually discards the early read. It does nothing for the reset,
+which step 1 fixes. A resync before `start()` marks those early reads stale, so
+`start()` reads again.
 
 ### 5. Embed the rows in the document (lowest priority, only if 4 is not enough)
 
@@ -180,8 +184,8 @@ the empty-world flash still matters on a VPS after step 4.
 **Server.**
 
 - `journalState` runs `JournalTail(key, match, rules)` on every `GET /` with
-  `Limit: 3` (`handlers/journal.go:421`). Raise the limit to the key's `max` for
-  the render and reverse the result.
+  `Limit: 3` (`handlers/journal.go:432-436`). Raise the limit to the key's `max`
+  for the render and reverse the result.
 - Marshal each key's rows into a `rows` map on the `bd-journal` config script
   tag with `json.Marshal`, like `bd-state`. Skip a key that would push the total
   past 64 KB; it fetches as today. Never put rows in an attribute.
@@ -199,13 +203,13 @@ the empty-world flash still matters on a VPS after step 4.
 - Only `start()` consumes the embed. Rematch, a closed match and `_resync` still
   fetch.
 - Buffer pushed rows for embedded keys. `receive` returns early before `start`
-  (`journal.go:374`) and `_rows` skips unopened keys (`journal.go:503`). With an
+  (`journal.go:377`) and `_rows` skips unopened keys (`journal.go:532`). With an
   embed, the stream can move the journal cursor past rows the snapshot lacks
   before a slow page script calls `start()`. A `<script type="module">` that
-  imports three.js runs after Datastar's module (`site.go:505`), so this is the
+  imports three.js runs after Datastar's module (`site.go:509`), so this is the
   likely case for a 3D page.
 
-**Docs to update.** AGENTS.md journal rules ("A feed loads its rows once", "the
+**Docs to update.** AGENTS.md journal rules ("A feed reads its rows once", "the
 same newest `max` rows the server trims to"), the example rule for restoring
 the visitor, and the runtime comment near `journal.go:213`.
 
@@ -249,9 +253,10 @@ the visitor, and the runtime comment near `journal.go:213`.
 
 - **A model ignores the new example.** The reset comes back on that page. The
   deferred send gate is the fallback.
-- **A failed first read** leaves the page silent until a pushed row retries the
-  load. On an empty world nothing is pushed, so the visitor cannot move others'
-  view of them until a reload. Acceptable for a toy.
+- **A failed first read** is retried once, after a second. If the retry also
+  fails, the page stays silent until a pushed row or a resync reads again. On an
+  empty world nothing is pushed, so the visitor cannot move others' view of them
+  until a reload. Acceptable for a toy.
 - **Silent drops** in the embed: reading rows before the cursor, or letting
   pushed rows hit a feed that has not started.
 - **Late first paint.** An embed without the size cap delays the body.
@@ -266,17 +271,24 @@ The node harness runs the real client runtime with a scripted server and pushed
 rows (`lib/webmaster/journal_runtime_test.go`), and `live_test.go` drives the
 reload wait. Use them.
 
-**Confirm the cause first (harness), before changing the example:**
+**The example (harness, step 1):**
 
-- **Overwrite.** Run today's example: the page sets `me = {x: 0, y: 0}`, the
-  scripted server holds a row `{x: 50, y: 50}` for `bd.visitor`, the read is
-  slower than 60 ms, the timer runs. Expect the first append to carry
-  `{x: 0, y: 0}`. If it does, the cause is confirmed.
-- **Restore.** Same setup with the step 1 shape. Expect no append before the
-  first render, `me` equal to `{x: 50, y: 50}` after it, and the first append
-  carrying `{x: 50, y: 50}`.
-- **Fallback.** No row for `bd.visitor`: `me` stays at the fixed spawn and
-  sending starts after the first render.
+- **Overwrite.** Confirmed before the fix. The example sent the spawn over the
+  visitor's row whether the read landed before or after the first tick. The
+  restore test is the regression check.
+- **Restore.** The row for `bd.visitor` is at `{x: 20, y: 70}`, not the spawn,
+  so a wrong `me` shows. Expect no append before the first render, and `me`
+  and the first append at `{x: 20, y: 70}`.
+- **Fallback.** No row for `bd.visitor`: `me` stays at the spawn `{x: 50, y: 50}`
+  and sending starts after the first render.
+
+A drift test in `journal_test.go` checks that the harness copy of the motion
+block appears in the prompt whole.
+
+**The runtime load path (harness):** a row or an append pushed while the read
+taken at load is out waits in `held` and is folded once. The same holds for a
+reload. A resync before `start()` makes `start()` read again, and a failed first
+read is retried once.
 
 For the reload wait (harness): a `keydown` within 1.5 s holds the reload, and
 the 15 s cap still releases it.
@@ -292,6 +304,11 @@ stale-embed test (rematch, closed match and `_resync` fetch).
 
 ## Order
 
+Order items 1 to 5 are done, in this order: the overwrite test confirmed the
+cause, then the example and prompt with the restore and fallback tests, the
+`keydown` reload wait, the `read` fix, and the earlier read. Order item 6, the
+embed (plan step 5), is not built.
+
 1. Run the overwrite test to confirm the cause.
 2. Fix the example and the prompt, with the restore and fallback tests.
 3. The `keydown` reload wait.
@@ -301,12 +318,10 @@ stale-embed test (rematch, closed match and `_resync` fetch).
 
 ## Not verified
 
-- The overwrite race was found by reading the code. Nobody has run it, so the
-  timing (first tick before the read lands) is untested.
 - That `data-persist` and `data-replace-url` exist only in Datastar Pro is from
   memory of the Datastar docs. What is verified is that the vendored 1.0.4 file
   has no persistence code.
-- The module ordering race for the embed is plausible from `site.go:505` and
+- The module ordering race for the embed is plausible from `site.go:509` and
   untested.
 - The trim numbers (rows per second, window length) are arithmetic, not
   measured on a real 3D page.

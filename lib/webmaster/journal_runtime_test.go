@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+// exampleMotion is the motion half of the journal example in journalPrompt
+// (mutate.go). exampleRun in the harness runs these lines. The drift test in
+// journal_test.go checks that the prompt contains this block whole, so change
+// both together.
+const exampleMotion = `var me = { x: 50, y: 50 }        // fixed spawn, never random
+var pos = {}, ready = false
+
+moves.start(function (rows) {
+  var p = {}
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
+    if (!isFinite(x) || !isFinite(y) || x < 0 || y < 0 || x > 100 || y > 100) continue
+    p[r.visitor] = { x: x, y: y }                // the referee: in bounds only
+  }
+  return p
+}, function (p) {
+  pos = p
+  if (!ready) {                                  // first render: put the visitor back
+    var mine = p[bd.visitor]
+    if (mine) { me.x = mine.x; me.y = mine.y }
+    ready = true
+  }
+})
+
+setInterval(function () {
+  if (ready) moves.append({ x: me.x, y: me.y })
+}, 60)
+`
+
 // runtimeHarness runs the real client runtime against a scripted server. Each
 // scenario names the steps a page takes and the rows the live stream pushes;
 // the harness reports the feed, what the server was asked, the beacons sent,
@@ -76,10 +105,14 @@ const row = (id, match, rules) => ({
   id: id, key: 'moves', visitor: 'them', payload: { n: id }, match: match || 1, rules: rules || 1
 })
 const badRow = (id) => ({ ...row(id), payload: { boom: true } })
+const cutRow = (id) => ({
+  id: id, key: 'cut', visitor: 'them', payload: { n: id }, match: 1, rules: 1
+})
 
 // state lets a scenario change the server's answers between steps. hold
-// parks the next read until the scenario releases it.
-const state = { read: 'ok', post: 200, postError: '', postMatch: 1, hold: null }
+// parks the next read until the scenario releases it. extra adds rows to the
+// default read, the way a row written before a push is in the next read.
+const state = { read: 'ok', post: 200, postError: '', postMatch: 1, hold: null, extra: [] }
 function server(url, method) {
   if (method === 'POST') {
     if (state.post === 200) return reply(200, { id: 3, key: 'moves', visitor: 'me', payload: { n: 1 }, match: state.postMatch, rules: 1 })
@@ -88,8 +121,9 @@ function server(url, method) {
   if (state.read === 'fail') return reply(500, { error: 'could not read that' })
   if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
   if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
+  if (state.read === 'own') return reply(200, { match: 1, rules: 1, rows: [{ id: 1, key: 'moves', visitor: 'me', payload: { x: 20, y: 70 }, match: 1, rules: 1 }] })
   if (url.indexOf('/j/cut') >= 0) return reply(200, { match: 1, rules: 1, rows: [cutRow(1), cutRow(2)] })
-  return reply(200, { match: 1, rules: 1, rows: [row(1), row(2)] })
+  return reply(200, { match: 1, rules: 1, rows: [row(1), row(2), ...state.extra] })
 }
 
 global.fetch = (url, opts) => {
@@ -105,9 +139,28 @@ global.fetch = (url, opts) => {
   return Promise.resolve(answer)
 }
 
+// The runtime reads every declared key while it loads, before any step runs,
+// so a scenario that needs a failed or held first read sets it here. hold is
+// shared with the steps that release it.
+const hold = {}
+const beforeInit = {
+  failedFirstRead: () => { state.read = 'fail' },
+  failedPreloadResync: () => { state.read = 'fail' },
+  failedFirstReadRetry: () => { state.read = 'fail' },
+  heldDuringLoad: () => { state.hold = hold },
+  appendDuringLoad: () => { state.hold = hold },
+  clearedFeed: () => { state.read = 'match' },
+  exampleTickFirst: () => { state.read = 'own'; state.hold = hold },
+  exampleReadFirst: () => { state.read = 'own' },
+  exampleFallback: () => { state.hold = hold }
+}
+if (beforeInit[scenario]) beforeInit[scenario]()
+
 eval(src)
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+const movesReads = () => fetches.filter((f) => f === 'GET /j/moves?since=0').length
+const cutReads = () => fetches.filter((f) => f === 'GET /j/cut?since=0').length
 const feed = window.bd.journal('moves')
 const draws = []
 function start() {
@@ -124,9 +177,17 @@ function startCut() {
     () => {}
   )
 }
-const cutRow = (id) => ({
-  id: id, key: 'cut', visitor: 'them', payload: { n: id }, match: 1, rules: 1
-})
+// exampleRun runs the motion half of the journal example. The lines come from
+// exampleMotion, so the page's code is the same text the prompt shows. It
+// returns the tick and the page's variables instead of setting a timer, so a
+// step fires the tick when it wants.
+function exampleRun() {
+  const moves = feed
+  const ticks = []
+  global.setInterval = (fn) => { ticks.push(fn) }
+` + exampleMotion + `
+  return { tick: ticks[0], me: () => me, pos: () => pos }
+}
 
 const steps = {
   // Pushed rows join the feed in order, and a row that comes back twice, from
@@ -140,16 +201,29 @@ const steps = {
     window.bd._rows([{ id: 9, key: 'other', payload: {}, match: 1, rules: 1 }])
   },
   // A row pushed while the first read is out is held, not dropped, even when
-  // the read does not include it.
+  // the read does not include it. start() takes the read taken at load, which
+  // is still in flight, so the row waits for it.
   heldDuringLoad: async () => {
-    const hold = {}
-    state.hold = hold
     start()
+    const before = fetches.length
+    window.bd._rows([row(3)])
+    results.push(fetches.length - before)
+    hold.release()
+    await settle()
+  },
+  // A row pushed while a reload is out is held the same way.
+  heldDuringReload: async () => {
+    start()
+    await settle()
+    const read = {}
+    state.hold = read
+    const reload = feed.load()
     window.bd._rows([row(3)])
     const before = fetches.length
     await feed.load()
     results.push(fetches.length - before)
-    hold.release()
+    read.release()
+    await reload
     await settle()
   },
   // A failed read leaves the board alone.
@@ -162,7 +236,6 @@ const steps = {
   // A feed whose first read failed has nothing to fold onto: a push reads
   // the whole feed again and keeps the pushed row.
   failedFirstRead: async () => {
-    state.read = 'fail'
     start()
     await settle()
     window.bd._rows([row(3)])
@@ -192,7 +265,6 @@ const steps = {
   // A pushed row from an older match that the page never read means the feed
   // was cleared and started over, so the feed reads itself again.
   clearedFeed: async () => {
-    state.read = 'match'
     start()
     await settle()
     state.read = 'ok'
@@ -212,6 +284,58 @@ const steps = {
     start()
     await settle()
     window.bd._resync()
+    await settle()
+  },
+  // The read taken at load is the only read before start, and start takes it
+  // instead of reading again. Every declared key is read at load.
+  earlyRead: async () => {
+    await settle()
+    results.push(movesReads())
+    results.push(cutReads())
+    start()
+    await settle()
+    results.push(movesReads())
+  },
+  // A row pushed before start stays out of the feed until start. The row was
+  // written after the load read, so start reads again and draws it once.
+  rowBeforeStart: async () => {
+    state.extra = [row(3)]
+    await settle()
+    window.bd._rows([row(3)])
+    await settle()
+    results.push(feed.rows.length)
+    results.push(draws.length)
+    start()
+    await settle()
+    results.push(movesReads())
+  },
+  // A load read that failed leaves the feed unloaded. A resync reads again
+  // and draws the board.
+  failedPreloadResync: async () => {
+    start()
+    await settle()
+    results.push(feed.rows.length)
+    state.read = 'ok'
+    window.bd._resync()
+    await settle()
+  },
+  // A first read that failed is tried once more after a second, with no push
+  // or resync needed. The retry runs after the server recovers.
+  failedFirstReadRetry: async () => {
+    start()
+    await settle()
+    results.push(feed.rows.length)
+    state.read = 'ok'
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await settle()
+  },
+  // A resync before start means the read taken at load may predate a clear.
+  // The server now has another match, so start must read it again.
+  resyncBeforeStart: async () => {
+    await settle()
+    state.read = 'match'
+    window.bd._resync()
+    start()
     await settle()
   },
   // Expected refusals resolve null and never reach the error beacon. A
@@ -273,11 +397,21 @@ const steps = {
   // The page's own append resolves while a read is out. It waits in held like
   // any pushed row, survives the read landing without it, and is folded once.
   appendDuringLoad: async () => {
-    const hold = {}
-    state.hold = hold
     start()
     results.push(await feed.append({ n: 1 }))
     hold.release()
+    await settle()
+  },
+  // The same append while a reload is out, after the feed has loaded.
+  appendDuringReload: async () => {
+    start()
+    await settle()
+    const read = {}
+    state.hold = read
+    const reload = feed.load()
+    results.push(await feed.append({ n: 1 }))
+    read.release()
+    await reload
     await settle()
   },
   // newMatch sends the next number. Its answer opens the new match, so the
@@ -326,6 +460,39 @@ const steps = {
   startWithoutRender: async () => {
     feed.start((rows) => rows.map((r) => r.id))
     await settle()
+  },
+  // The first tick lands while the first read is out, the order a slow
+  // network gives. The page has not rendered, so that tick sends nothing.
+  exampleTickFirst: async () => {
+    const run = exampleRun()
+    run.tick()
+    await settle()
+    hold.release()
+    await settle()
+    run.tick()
+    await settle()
+    results.push({ me: run.me(), own: run.pos().me || null })
+  },
+  // The read lands before the tick. The first render has already restored the
+  // visitor, so the tick sends the restored position.
+  exampleReadFirst: async () => {
+    const run = exampleRun()
+    await settle()
+    run.tick()
+    await settle()
+    results.push({ me: run.me(), own: run.pos().me || null })
+  },
+  // No row for the viewer: the first render keeps the spawn, and the tick
+  // sends it only after that render.
+  exampleFallback: async () => {
+    const run = exampleRun()
+    run.tick()
+    await settle()
+    hold.release()
+    await settle()
+    run.tick()
+    await settle()
+    results.push({ me: run.me(), own: run.pos().me || null })
   }
 }
 
@@ -356,8 +523,9 @@ type runtimeReport struct {
 }
 
 type sentAppend struct {
-	Match int `json:"match"`
-	Rules int `json:"rules"`
+	Match   int             `json:"match"`
+	Rules   int             `json:"rules"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type runtimeResult struct {
@@ -398,6 +566,17 @@ func sameIDs(got, want []int64) bool {
 	return true
 }
 
+// readsOf counts the feed reads of one key in the requests the harness saw.
+func readsOf(fetches []string, key string) int {
+	n := 0
+	for _, f := range fetches {
+		if f == "GET /j/"+key+"?since=0" {
+			n++
+		}
+	}
+	return n
+}
+
 func TestJournalRuntimeFoldsPushedRows(t *testing.T) {
 	got := runRuntime(t, "push")
 
@@ -410,13 +589,7 @@ func TestJournalRuntimeFoldsPushedRows(t *testing.T) {
 	if len(got.Sent) != 1 || got.Sent[0].Rules != 1 || got.Sent[0].Match != 1 {
 		t.Errorf("sent = %+v, want one append carrying match 1 and the page's rules 1", got.Sent)
 	}
-	reads := 0
-	for _, f := range got.Fetches {
-		if strings.HasPrefix(f, "GET") {
-			reads++
-		}
-	}
-	if reads != 1 {
+	if reads := readsOf(got.Fetches, "moves"); reads != 1 {
 		t.Errorf(
 			"reads = %d, want only the start: pushed rows need no read (%v)",
 			reads,
@@ -438,6 +611,22 @@ func TestJournalRuntimeHoldsRowsDuringALoad(t *testing.T) {
 	}
 	if got.Held {
 		t.Error("the feed still holds rows after the read landed")
+	}
+}
+
+// A row the stream pushes while a reload is out must survive the reload
+// landing without it.
+func TestJournalRuntimeHoldsRowsDuringAReload(t *testing.T) {
+	got := runRuntime(t, "heldDuringReload")
+
+	if want := []int64{1, 2, 3}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v: the pushed row was lost", got.IDs, want)
+	}
+	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
+		t.Fatalf("reads started during the reload = %s, want 0", got.Results)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the reload landed")
 	}
 }
 
@@ -469,14 +658,8 @@ func TestJournalRuntimeRecoversFromAFailedFirstRead(t *testing.T) {
 	if want := []int64{1, 2, 4}; !sameIDs(got.IDs, want) {
 		t.Fatalf("rows = %v, want %v once a read succeeds", got.IDs, want)
 	}
-	reads := 0
-	for _, f := range got.Fetches {
-		if strings.HasSuffix(f, "since=0") {
-			reads++
-		}
-	}
-	if reads != 3 {
-		t.Errorf("reads = %d, want the start and one per push (%v)", reads, got.Fetches)
+	if reads := readsOf(got.Fetches, "moves"); reads != 3 {
+		t.Errorf("reads = %d, want the load and one per push (%v)", reads, got.Fetches)
 	}
 	if got.Held {
 		t.Error("the feed still holds rows after the read landed")
@@ -549,8 +732,8 @@ func TestJournalRuntimeRendersInAHiddenTab(t *testing.T) {
 	}
 }
 
-// An append that resolves while a read is out must wait in held like a pushed
-// row: the read may not include it, and it must not appear twice.
+// An append that resolves while the first read is out must wait in held like a
+// pushed row: the read may not include it, and it must not appear twice.
 func TestJournalRuntimeKeepsAnAppendThroughALoad(t *testing.T) {
 	got := runRuntime(t, "appendDuringLoad")
 
@@ -560,14 +743,28 @@ func TestJournalRuntimeKeepsAnAppendThroughALoad(t *testing.T) {
 	if got.Held {
 		t.Error("the feed still holds rows after the read landed")
 	}
-	reads := 0
-	for _, f := range got.Fetches {
-		if strings.HasSuffix(f, "since=0") {
-			reads++
-		}
+	if reads := readsOf(got.Fetches, "moves"); reads != 1 {
+		t.Errorf(
+			"reads = %d, want only the read taken at load, which the append waited in (%v)",
+			reads, got.Fetches)
 	}
-	if reads != 1 {
-		t.Errorf("reads = %d, want only the start (%v)", reads, got.Fetches)
+}
+
+// An append that resolves while a reload is out must wait in held like a
+// pushed row: the read may not include it, and it must not appear twice.
+func TestJournalRuntimeKeepsAnAppendThroughAReload(t *testing.T) {
+	got := runRuntime(t, "appendDuringReload")
+
+	if want := []int64{1, 2, 3}; !sameIDs(got.IDs, want) {
+		t.Fatalf("rows = %v, want %v: the append was lost or doubled", got.IDs, want)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the reload landed")
+	}
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Errorf(
+			"reads = %d, want the init read and the one the append landed in (%v)",
+			reads, got.Fetches)
 	}
 }
 
@@ -710,28 +907,130 @@ func TestJournalRuntimeReadsAClearedFeed(t *testing.T) {
 func TestJournalRuntimeIgnoresALateEchoOfAnOldMatch(t *testing.T) {
 	got := runRuntime(t, "oldMatchEcho")
 
-	reads := 0
-	for _, f := range got.Fetches {
-		if strings.HasSuffix(f, "since=0") {
-			reads++
-		}
-	}
-	if reads != 1 {
-		t.Fatalf("reads = %d, want only the start (%v)", reads, got.Fetches)
+	if reads := readsOf(got.Fetches, "moves"); reads != 1 {
+		t.Fatalf("reads = %d, want only the init read (%v)", reads, got.Fetches)
 	}
 }
 
 func TestJournalRuntimeResyncReadsAgain(t *testing.T) {
 	got := runRuntime(t, "resync")
 
-	reads := 0
-	for _, f := range got.Fetches {
-		if strings.HasSuffix(f, "since=0") {
-			reads++
-		}
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Fatalf("reads = %d, want the init read plus the resync (%v)", reads, got.Fetches)
 	}
-	if reads != 2 {
-		t.Fatalf("reads = %d, want the start plus the resync (%v)", reads, got.Fetches)
+}
+
+// Every declared key is read when the runtime loads. start() takes that read
+// for its feed, so starting makes no second request.
+func TestJournalRuntimeStartTakesTheLoadRead(t *testing.T) {
+	got := runRuntime(t, "earlyRead")
+
+	if len(got.Results) != 3 {
+		t.Fatalf("results = %s, want the reads before start for both keys, then after", got.Results)
+	}
+	if string(got.Results[0]) != "1" || string(got.Results[1]) != "1" {
+		t.Errorf(
+			"reads before start = %s %s, want 1 for each declared key",
+			got.Results[0],
+			got.Results[1],
+		)
+	}
+	if string(got.Results[2]) != "1" {
+		t.Errorf("reads after start = %s, want 1: start must not read again", got.Results[2])
+	}
+	if want := []int64{1, 2}; !sameIDs(got.LastDraw, want) {
+		t.Errorf("last draw = %v, want the loaded rows %v", got.LastDraw, want)
+	}
+}
+
+// A row pushed before start is kept out of the feed until start. That row was
+// written after the load read, so start reads again rather than use it.
+func TestJournalRuntimeHoldsARowPushedBeforeStart(t *testing.T) {
+	got := runRuntime(t, "rowBeforeStart")
+
+	if len(got.Results) != 3 {
+		t.Fatalf("results = %s, want the rows and draws before start, then the reads", got.Results)
+	}
+	if string(got.Results[0]) != "0" || string(got.Results[1]) != "0" {
+		t.Errorf(
+			"rows and draws before start = %s %s, want 0 and 0",
+			got.Results[0],
+			got.Results[1],
+		)
+	}
+	if string(got.Results[2]) != "2" {
+		t.Errorf("reads = %s, want 2: the load read and the read at start", got.Results[2])
+	}
+	if want := []int64{1, 2, 3}; !sameIDs(got.IDs, want) || !sameIDs(got.LastDraw, want) {
+		t.Errorf("rows = %v, last draw = %v, want %v once start draws", got.IDs, got.LastDraw, want)
+	}
+}
+
+// A load read that failed leaves the feed unloaded. A resync reads again, and
+// the failure is neither reported nor an unhandled rejection.
+func TestJournalRuntimeResyncRecoversAFailedLoadRead(t *testing.T) {
+	got := runRuntime(t, "failedPreloadResync")
+
+	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
+		t.Fatalf("rows after the failed load read = %s, want 0", got.Results)
+	}
+	if want := []int64{1, 2}; !sameIDs(got.IDs, want) || !sameIDs(got.LastDraw, want) {
+		t.Fatalf("rows = %v, last draw = %v, want %v after the resync", got.IDs, got.LastDraw, want)
+	}
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Errorf("reads = %d, want the failed load read and the resync (%v)", reads, got.Fetches)
+	}
+	if got.Unhandled != 0 || len(got.Reports) != 0 {
+		t.Errorf(
+			"unhandled = %d, reports = %+v, want a failed load read to stay quiet",
+			got.Unhandled,
+			got.Reports,
+		)
+	}
+	if got.Held {
+		t.Error("the feed still holds rows after the resync")
+	}
+}
+
+// A first read that failed is tried once more after a second, so a page that
+// has written nothing yet still loads on a quiet board.
+func TestJournalRuntimeRetriesAFailedFirstReadOnce(t *testing.T) {
+	got := runRuntime(t, "failedFirstReadRetry")
+
+	if len(got.Results) != 1 || string(got.Results[0]) != "0" {
+		t.Fatalf("rows after the failed first read = %s, want 0", got.Results)
+	}
+	if want := []int64{1, 2}; !sameIDs(got.IDs, want) || !sameIDs(got.LastDraw, want) {
+		t.Fatalf("rows = %v, last draw = %v, want %v after the retry", got.IDs, got.LastDraw, want)
+	}
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Errorf(
+			"reads = %d, want the failed first read and its one retry (%v)",
+			reads,
+			got.Fetches,
+		)
+	}
+}
+
+// A resync before start means the read taken at load may predate a clear or
+// a reset, so start reads again and draws what the server now has.
+func TestJournalRuntimeReadsAgainAfterAResyncBeforeStart(t *testing.T) {
+	got := runRuntime(t, "resyncBeforeStart")
+
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Fatalf("reads = %d, want the load read and the read at start (%v)", reads, got.Fetches)
+	}
+	if got.Match != 2 || !sameIDs(got.IDs, []int64{6}) {
+		t.Errorf("match = %d, rows = %v, want match 2 with only row 6", got.Match, got.IDs)
+	}
+}
+
+// A rematch reads the new match. The load read is used once, by start.
+func TestJournalRuntimeRematchReadsAgain(t *testing.T) {
+	got := runRuntime(t, "newMatch")
+
+	if reads := readsOf(got.Fetches, "moves"); reads != 2 {
+		t.Fatalf("reads = %d, want the load read and the rematch read (%v)", reads, got.Fetches)
 	}
 }
 
@@ -759,13 +1058,7 @@ func TestJournalRuntimeTakesRefusalsQuietly(t *testing.T) {
 	if got.Reports[0].Version != 7 {
 		t.Errorf("report version = %d, want the page's 7", got.Reports[0].Version)
 	}
-	loads := 0
-	for _, f := range got.Fetches {
-		if strings.HasSuffix(f, "since=0") {
-			loads++
-		}
-	}
-	if loads != 2 {
+	if loads := readsOf(got.Fetches, "moves"); loads != 2 {
 		t.Errorf(
 			"feed loads = %d, want the start plus one after the closed match (%v)",
 			loads,
@@ -774,5 +1067,79 @@ func TestJournalRuntimeTakesRefusalsQuietly(t *testing.T) {
 	}
 	if !got.Stale {
 		t.Error("a 409 did not expire the page")
+	}
+}
+
+type examplePoint struct{ X, Y float64 }
+
+// exampleSent decodes the positions the page appended, oldest first.
+func exampleSent(t *testing.T, got runtimeResult) []examplePoint {
+	t.Helper()
+	var out []examplePoint
+	for _, s := range got.Sent {
+		var p examplePoint
+		if err := json.Unmarshal(s.Payload, &p); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// examplePage decodes the page's own position and the viewer's position on the
+// feed. own is nil when the feed has no row for the viewer.
+func examplePage(t *testing.T, got runtimeResult) (examplePoint, *examplePoint) {
+	t.Helper()
+	if len(got.Results) != 1 {
+		t.Fatalf("results = %s, want the page's position", got.Results)
+	}
+	var page struct {
+		Me  examplePoint  `json:"me"`
+		Own *examplePoint `json:"own"`
+	}
+	if err := json.Unmarshal(got.Results[0], &page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	return page.Me, page.Own
+}
+
+// The example restores the viewer from their own row on the first render. The
+// tick before that render sends nothing, so the only append carries the
+// restored position, whichever order the read and the tick land in.
+func TestJournalExampleRestoresTheVisitor(t *testing.T) {
+	want := examplePoint{X: 20, Y: 70}
+	for _, scenario := range []string{"exampleTickFirst", "exampleReadFirst"} {
+		t.Run(scenario, func(t *testing.T) {
+			got := runRuntime(t, scenario)
+
+			if sent := exampleSent(t, got); len(sent) != 1 || sent[0] != want {
+				t.Errorf("sent = %+v, want one append at the restored %+v", sent, want)
+			}
+			me, own := examplePage(t, got)
+			if me != want {
+				t.Errorf("me = %+v after the first render, want the restored %+v", me, want)
+			}
+			if own == nil || *own != want {
+				t.Errorf("the viewer's row = %+v, want %+v on the feed", own, want)
+			}
+		})
+	}
+}
+
+// With no row for the viewer, the first render keeps the spawn and sending
+// starts after it.
+func TestJournalExampleFallsBackToSpawn(t *testing.T) {
+	spawn := examplePoint{X: 50, Y: 50}
+	got := runRuntime(t, "exampleFallback")
+
+	if sent := exampleSent(t, got); len(sent) != 1 || sent[0] != spawn {
+		t.Errorf("sent = %+v, want one append at the spawn %+v", sent, spawn)
+	}
+	me, own := examplePage(t, got)
+	if me != spawn {
+		t.Errorf("me = %+v, want the spawn %+v", me, spawn)
+	}
+	if own != nil {
+		t.Errorf("the feed has a row for the viewer %+v, want none", own)
 	}
 }

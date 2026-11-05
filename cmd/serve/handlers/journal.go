@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -225,8 +226,9 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(journalRowFrom(row))
 }
 
-// JournalRead returns events after a cursor. The page filters by match and
-// rules; the server reports the newest match so a page can notice a rematch.
+// JournalRead returns the newest events when since is 0, or the events after a
+// cursor. The page filters by match and rules; the server reports the newest
+// match so a page can notice a rematch.
 func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
@@ -246,11 +248,24 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 	if since < 0 {
 		since = 0
 	}
-	rows, err := h.queries.ListJournalSince(r.Context(), sqlc.ListJournalSinceParams{
-		Key:   key,
-		ID:    since,
-		Limit: maxJournalRead,
-	})
+	// A first load reads newest-first and reverses the page, so a read that lands
+	// between an append and its trim keeps the new row. An ascending read would
+	// return the oldest 1000 of 1001 and drop it. A cursor read stays ascending,
+	// because the page needs the rows right after its cursor.
+	var rows []sqlc.Journal
+	if since == 0 {
+		rows, err = h.queries.JournalPage(r.Context(), sqlc.JournalPageParams{
+			Key:      key,
+			PageSize: maxJournalRead,
+		})
+		slices.Reverse(rows)
+	} else {
+		rows, err = h.queries.ListJournalSince(r.Context(), sqlc.ListJournalSinceParams{
+			Key:   key,
+			ID:    since,
+			Limit: maxJournalRead,
+		})
+	}
 	if err != nil {
 		h.logRead("Failed to read the journal", err)
 		writeStateError(w, http.StatusInternalServerError, "could not read that")

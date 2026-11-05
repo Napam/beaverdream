@@ -175,7 +175,8 @@ prefer simple, readable code over production hardening.
   `ids`, so a script that places posts knows which ones to place. A
   stylesheet-only change
   patches `<style id="bd-css">` and calls `bdLive.css`; anything else calls
-  `bdLive.reload`, which waits for the visitor to stop typing and saves the
+  `bdLive.reload`, which waits until the visitor stops typing or pressing keys
+  (a 1.5 s quiet window, capped at 15 s from the first wait), then saves the
   draft and reading position first. Shared state arrives as the `$shared`
   signal, journal rows through `bd._rows`, the spinner through `#bd-busy`, and
   the cursor is patched last. A markup reload leaves the version cursor old
@@ -208,16 +209,19 @@ prefer simple, readable code over production hardening.
   its code was written for and sends them with every append, the server
   refuses a mismatch with 409, and a mismatch anywhere reloads the page, never
   just the feed. A rules bump in `set_journal_schema` skips past every number
-  stored rows carry, declared key or not. A feed loads its rows once and the
-  stream pushes every new row after that, so nothing polls. The feed keeps the
-  same newest `max` rows the server trims to, so a reloaded tab and a
-  long-open tab fold the same history, and it folds a burst once per frame. A
-  hidden tab renders on a timer, because it parks animation frames. The client
-  runtime is code-owned: it owns the append, the fold, the row window, the
-  match and rules handling and the error reports. The model writes `reduce`,
-  `render`, its send cadence and when to offer the next match, so those are the
-  parts a bad page can get wrong.
-  The log is public, so the reducer, not the server, rejects illegal rows.
+  stored rows carry, declared key or not. A feed reads its rows once, and
+  retries a failed first read once. The runtime starts that read at load and
+  `start()` uses it, then the stream pushes every new row after that, so nothing
+  polls. The feed keeps the same newest `max` rows the server trims to, so a
+  reloaded tab and a long-open tab fold the same history, and it folds a burst
+  once per frame. A hidden tab renders on a timer, because it parks animation
+  frames. The client runtime is code-owned: it owns the append, the fold, the
+  row window, the match and rules handling and the error reports. The model
+  writes `reduce`, `render`, its send cadence and when to offer the next match,
+  so those are the parts a bad page can get wrong. The motion example restores
+  the visitor from their own newest row on the first render and sends nothing
+  before that, because a reload restarts the page script at the spawn point. The
+  log is public, so the reducer, not the server, rejects illegal rows.
 - The admin data page (`/admin/journal`, labelled "data") shows the shared
   state first, then lists every key that has rows, declared or not, with stats
   from one aggregate query, and browses one key's rows newest first. The site

@@ -74,6 +74,17 @@ global.CustomEvent = function (name, init) { this.name = name; this.detail = ini
 global.Event = function (type) { this.type = type }
 global.setInterval = () => { throw new Error('the live script must not poll') }
 
+// The cap scenario runs the script's retry timers by hand on a fake clock, so
+// the 15 s cap is reached at once. The real setTimeout comes back after it.
+const realSetTimeout = setTimeout
+let clock = 1000000
+let timers = []
+let waited = 0
+if (scenario === 'cap') {
+  Date.now = () => clock
+  global.setTimeout = (fn, ms) => { timers.push({ at: clock + ms, fn: fn }) }
+}
+
 if (scenario === 'draft') {
   stored['bd:draft'] = 'hello'
   stored['bd:focused'] = '1'
@@ -94,6 +105,22 @@ const steps = {
   draft: () => {},
   reload: () => window.bdLive.reload(5),
   typing: () => { listeners.input(); window.bdLive.reload(5) },
+  keydown: () => { listeners.keydown(); window.bdLive.reload(5) },
+  cap: () => {
+    // The visitor presses a key on every tick, so only the cap can release it.
+    const start = clock
+    listeners.keydown()
+    window.bdLive.reload(5)
+    for (let tick = 0; tick < 60 && !replaced; tick++) {
+      clock += 500
+      listeners.keydown()
+      const due = timers.filter((t) => t.at <= clock)
+      timers = timers.filter((t) => t.at > clock)
+      due.forEach((t) => t.fn())
+    }
+    waited = clock - start
+    setTimeout = realSetTimeout
+  },
   stale: () => listeners['beaverdream:stale'](),
   css: () => window.bdLive.css(6),
   posts: () => window.bdLive.posts(9, 'prepend', [9, 8]),
@@ -106,6 +133,7 @@ steps[scenario]()
 setTimeout(() => {
   console.log(JSON.stringify({
     replaced: replaced,
+    waited: waited,
     attrs: attrs,
     events: events,
     stateTag: stateTag.textContent,
@@ -124,6 +152,7 @@ type liveEvent struct {
 
 type liveResult struct {
 	Replaced   string            `json:"replaced"`
+	Waited     int               `json:"waited"`
 	Attrs      map[string]string `json:"attrs"`
 	Events     []liveEvent       `json:"events"`
 	StateTag   string            `json:"stateTag"`
@@ -214,6 +243,26 @@ func TestLiveScriptWaitsForTyping(t *testing.T) {
 	got := runLiveScript(t, "typing")
 	if got.Replaced != "" {
 		t.Fatalf("the page reloaded to %q under the visitor's fingers", got.Replaced)
+	}
+}
+
+// A key press alone holds a reload, the same as input does.
+func TestLiveScriptWaitsForKeydown(t *testing.T) {
+	got := runLiveScript(t, "keydown")
+	if got.Replaced != "" {
+		t.Fatalf("the page reloaded to %q under the visitor's keys", got.Replaced)
+	}
+}
+
+// A visitor who never stops typing is still reloaded once the 15 s cap has
+// passed. The release comes on the first retry after the cap.
+func TestLiveScriptReleasesATypingPageAtTheCap(t *testing.T) {
+	got := runLiveScript(t, "cap")
+	if got.Replaced != "/?v=5" {
+		t.Fatalf("replaced = %q, want /?v=5 once the cap passed", got.Replaced)
+	}
+	if got.Waited < 15000 || got.Waited >= 15500 {
+		t.Errorf("released after %d ms, want the first retry past 15000 ms", got.Waited)
 	}
 }
 

@@ -793,6 +793,12 @@ not a game in a box above the old board. Make the change part of the page
 itself, where the poster will run into it, not a sentence on the page
 announcing it.
 
+When a post asks for a game or anything people could do together, build it
+multiplayer by default: one shared world, where every visitor sees the others
+act, through shared state or a journal. "make pacman" means one board everyone
+plays on. Build it for a single player only when the post asks for that. A
+color, a restyle, a text change or a purely visual idea needs none of this.
+
 The page is two fields you own: css, the stylesheet, and html, everything
 inside body. The html has one rule: it holds the literal placeholder {{posts}}
 exactly once, where the server puts the real posts. Any write that drops it

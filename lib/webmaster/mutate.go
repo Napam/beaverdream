@@ -732,6 +732,24 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "load_skill",
+			Description: openai.String(
+				"Read a how-to for one kind of build before you make it. Its result is " +
+					"the reference to build from; the page is not changed by this call. " +
+					"Skills: " + skillSummaries() + ".",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type": "string",
+						"enum": skillNames(),
+					},
+				},
+				"required": []string{"name"},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "done",
 			Description: openai.String(
 				"End your turn and say one sentence to the room. You read it back " +
@@ -798,6 +816,8 @@ multiplayer by default: one shared world, where every visitor sees the others
 act, through shared state or a journal. "make pacman" means one board everyone
 plays on. Build it for a single player only when the post asks for that. A
 color, a restyle, a text change or a purely visual idea needs none of this.
+For a world someone moves through, call load_skill with controls first, in a
+response of its own.
 
 The page is two fields you own: css, the stylesheet, and html, everything
 inside body. The html has one rule: it holds the literal placeholder {{posts}}
@@ -815,6 +835,8 @@ Tools:
 - set_site(css, html): replace one field or both. Use it for a restyle, a new
   layout, or when a post asks for a different kind of page. Only the fields
   you send change.
+- load_skill(name): read a how-to before you build one kind of thing, such as a
+  world someone moves through. Its result is the reference you build from.
 `
 
 var systemPromptMiddle = fmt.Sprintf(
@@ -841,6 +863,10 @@ per response: past that, a call is likelier to arrive broken, so write that
 field once with set_site instead. If a call is rejected, its
 result says why, and the turn stays open so you can fix it in the next
 response; call done again after the fix.
+
+load_skill is the exception to the edit round. Call it alone in a response of
+its own, then make your edits in the next response, once you have the
+reference to build from.
 
 Keeping the page as it is counts as a turn. This is the normal answer to
 ordinary talk. Call done without edits and say why; that sentence goes in the
@@ -1203,8 +1229,8 @@ func (b *promptBuilder) close() {
 // new message the model has to answer. The history comes first because it only
 // grows at the end, so a provider can cache everything up to the end of the
 // log. The notes, the page and the new post can change every turn, so they
-// come after it. The controls reference follows the new post on turns that
-// may build a world, so it never shifts the cached prefix.
+// come after it. The movement hint follows the new post on pages that already
+// move, so it never shifts the cached prefix.
 func userPrompt(site Site, room Room, triggers []Post) string {
 	prompt, _ := userPromptSections(site, room, triggers)
 	return prompt
@@ -1277,10 +1303,11 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString("The posters are looking at their own posts.\n")
 	}
 
-	if wantsControls(site, triggers) {
+	if pageMoves(site.HTML) {
 		b.WriteString("\n")
 		b.section("controls")
-		b.WriteString(controlsReference)
+		b.WriteString("This page already moves with keys. Before you change how it moves,\n")
+		b.WriteString("call load_skill with controls.\n")
 	}
 
 	b.close()

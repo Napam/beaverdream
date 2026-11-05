@@ -1,101 +1,6 @@
 package webmaster
 
-import (
-	"strings"
-	"unicode"
-)
-
-func wordSet(words ...string) map[string]bool {
-	set := make(map[string]bool, len(words))
-	for _, w := range words {
-		set[w] = true
-	}
-	return set
-}
-
-// controlsStrong are words that ask for a world someone moves through on
-// their own. Two-word names are matched joined, so "top-down", "top down" and
-// "topdown" are the same word.
-var controlsStrong = wordSet(
-	"platformer", "roguelike", "sokoban", "tetris", "arcade", "shooter", "fps",
-	"maze", "dungeon", "explore", "jump", "zombie", "multiplayer", "flappy",
-	"invaders", "pokemon", "stardew", "gta", "simulator", "racetrack", "kart",
-	"mario", "zelda", "snake", "pong", "breakout", "asteroids", "minecraft",
-	"roblox", "rpg", "mmo", "3d", "2d", "avatar", "wasd", "joystick", "gamepad",
-	"spaceship", "playable", "videogame", "minigame", "topdown", "firstperson",
-	"thirdperson", "sidescroller", "sidescroll", "pacman", "openworld",
-	"hoppe", "hopp", "hopper",
-)
-
-// controlsWeak are words that mean a world only next to a cue or another
-// weak word: "make it a game" and "drive a car" ask for one, "the game last
-// night", "google drive" and "a fly in my soup" do not.
-var controlsWeak = wordSet(
-	"game", "world", "map", "level", "race", "racer", "drive", "fly", "flight",
-	"car", "plane", "boat", "ship", "tank", "rocket", "space", "shoot", "steer",
-	"farm", "sim", "platform", "walk", "character", "camera", "controls",
-	"keyboard", "gravity", "physics", "enemy", "doom", "sonic",
-	"spill", "spillet", "bil", "kjøre", "kjøring",
-)
-
-// controlsCues are the words that turn a nearby weak word into a request.
-var controlsCues = wordSet(
-	"make", "build", "create", "turn", "into", "open", "play", "around",
-	"through", "lag", "lage", "gjør", "bygg",
-)
-
-// controlsWindow is how many words apart a weak word and its cue may be.
-const controlsWindow = 3
-
-// wordIn reports whether word, or a plain English form of it (a plural, an
-// -ing or an -ed), is in set.
-func wordIn(set map[string]bool, word string) bool {
-	if set[word] {
-		return true
-	}
-	if stem, ok := strings.CutSuffix(word, "ies"); ok && set[stem+"y"] {
-		return true
-	}
-	if stem, ok := strings.CutSuffix(word, "s"); ok && set[stem] {
-		return true
-	}
-	for _, suffix := range []string{"ing", "ed"} {
-		if stem, ok := strings.CutSuffix(word, suffix); ok && (set[stem] || set[stem+"e"]) {
-			return true
-		}
-	}
-	return false
-}
-
-// postWantsControls reports whether one post asks for a world.
-func postWantsControls(body string) bool {
-	words := strings.FieldsFunc(strings.ToLower(body), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	var weak, cues []int
-	for i, word := range words {
-		if wordIn(controlsStrong, word) {
-			return true
-		}
-		if i > 0 && wordIn(controlsStrong, words[i-1]+word) {
-			return true
-		}
-		if wordIn(controlsWeak, word) {
-			weak = append(weak, i)
-		}
-		if controlsCues[word] {
-			cues = append(cues, i)
-		}
-	}
-	for _, w := range weak {
-		for _, other := range append(cues, weak...) {
-			if other != w && other >= w-controlsWindow && other <= w+controlsWindow {
-				return true
-			}
-		}
-	}
-	return false
-}
+import "strings"
 
 // pageMoves reports whether the current page moves something with keys: it
 // listens for keys and also reads arrows or WASD or runs a frame loop, or it
@@ -115,31 +20,15 @@ func pageMoves(html string) bool {
 	return false
 }
 
-// wantsControls reports whether a turn gets the controls reference: a new
-// post asks for a world, game or movement, or the current page already moves
-// something with keys, so a follow-up like "it feels slow" sees it too.
-func wantsControls(site Site, triggers []Post) bool {
-	if pageMoves(site.HTML) {
-		return true
-	}
-	for _, trigger := range triggers {
-		if postWantsControls(trigger.Body) {
-			return true
-		}
-	}
-	return false
-}
-
-// controlsReference is how a page with movement should feel. It rides after
-// the new post only on turns wantsControls picks, so other turns do not pay
-// for it and the system prompt keeps its cache. The model picks the genre from
-// the post. The script block is run by controls_test.go, which checks the
-// landing, the wall, the jump height, the coyote time, the buffer, the keys
-// and frame-rate independence; change both together.
+// controlsReference is the controls skill: how a page with movement should
+// feel. The model reads it with load_skill, so it arrives as a tool result
+// and never in the prompt prefix. The script block is run by
+// controls_test.go, which checks the landing, the wall, the jump height,
+// the coyote time, the buffer, the keys and frame-rate independence; change
+// both together.
 const controlsReference = `CONTROLS REFERENCE:
-This turn may involve a world someone moves through. If you build or change
-one, make it feel good without being asked. If not, ignore this section.
-Pick the genre from the post and use its GENRES line.
+Use this when you build or change a world someone moves through. Make it feel
+good without being asked. Pick the genre from the post and use its GENRES line.
 
 This platformer core is tested. Reuse its parts in any genre:
 

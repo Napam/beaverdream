@@ -38,10 +38,13 @@ type editor struct {
 	// badArguments counts calls whose arguments did not parse, so the loop
 	// can tell a round of broken tool markup from a round of wrong edits.
 	badArguments int
+	// loaded names the skills this turn already returned. Their bodies stay
+	// in the conversation, so a second load only points back at them.
+	loaded map[string]bool
 }
 
 func newEditor(site Site) *editor {
-	return &editor{site: site}
+	return &editor{site: site, loaded: map[string]bool{}}
 }
 
 // run applies one tool call and returns the text fed back to the model. It
@@ -177,6 +180,29 @@ func (e *editor) apply(name, arguments string) string {
 			return "ok (" + strings.Join(raised, "; ") + ")"
 		}
 		return "ok"
+
+	case "load_skill":
+		var in struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
+			return e.argumentsRejected(arguments, err)
+		}
+		body, ok := skillBody(in.Name)
+		if !ok {
+			return fmt.Sprintf(
+				"rejected: no skill %q; the skills are %s",
+				in.Name, strings.Join(skillNames(), ", "),
+			)
+		}
+		if e.loaded[in.Name] {
+			return fmt.Sprintf(
+				"ok: %s was already loaded this turn; use the earlier result",
+				in.Name,
+			)
+		}
+		e.loaded[in.Name] = true
+		return body
 
 	case "done":
 		var in struct {

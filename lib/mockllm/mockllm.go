@@ -146,6 +146,20 @@ func decide(prompt string, toolResultSeen bool) []toolCall {
 	if strings.Contains(prompt, "mocknoop") || toolResultSeen {
 		return []toolCall{doneCall("nothing needed changing")}
 	}
+	// mockskill reads a skill first. The next round sees its result and
+	// closes the turn, so the tests exercise the skill round in the loop.
+	if strings.Contains(prompt, "mockskill") {
+		return []toolCall{
+			{
+				ID:   "call_skill",
+				Type: "function",
+				Function: functionCall{
+					Name:      "load_skill",
+					Arguments: mustJSON(map[string]string{"name": "controls"}),
+				},
+			},
+		}
+	}
 	if strings.Contains(prompt, "mockgame") {
 		return gameCalls()
 	}

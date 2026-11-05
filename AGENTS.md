@@ -72,10 +72,9 @@ prefer simple, readable code over production hardening.
   `CompactAfterTurns` turns, so its start never slides before compaction.
 - The user prompt is ordered for the prompt cache: compacted history, room
   log, then the notes, the page and the new post, which change every turn.
-  The controls reference comes last, after the new post, and only when
-  `wantsControls` finds a post that asks for a world or a page that already
-  moves something with keys, so it never shifts the cached prefix. Go picks
-  only whether it is sent; the model picks the genre.
+  A page that already moves something with keys gets a one-line hint after the
+  new post, so it never shifts the cached prefix. The hint names the controls
+  skill; the model decides whether to load it.
   The system prompt is one static string and includes `BaseCSS` and a sample
   post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo and restore
@@ -312,6 +311,11 @@ prefer simple, readable code over production hardening.
   message works. `h.mu` serializes both, the worker takes it before draining
   pending, and the timeout starts after the lock. Reset therefore cannot run a
   batch of posts it just deleted. Tests wait for the version or run to land.
+- Skills are how-tos the model reads with `load_skill(name)`, registered in
+  `skills.go`. A body is only ever a tool result: never in the room log, the
+  page or the system prompt. A turn loads each skill once; a second load points
+  back at the first result. A skill load is not an edit and does not end the
+  turn, so the system prompt has the model send it alone, then edit.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.
@@ -350,7 +354,8 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
 - Mock model: `task dev.mock-llm` on `localhost:6701`, model id `mock-model`.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
   `mocknoop` and `mockfail` test the no-op and error
-  paths. `mockedit` appends one CSS rule, `mockpatch` replaces the default
+  paths. `mockskill` loads the controls skill in its first round.
+  `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.
   A streamed request gets the same reply cut into small chunks with a short

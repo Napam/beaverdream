@@ -6,55 +6,9 @@ import (
 	"testing"
 )
 
-func TestWantsControls(t *testing.T) {
-	for body, want := range map[string]bool{
-		"make pacman":                       true,
-		"pac-man please":                    true,
-		"a 3D room I can walk around in":    true,
-		"a platformer!":                     true,
-		"turn the board into an open world": true,
-		"make it a game":                    true,
-		"make a video game":                 true,
-		"a top-down town":                   true,
-		"a first person view":               true,
-		"a side-scroller":                   true,
-		"a farming sim":                     true,
-		"a roguelike":                       true,
-		"sokoban levels":                    true,
-		"space invaders":                    true,
-		"zombies everywhere":                true,
-		"let me drive a car":                true,
-		"fly a plane":                       true,
-		"a racing game":                     true,
-		"I want to go exploring":            true,
-		"jumping cats":                      true,
-		"lag et spill":                      true,
-		"jeg vil hoppe":                     true,
-		"the game last night was wild":      false,
-		"hello world":                       false,
-		"best board in the world":           false,
-		"upload it to google drive":         false,
-		"a fly in my soup":                  false,
-		"make the sprite pink":              false,
-		"race and class":                    false,
-		"my car broke down":                 false,
-		"a paint board":                     false,
-		"make it pink":                      false,
-		"I ran a marathon today":            false,
-	} {
-		if got := wantsControls(Site{}, []Post{{Body: body}}); got != want {
-			t.Errorf("wantsControls(%q) = %v, want %v", body, got, want)
-		}
-	}
-	batch := []Post{{Body: "hi"}, {Body: "make it a racing game"}}
-	if !wantsControls(Site{}, batch) {
-		t.Error("a batch with one world post did not get the reference")
-	}
-}
-
-// A page that already moves something with keys gets the reference on any
-// post; a page that only listens for Enter does not.
-func TestWantsControlsFromThePage(t *testing.T) {
+// A page that already moves with keys gets the movement hint; a page that only
+// listens for Enter does not.
+func TestPageMoves(t *testing.T) {
 	for html, want := range map[string]bool{
 		`<script>addEventListener('keydown', e => { if (e.code === 'ArrowLeft') x-- })</script>`: true,
 		`<script>addEventListener('keyup', e => keys[e.code] = false); var k = 'KeyD'</script>`:  true,
@@ -63,49 +17,50 @@ func TestWantsControlsFromThePage(t *testing.T) {
 		`<textarea onkeydown="if (event.key === 'Enter') this.form.requestSubmit()">`:            false,
 		`<script>requestAnimationFrame(spin)</script>`:                                           false,
 	} {
-		site := Site{HTML: html + "{{posts}}"}
-		if got := wantsControls(site, []Post{{Body: "make it faster"}}); got != want {
-			t.Errorf("wantsControls on %q = %v, want %v", html, got, want)
+		if got := pageMoves(html); got != want {
+			t.Errorf("pageMoves(%q) = %v, want %v", html, got, want)
 		}
 	}
 }
 
-// The reference comes after the new post as its own section, and only on the
-// turns that want it, so the prefix before the new post never changes.
-func TestUserPromptAddsControlsAfterTheNewPost(t *testing.T) {
+// The hint comes after the new post and only on a page that moves, so the
+// prefix before the new post never changes. A world post alone adds nothing:
+// the model asks for the skill itself.
+func TestUserPromptHintsAMovingPage(t *testing.T) {
 	room := Room{Log: []Turn{{ID: 1, Kind: TurnPost, Author: "kit", Body: "hi"}}}
-	site := Site{CSS: "body{}", HTML: "{{posts}}"}
+	post := []Post{{ID: 2, Author: "dave", Body: "make pacman"}}
 
 	plain, plainSections := userPromptSections(
-		site,
-		room,
-		[]Post{{ID: 2, Author: "dave", Body: "make it pink"}},
+		Site{CSS: "body{}", HTML: "{{posts}}"}, room, post,
 	)
-	if strings.Contains(plain, "CONTROLS REFERENCE") {
-		t.Error("a color post got the controls reference")
+	if strings.Contains(plain, "load_skill") || strings.Contains(plain, "CONTROLS REFERENCE") {
+		t.Error("a still page got the movement hint or the reference")
 	}
 	if last := plainSections[len(plainSections)-1]; last.Name != "new post" {
 		t.Errorf("last section is %q, want new post", last.Name)
 	}
 
-	world, sections := userPromptSections(
-		site,
+	moving, sections := userPromptSections(
+		Site{
+			CSS:  "body{}",
+			HTML: `<script>addEventListener('keydown', e => { if (e.code === 'ArrowLeft') x-- })</script>{{posts}}`,
+		},
 		room,
-		[]Post{{ID: 2, Author: "dave", Body: "make pacman"}},
+		post,
 	)
 	last := sections[len(sections)-1]
-	if last.Name != "controls" || last.End != len(world) {
-		t.Fatalf("last section is %+v, want controls ending the prompt", last)
+	if last.Name != "controls" || last.End != len(moving) {
+		t.Fatalf("last section is %+v, want the hint ending the prompt", last)
 	}
-	if !strings.HasPrefix(world[last.Start:], "CONTROLS REFERENCE:") {
-		t.Errorf("controls section starts with %q", world[last.Start:last.Start+30])
+	if !strings.Contains(moving[last.Start:], "call load_skill with controls.") {
+		t.Errorf("hint section is %q", moving[last.Start:])
 	}
-	if strings.Index(world, "NEW POST #2") > last.Start {
-		t.Error("the controls reference comes before the new post")
+	cut := strings.Index(plain, "CURRENT STYLESHEET")
+	if moving[:cut] != plain[:cut] {
+		t.Error("the page changed the history or the log in the prompt")
 	}
-	cut := strings.Index(plain, "NEW POST")
-	if world[:cut] != plain[:cut] {
-		t.Error("the controls reference changed the prompt before the new post")
+	if strings.Index(moving, "NEW POST") > last.Start {
+		t.Error("the movement hint comes before the new post")
 	}
 }
 

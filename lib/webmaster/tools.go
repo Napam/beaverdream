@@ -12,13 +12,16 @@ import (
 // page with a game in it passes 20k bytes, so the cap leaves room for the
 // page to keep growing before a whole rewrite is refused.
 const (
-	maxCSSLen      = 64000
-	maxHTMLLen     = 192000
-	maxStateKeys   = 8
-	maxStateName   = 32
-	maxStateList   = 100
-	maxStateOpts   = 10
-	maxStateValue  = 200
+	maxCSSLen     = 64000
+	maxHTMLLen    = 192000
+	maxStateKeys  = 8
+	maxStateName  = 32
+	maxStateList  = 100
+	maxStateOpts  = 10
+	maxStateValue = 200
+	// maxReasonLen is the longest done reason kept. The done tool says so, so
+	// the model fits its sentence instead of being cut off.
+	maxReasonLen   = 200
 	minStateOpts   = 2
 	defaultListMax = 20
 	maxNotesLen    = 1000
@@ -208,7 +211,7 @@ func (e *editor) apply(name, arguments string) string {
 			return e.argumentsRejected(arguments, err)
 		}
 		e.done = true
-		e.reason = truncateRunes(strings.TrimSpace(in.Reason), 200)
+		e.reason = truncateRunes(strings.TrimSpace(in.Reason), maxReasonLen)
 		if in.Notes != nil {
 			notes := truncateRunes(strings.TrimSpace(*in.Notes), maxNotesLen)
 			e.notes = &notes

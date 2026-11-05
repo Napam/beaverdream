@@ -761,8 +761,12 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 				"type": "object",
 				"properties": map[string]any{
 					"reason": map[string]any{
-						"type":        "string",
-						"description": "One sentence in your own voice: what this turn says to the room.",
+						"type": "string",
+						"description": fmt.Sprintf(
+							"One short sentence in your own voice: what this turn says to the room. "+
+								"Max %d characters; anything longer is cut off.",
+							maxReasonLen,
+						),
 					},
 					"notes": map[string]any{
 						"type": "string",

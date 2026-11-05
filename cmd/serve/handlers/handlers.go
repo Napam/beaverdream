@@ -57,6 +57,10 @@ type Config struct {
 	// an origin the board's scripts never run on. The board's port redirects
 	// there. Empty means the port after Port.
 	AdminPort string
+	// AdminURL is the public URL of the admin panel, for a proxy with its own
+	// admin hostname. When set, the board redirects /admin there instead of to
+	// AdminPort on the request's host. Empty keeps the host and AdminPort.
+	AdminURL string
 	// Port is the board's port, used for the link back from the admin pages.
 	Port string
 	// CompactAfterTokens is the estimated transcript size that triggers

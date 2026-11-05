@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:6700", "listen address")
+	addr := flag.String("addr", "localhost:6701", "listen address")
 	delay := flag.Duration("delay", 15*time.Millisecond, "pause before each streamed chunk")
 	flag.Parse()
 

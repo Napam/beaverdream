@@ -11,6 +11,10 @@ web/tmp/
 # Runtime data
 data/
 
+# Secrets and local config. .env holds API keys and the admin token.
+.env
+.env.*
+
 # Dependencies
 web/node_modules/
 

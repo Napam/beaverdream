@@ -18,16 +18,15 @@ type Env = struct {
 	// Model used to rewrite the site. Defaults to the mock's model id, so
 	// `task dev` plus `task dev.mock-llm` works with no configuration.
 	OpenAIModel string
-	// Base URL of the OpenAI-compatible chat completions API. Defaults to
-	// "http://localhost:6700"; `task dev` points it at the bundled mock on
-	// 6701 instead.
+	// Base URL of the OpenAI-compatible chat completions API. Defaults to the
+	// bundled mock on "http://localhost:6701" (`task dev.mock-llm`).
 	OpenAIBaseURL string
 	// API key for the model provider. Empty means no Authorization header.
 	// Usually supplied by the invoking task or shell.
 	OpenAIAPIKey string
-	// Stable session id sent as x-opencode-session. OpenCode Go wants one per
-	// conversation; empty means the server generates one at startup.
-	OpenAISessionID string
+	// Stable session id sent as x-opencode-session. The OpenCode gateway wants
+	// one per conversation; empty means the server generates one at startup.
+	OpencodeSessionID string
 	// Reasoning effort for models that support it: minimal, low, medium,
 	// high, xhigh. Empty leaves the provider default.
 	OpenAIReasoningEffort string
@@ -35,7 +34,11 @@ type Env = struct {
 	DBPath string
 	// Admin password. Empty means the server generates a random one at
 	// startup and logs the URL.
-	AdminToken string
+	AdminPassword string
+	// Optional public URL of the admin panel, such as
+	// "https://admin.example.com". The board redirects /admin there when set.
+	// Trailing slashes are trimmed.
+	AdminURL string
 	// Port that serves the admin pages. The board's port redirects /admin
 	// here. A separate origin keeps the board's scripts, and the model's, off
 	// the origin that holds the admin login cookie. Defaults to the port after
@@ -63,12 +66,13 @@ func init() {
 		LiveReloadHost:        os.Getenv("LIVE_RELOAD_PROXY_HOST"),
 		LiveReloadPort:        os.Getenv("LIVE_RELOAD_PROXY_PORT"),
 		OpenAIModel:           GetEnv("OPENAI_MODEL", "mock-model"),
-		OpenAIBaseURL:         GetEnv("OPENAI_BASE_URL", "http://localhost:6700"),
+		OpenAIBaseURL:         GetEnv("OPENAI_BASE_URL", "http://localhost:6701"),
 		OpenAIAPIKey:          loadAPIKey(),
-		OpenAISessionID:       os.Getenv("OPENAI_SESSION_ID"),
+		OpencodeSessionID:     os.Getenv("OPENCODE_SESSION_ID"),
 		OpenAIReasoningEffort: os.Getenv("OPENAI_REASONING_EFFORT"),
 		DBPath:                GetEnv("DB_PATH", "./data/sqlite.db"),
-		AdminToken:            os.Getenv("ADMIN_TOKEN"),
+		AdminPassword:         os.Getenv("ADMIN_PASSWORD"),
+		AdminURL:              strings.TrimRight(os.Getenv("ADMIN_URL"), "/"),
 		AdminPort:             adminPort(GetEnv("PORT", "6930")),
 		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
 		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),

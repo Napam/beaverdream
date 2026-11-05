@@ -18,7 +18,6 @@ import (
 	"github.com/Napam/beaverdream/db"
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/env"
-	"github.com/Napam/beaverdream/lib/logging"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,7 +27,7 @@ import (
 )
 
 func main() {
-	handler := logging.NewHandler(&slog.HandlerOptions{
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})
 	logger := slog.New(handler)
@@ -72,7 +71,7 @@ func run(logger *slog.Logger) error {
 
 	queries := sqlc.New(dbConn)
 
-	sessionID := resolveSessionID(env.Vars.OpenAIBaseURL, env.Vars.OpenAISessionID)
+	sessionID := resolveSessionID(env.Vars.OpenAIBaseURL, env.Vars.OpencodeSessionID)
 	clientOpts := []option.RequestOption{
 		option.WithBaseURL(env.Vars.OpenAIBaseURL),
 		option.WithHeader("User-Agent", "beaverdream/0.1"),
@@ -91,7 +90,7 @@ func run(logger *slog.Logger) error {
 		env.Vars.OpenAIReasoningEffort,
 	)
 
-	adminToken, err := resolveAdminToken(logger, env.Vars.AdminToken)
+	adminToken, err := resolveAdminToken(logger, env.Vars.AdminPassword)
 	if err != nil {
 		return err
 	}
@@ -103,6 +102,7 @@ func run(logger *slog.Logger) error {
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
 		AdminToken:  adminToken,
 		AdminPort:   env.Vars.AdminPort,
+		AdminURL:    env.Vars.AdminURL,
 		Port:        env.Vars.Port,
 		DatastarSrc: beaverdream.StaticRootPath("static/datastar.js"),
 	})
@@ -120,6 +120,9 @@ func run(logger *slog.Logger) error {
 		slog.Bool("openai_api_key_set", env.Vars.OpenAIAPIKey != ""),
 		slog.String("openai_reasoning_effort", env.Vars.OpenAIReasoningEffort),
 		slog.Bool("tls", env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != ""),
+	}
+	if env.Vars.AdminURL != "" {
+		logAttrs = append(logAttrs, slog.String("admin_url", env.Vars.AdminURL+"/admin"))
 	}
 	if env.Vars.LiveReloadHost != "" && env.Vars.LiveReloadPort != "" {
 		logAttrs = append(logAttrs, slog.String(
@@ -170,7 +173,7 @@ func run(logger *slog.Logger) error {
 
 // resolveAdminToken returns the configured token, or generates a random one
 // so the admin panel is never open by default. The generated token only lives
-// for this process; set ADMIN_TOKEN for a stable one.
+// for this process; set ADMIN_PASSWORD for a stable one.
 func resolveAdminToken(logger *slog.Logger, configured string) (string, error) {
 	if configured != "" {
 		return configured, nil
@@ -188,9 +191,13 @@ func resolveAdminToken(logger *slog.Logger, configured string) (string, error) {
 	if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
 		scheme = "https"
 	}
+	adminURL := scheme + "://" + net.JoinHostPort(host, env.Vars.AdminPort) + "/admin"
+	if env.Vars.AdminURL != "" {
+		adminURL = env.Vars.AdminURL + "/admin"
+	}
 	logger.Warn(
-		"ADMIN_TOKEN is not set, generated one for this run",
-		slog.String("admin_url", scheme+"://"+net.JoinHostPort(host, env.Vars.AdminPort)+"/admin"),
+		"ADMIN_PASSWORD is not set, generated one for this run",
+		slog.String("admin_url", adminURL),
 		slog.String("admin_password", token),
 	)
 	return token, nil

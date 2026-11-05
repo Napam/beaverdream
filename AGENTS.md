@@ -257,13 +257,14 @@ prefer simple, readable code over production hardening.
 - Admin is always password-protected, on its own port. The pages are
   `/admin`, `/admin/turns`, `/admin/turns/{id}` and `/admin/site`, served only
   on `ADMIN_PORT` (default: the port after `PORT`, skipping the live reload
-  proxy). The board's port redirects every admin path there, keeping the host,
-  so a LAN address works too; the admin listener mounts the panel and its
-  assets only and serves no board route. That split is what allows the login
-  cookie: model-written JavaScript never runs on the admin origin, and the
+  proxy). The board's port redirects every admin path there, keeping the host
+  or to `ADMIN_URL` when it is set, so a LAN address works too. The admin
+  listener mounts the panel and its assets only and serves no board route.
+  That split is what allows the login cookie: model-written JavaScript never
+  runs on the admin origin, and the
   browser refuses to hand the board a cross-origin response. The cookie is
   `beaverdream_admin`, a signed expiry, HttpOnly, SameSite=Strict, host-only,
-  lasting 30 days; a new `ADMIN_TOKEN` invalidates it. Without it a page
+  lasting 30 days; a new `ADMIN_PASSWORD` invalidates it. Without it a page
   renders the password form. A correct password sets the cookie and answers
   with a 303 back to the same path, so the next request carries the cookie,
   the page gets its CSRF token, and a reload cannot repost the password.
@@ -271,7 +272,7 @@ prefer simple, readable code over production hardening.
   cookie; HttpOnly keeps it out of the model's scripts, and the CSRF token
   keeps a forged action from working.
 - Every cookie-authenticated POST needs the `csrf` field, which is
-  HMAC(ADMIN_TOKEN, "admin-csrf:" + the signed expiry in the cookie), compared
+  HMAC(ADMIN_PASSWORD, "admin-csrf:" + the signed expiry in the cookie), compared
   in constant time. It is derived, not stored, and it dies with the login. The
   panel renders it into every action form, and the live stream renders it into
   the fragments that carry forms (undo, heal, restore), because that is where
@@ -301,7 +302,7 @@ prefer simple, readable code over production hardening.
   carries `live=1`, so the patch also lands when the turn finished before the
   stream connected. `runState` rides on the public
   `/version` JSON, so its messages and draft never marshal. When
-  `ADMIN_TOKEN` is empty the server generates one and logs the password.
+  `ADMIN_PASSWORD` is empty the server generates one and logs the password.
 - Mutations from posts run in the background through one worker that coalesces
   a burst into one rewrite; admin mutations stay synchronous so the flash
   message works. `h.mu` serializes both, the worker takes it before draining
@@ -373,8 +374,7 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   usually via `.env` (gitignored, `.env.example` is the template, loaded by the
   Taskfile). The server reads only the process environment; shell variables win
   over Taskfile values, which win over `.env`. OpenCode Go also gets a generated
-  `x-opencode-session` header; pin it with `OPENAI_SESSION_ID`. Reasoning
-  models take `OPENAI_REASONING_EFFORT`; the dev task uses
-  `deepseek-v4.1-flash` with `low`.
+  `x-opencode-session` header; pin it with `OPENCODE_SESSION_ID`. Reasoning
+  models take `OPENAI_REASONING_EFFORT`.
 - The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy
   `6931`.

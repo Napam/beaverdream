@@ -1,250 +1,80 @@
 # beaverdream
 
-beaverdream is a single shared chat room whose only output is the room itself.
-Posts are user turns. Each post hands the conversation to a model, and the
-model answers by rewriting the page's CSS and markup instead of writing a
-reply. The current page is the latest answer; every earlier answer stays in the
-version history.
+<img src="web/assets/beaver.svg" width="240" alt="a beaver dreaming">
 
-There are no accounts and no per-user threads. A post that asks for something
-changes the page for everyone. Plain talk usually leaves the page alone. If
-someone talks it into making the board hostile, it can. That is the game.
+Nobody designed this message board. It got that way one post at a time.
 
-Everyone shares one page. The model personalizes in the browser with the
-viewer's name.
+Visitors post, and a model rewrites the whole site after each one: colors,
+layout, scripts, even the post form it hands you. Everyone sees the same page.
+Someone asks for a dark terminal look, and the next page is dark for all of
+you. Only the admin panel can put an old version back.
 
-It is a toy. It runs on localhost and calls a local model.
+Model-written scripts run in every visitor's browser, so keep it on a network
+you trust.
+
+## Play with friends on your LAN
+
+Run beaverdream on one machine and give friends its LAN address. They open it in
+a browser and install nothing. Post at the same time and your posts get folded
+into one rewrite, so you are all arguing over the same page. Details in
+[docs/lan-play.md](docs/lan-play.md).
+
+## Quick start
+
+You need [mise](https://mise.jdx.dev). Activate mise in your shell so its Go,
+bun and Task are on your `PATH`. `mise.toml` pins the versions.
+
+```sh
+task init           # install tools, js deps and git hooks
+task dev.mock-llm   # terminal 1: a fake model on port 6701, no key needed
+task dev            # terminal 2: the server on port 6930
+```
+
+Open http://localhost:6930 and post something. Try `matrix`, `pink` or `brutalist`.
+The fake model picks its theme from keywords in the post, so the page changes
+without a real model. If your `.env` sets a real model, `task dev` uses that
+instead.
+
+## Run with Docker
+
+`task build.docker.run` builds the image and runs it with a named volume for the
+database, so the data survives restarts. The details are in
+[docs/docker.md](docs/docker.md).
+
+## Use a real model
+
+Any OpenAI-compatible endpoint works, as long as it supports tool calls. Put
+your endpoint and key in `.env`, then run `task dev`. Each post can trigger
+several paid model calls, so set a spend cap with your provider first. More in
+[docs/real-models.md](docs/real-models.md).
 
 ## How it works
 
-- `posts` holds the messages. `site_versions` holds full snapshots of the
-  design. The current site is the newest version row; each mutation appends a
-  new one. Nothing is overwritten.
-- A version is two fields: `css` and `html`, everything inside `<body>`. The
-  html contains the literal placeholder `{{posts}}`, which the server replaces
-  with the code-owned post list. That is the only structure it enforces. A
-  model write that drops the placeholder is rejected, and a stored page
-  without it gets the posts appended, so a post can never disappear.
-- Everyone sees the same page. The model personalizes in the browser: the
-  viewer's name is on the `<html>` tag as `data-name`, and `{{name}}` in the
-  html becomes the escaped name, so a script or the markup can branch on it.
-- `GET /` never calls the model. It serves the newest version directly as the
-  page: no iframe, no sandbox. The model's markup, CSS and scripts are the
-  document. The only code-owned markup is the document shell, Datastar and the
-  live stream mount, the post container, the live script, the journal runtime,
-  the shared-state and journal tags, the busy spinner and the small name link. The model writes the post form itself, so it can
-  move it, restyle it, or break it. The system prompt gives it the exact
-  method, action and field names. If it breaks the form, posting stops working
-  until an admin injects a fix.
-- The first visit asks for a display name. It goes into an HttpOnly cookie and
-  becomes the author of that visitor's posts. There are no accounts and names
-  are not unique. The name page is code-owned and plain; the model never sees
-  it. Visit `/identity`, or the **set name** link at the bottom of the board, to  set it again.
-- Post bodies are still escaped. The model is the conduit for sabotage, not raw
-  HTML injection through the form.
-- The model can also declare a tiny shared state: counters, lists and choices,
-  through `set_state_schema`. Every open page receives the values as the
-  `$shared` signal and in the `bd-state` JSON tag, and visitors change them
-  with `POST /x/state/{key}`. It is the model's backend without giving it
-  arbitrary Go. Restores keep the values; reset and heal clear them.
-- The journal is the model's backend for things people do together. It declares
-  append-only feeds with `set_journal_schema` (a game's moves, a chat, votes),
-  and the page appends small JSON payloads with `POST /j/{key}` and reads them
-  back from `GET /j/{key}?since=N`. The server owns order, a per-browser visitor
-  id, the match number and the rules number; it never reads a payload. A
-  code-owned runtime (`bd.journal(key)`) owns the feed, the seats and error
-  reporting, so the model writes only `reduce(rows)` and `render(state)`.
-  A feed reads its rows once; after that the page's live stream pushes every
-  new row as it is written, so nothing polls. A page that runs a reducer under
-  other rules reloads rather than folding rows it does not understand.
-  The log is public, so the reducer is the referee. When a model script throws,
-  the page reports it to `POST /x/err` and
-  the server records one `alert` turn per message per stretch, which the
-  webmaster reads as a `browser:` line and can fix.
-- A new post returns immediately. A single worker coalesces posts that arrive
-  during a rewrite, so a burst becomes one mutation. Every open page holds one
-  Datastar stream from `GET /live`; a write publishes a topic and each stream
-  pushes only what its page lacks. A new post is prepended in place and never
-  reloads the page. A new version with only a stylesheet change is patched in
-  place, and a markup change reloads, after saving the draft and reading
-  position. Shared state and journal rows arrive on the same stream, so
-  nothing polls. A small spinner in the top-left corner shows while a rewrite
-  is queued or running.
-  HTTP/2 carries every tab's stream over one connection; set `TLS_CERT_FILE`
-  and `TLS_KEY_FILE` so browsers get it, or terminate TLS in a proxy that
-  speaks h2c to the server.
-- A quiet board keeps its page however long it sits. The admin panel can
-  heal it: the seed is copied forward, the posts are kept, and shared state
-  and the journal are cleared. The next visitor gets the plain board and the
-  reveal again.
-- A mutation runs up to `MUTATION_ROUNDS` model rounds. The model edits the
-  stylesheet, the html and shared state, then calls `done`. Small changes go through `edit`, which
-  replaces one exact piece of the stylesheet or the html, or appends to it, so
-  the model does not have to write the whole page out again. `set_site`
-  replaces whole parts for a real restyle. If an edit misses, the turn stays
-  open so the model can fix it. Each round logs its time, token counts and
-  tools. The result is stored as a new version plus a turn in the room, with
-  the whole conversation.
-- The board is one conversation with one webmaster. Each turn reads back the
-  room log: who said what, and what the webmaster said and changed, oldest
-  first. It also carries a small private note to itself across turns. Keeping
-  the page is a real answer, so a post that does not warrant a change can end
-  as a kept turn with no new version.
-- When the conversation reaches 128k estimated tokens (four runes per token)
-  or a 10k-turn backstop, the server compacts it into one summary message and
-  starts a fresh log after it. Compaction runs after a turn has landed, so a
-  slow summary never holds up the page. The webmaster reads the summary first,
-  then the recent turns. Summaries survive heal; reset clears them with the
-  room.
+- Each post goes to the model with the current page and a log of the room. The
+  model answers with tool calls that edit the page, not with a chat reply.
+- Every change is a new version. Old looks stay in the history, and the admin
+  panel can restore any of them.
+- The page is the model's own HTML, CSS and JavaScript, and it runs in every
+  visitor's browser. The server escapes post text and places the post list.
 
-**Do not expose this to the open internet.** Model-generated scripts run in
-every visitor's browser with the board's origin. That is the game. The admin
-panel is password-protected and hand-written, but the board itself is hostile
-by design.
+## Docs
 
-## Quickstart
+- [docs/README.md](docs/README.md): index of the docs and work-in-progress notes.
+- [LAN play](docs/lan-play.md): share a board with friends on your network.
+- [Configuration](docs/configuration.md): every environment variable, and how to
+  run the binary.
+- [Admin panel](docs/admin.md): the password, the login cookie and the admin
+  port.
+- [Real models](docs/real-models.md): OpenAI-compatible endpoints and what they
+  cost.
+- [Docker](docs/docker.md): the production image.
+- [Development](docs/development.md): tasks, tests and the code layout.
 
-Requires [mise](https://mise.jdx.dev) and [bun](https://bun.sh) (installed by
-mise).
+## License
 
-```sh
-task init          # install tools, js deps, git hooks
-task dev.mock-llm  # terminal 1: deterministic fake model on :6701
-task dev           # terminal 2: server on :6930, live reload proxy on :6931
-```
+MIT. Copyright (c) 2026 Naphat Amundsen. See [LICENSE](LICENSE).
 
-To use OpenCode Go instead of the mock, copy `.env.example` to `.env`, put the
-key in `OPENAI_API_KEY`, and run `task dev.deepseek`. It points at DeepSeek
-V4.1 Flash with reasoning at `low`.
+`lib/hashfs` is adapted from [benbjohnson/hashfs](https://github.com/benbjohnson/hashfs),
+also MIT. Live page updates run on [Datastar](https://github.com/starfederation/datastar-go).
 
-Open `http://localhost:6931`. The dev task binds the app and the live reload
-proxy to all interfaces, so another device on the same network can use
-`http://<your-ip>:6931`. The admin panel is exposed too, still behind its
-password.
-
-The mock model picks a theme from keywords in your post: `matrix`,
-`pink`/`cute`, `brutalist`/`concrete`, or
-`chaos`/`sabotage`/`prank` (which writes a script, so you can watch the page
-sabotage itself). Anything else gets a neutral theme.
-`mocknoop` asks it to leave the site alone; `mockfail` makes it fail, which is
-useful for testing error handling. `mockedit` and `mockpatch` make a small
-targeted edit (`mockpatch` needs the neutral theme on the page first), and
-`mockbadedit` sends an edit that misses, to show the retry.
-
-Production binary: `task build.go` writes `bin/app` with assets and migrations
-embedded.
-
-## Using a real model
-
-Point the server at any OpenAI-compatible chat completions endpoint. The
-Taskfile loads `.env` for every task, so copy the example file, fill in the
-key, and start the dev server:
-
-```sh
-cp .env.example .env
-$EDITOR .env
-task dev.deepseek
-```
-
-The server itself reads only the process environment. If you run the binary
-directly, export the file yourself first:
-
-```sh
-set -a; . ./.env; set +a
-./bin/app
-```
-
-Under `task`, shell variables win over Taskfile values, which win over `.env`,
-so you can still override any of them:
-
-```sh
-PORT=6940 DB_PATH=./tmp/real.db DB_MIGRATE_ON_START=true ./bin/app
-```
-
-A local llama.cpp server works the same way, just with its own base URL and
-model id. `task dev` reads the same variables; override them on the command
-line or edit the `env` block in `Taskfile.yml`. The defaults match
-`task dev.mock-llm`.
-
-The server sends a `User-Agent` and, for `opencode.ai` URLs, a stable
-`x-opencode-session` header. Set `OPENAI_SESSION_ID` to pin that session.
-`OPENAI_REASONING_EFFORT` accepts `none`, `minimal`, `low`, `medium`, `high`,
-`xhigh` or `max`, and is omitted when empty. Providers that do not support the
-parameter reject the request; leave it empty for those.
-
-The model must support tool calls. If it answers in prose without calling a
-tool, the site does not change. DeepSeek V4.1 Flash on OpenCode Go is a
-reasoning model. `task dev.deepseek` sends `low`; lower
-`OPENAI_REASONING_EFFORT` to `none` if you want to trade quality for fewer
-tokens and less latency.
-
-## Admin
-
-`/admin` is code-owned, never model-generated. It shows:
-
-- the current version and its CSS and html,
-- a form that sends an instruction straight to the model (optionally also
-  storing it as a post),
-- the version list, with a restore button that copies an old version forward as
-  a new row,
-- a reset button that deletes every post, turn and later version, and clears
-  the room, keeping only the original version,
-- the newest webmaster turns with their full conversation: system and user
-  prompts, assistant reasoning (when the server returns it), tool calls, tool
-  results, errors, and duration. Older turns keep a summary so the page stays
-  small.
-
-Admin is always password-protected. Set `ADMIN_TOKEN` yourself, or let the
-server generate a random one at startup and log it. `/admin` asks for that
-password. There is no session cookie on purpose: the model's page runs
-same-origin scripts, and a cookie would hand those scripts the panel. The
-password stays in the page's hidden form fields and the live stream's request
-headers, never in the URL, and a reload asks again. Admin actions patch the
-panel in place over the same Datastar stream.
-
-## Configuration
-
-The Taskfile loads `.env` into the environment for every task. The server only
-reads the process environment, so `./bin/app` by itself does not load `.env`.
-Under `task`, shell variables win over Taskfile values, which win over `.env`.
-`.env` is gitignored; `.env.example` is the template.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `HOST` / `PORT` | `localhost` / `6930` | HTTP listen address |
-| `DB_PATH` | `./data/sqlite.db` | sqlite file |
-| `DB_MIGRATE_ON_START` | `false` | run goose migrations at startup |
-| `OPENAI_BASE_URL` | `http://localhost:6700` | chat completions base URL |
-| `OPENAI_MODEL` | `mock-model` | model id |
-| `OPENAI_API_KEY` | empty | provider key, usually from `.env` via the Taskfile |
-| `OPENAI_SESSION_ID` | generated | `x-opencode-session` value for `opencode.ai` |
-| `OPENAI_REASONING_EFFORT` | empty | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `ADMIN_TOKEN` | generated | required for `/admin`; generated and logged when empty |
-| `MUTATION_ROUNDS` | `3` | tool rounds per mutation |
-
-## Development
-
-- `task check` regenerates templ/sqlc and runs go build, golangci-lint, templ
-  fmt, prettier, eslint, tsc, and a bundle build.
-- `task fix` auto-fixes formatting and lint issues.
-- `go test ./...` runs the unit and handler tests against `lib/mockllm`, so no
-  model or network is needed.
-- `task gen.db` and `task gen.templ` regenerate code after changing queries or
-  templates.
-
-## Project structure
-
-```
-cmd/serve            server, routes, sqlite setup
-cmd/mockllm          fake OpenAI-compatible server
-cmd/serve/handlers   board pages, post creation, admin, restore
-lib/webmaster        mutation loop, tools, validation, site rendering
-lib/mockllm          deterministic model used by tests and task dev.mock-llm
-db/migrations        goose schema
-db/queries           sqlc queries
-web/pages            templ page for admin
-web/assets           committed static assets
-```
-
-The scaffold still carries the template's tailwind, Lit components, Dockerfile
-and live-reload setup. They are convenient and harmless, not requirements.
+The project is built on [backwego-template](https://github.com/Napam/backwego-template).

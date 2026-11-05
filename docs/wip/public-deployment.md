@@ -437,7 +437,7 @@ every turn, and griefing a game is part of the fun. Cheap hardening instead:
 ### Admin
 
 - Separate bind address, default loopback for public deployments.
-- Require `ADMIN_TOKEN` to be at least 24 random characters. With that, a login
+- Require `ADMIN_PASSWORD` to be at least 24 random characters. With that, a login
   rate limit is not worth the code; without it, a weak password is the problem.
 - Set `Secure` from configuration, not from `r.TLS`, which is nil behind a
   proxy.

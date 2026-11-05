@@ -545,6 +545,34 @@ func TestAdminRedirectsToItsOwnPort(t *testing.T) {
 	}
 }
 
+// With ADMIN_URL set, the board's redirect goes to that public URL instead of
+// the request's host on the admin port.
+func TestAdminRedirectsToAdminURL(t *testing.T) {
+	h, _ := setupWithConfig(t, handlers.Config{
+		AdminToken: testAdminToken,
+		Port:       "6930",
+		AdminPort:  "6932",
+		AdminURL:   "https://admin.example.com",
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	board := h.RedirectAdmin(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/turns/8?pick=1", nil)
+	req.Host = "board.example.com"
+	rec := httptest.NewRecorder()
+	board.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want a redirect", rec.Code)
+	}
+	want := "https://admin.example.com/admin/turns/8?pick=1"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
 // A post waiting for the worker shows in the turns table as one queued row
 // above the newest turn, because the worker answers a burst as one turn.
 func TestAdminTurnsShowsQueuedPosts(t *testing.T) {

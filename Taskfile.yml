@@ -18,6 +18,7 @@ tasks:
     cmds:
       # tools first: bun and go (used by the tasks below) come from mise
       - mise install
+      - task: gen.templ
       - task: init.js
       - task: init.hooks
 
@@ -43,25 +44,12 @@ tasks:
   db.migrate:
     desc: Run goose migrations against the local sqlite database
     cmds:
-      - go tool goose sqlite3 -dir ./db/migrations ./data/sqlite.db up
+      - go tool goose sqlite3 -dir ./db/migrations "${DB_PATH:-./data/sqlite.db}" up
 
   dev.mock-llm:
     desc: Run the deterministic mock model on :6701 (leave it running in another terminal)
     cmds:
       - go run ./cmd/mockllm -addr localhost:6701
-
-  dev.deepseek:
-    desc: Run the dev server against OpenCode Go with DeepSeek V4.1 Flash (max reasoning)
-    deps:
-      - init
-    cmds:
-      # refuse to start if orphaned watchers from a previous session hold the proxy port
-      - |
-        if nc -z "$LIVE_RELOAD_PROXY_HOST" "$LIVE_RELOAD_PROXY_PORT" 2>/dev/null; then
-          echo "$LIVE_RELOAD_PROXY_HOST:$LIVE_RELOAD_PROXY_PORT is already in use — another dev session or orphaned watchers?" >&2
-          exit 1
-        fi
-      - task --parallel dev.tailwind dev.web dev.sql dev.go PROVIDER=deepseek
 
   gen.templ:
     desc: Generate go code from templ templates
@@ -75,7 +63,7 @@ tasks:
       - go tool sqlc generate
 
   dev:
-    desc: Run all watchers and the live-reloading dev server
+    desc: Run all watchers and the live-reloading dev server, logs through hl
     deps:
       - init
     cmds:
@@ -85,6 +73,17 @@ tasks:
           echo "$LIVE_RELOAD_PROXY_HOST:$LIVE_RELOAD_PROXY_PORT is already in use — another dev session or orphaned watchers?" >&2
           exit 1
         fi
+      # hl -P turns off its pager. Without hl on PATH the output stays raw JSON.
+      - |
+        if command -v hl >/dev/null 2>&1; then
+          task dev.watch 2>&1 | hl -P
+        else
+          task dev.watch
+        fi
+
+  dev.watch:
+    desc: Run all watchers and the dev server with raw output
+    cmds:
       # Ctrl+C SIGINTs the whole process group; templ tears down the dev-run.sh server
       - task --parallel dev.tailwind dev.web dev.sql dev.go
 
@@ -138,13 +137,9 @@ tasks:
     desc: Run the server with templ watch mode and live reload
     env:
       TEMPL_DEV_MODE: true
-      # The provider vars live on this leaf task: Taskfile env does not flow
-      # from a calling task into a called one. dev.deepseek passes PROVIDER=deepseek.
-      OPENAI_BASE_URL: '{{if eq (default "" .PROVIDER) "deepseek"}}https://opencode.ai/inference/go/openai/v1{{else}}http://localhost:6701{{end}}'
-      OPENAI_MODEL: '{{if eq (default "" .PROVIDER) "deepseek"}}deepseek-v4.1-flash{{else}}mock-model{{end}}'
-      OPENAI_REASONING_EFFORT: '{{if eq (default "" .PROVIDER) "deepseek"}}low{{end}}'
-      MUTATION_ROUNDS: '{{if eq (default "" .PROVIDER) "deepseek"}}16384{{else}}3{{end}}'
     cmds:
+      # Model settings are not exported here, so .env and the server's own
+      # defaults apply.
       - |
         go tool templ generate \
         --log-level=info \
@@ -158,17 +153,38 @@ tasks:
         --cmd='./scripts/dev-run.sh'
 
   build.docker.run:
-    desc: Build the docker image and run it with local data mounted
+    desc: Build the docker image and run it (board on PORT 6930, admin on 6932)
+    vars:
+      ADMIN_PORT: "6932"
     cmds:
       - task: build.docker
+      # Bare -e NAME copies the value from this shell, where dotenv has loaded
+      # .env, so secrets stay out of the command line and out of the image.
+      # OPENAI_BASE_URL falls back to the host's mock model (task dev.mock-llm).
+      # The board's database lives in ./data, the same file a local run uses.
+      # --user runs the container as this user, so the files it writes are
+      # owned by you, not by the image's uid 65532, and SQLite can write them.
+      # The logs go through hl -P like task dev. Without hl, they stay raw JSON.
       - |
-        docker run --rm \
-        -e HOST=0.0.0.0 \
+        mkdir -p "{{.ROOT_DIR}}/data"
+        docker run --rm --name beaverdream \
+        --user "$(id -u):$(id -g)" \
+        --add-host=host.docker.internal:host-gateway \
         -e PORT=$PORT \
-        -e DB_MIGRATE_ON_START=$DB_MIGRATE_ON_START \
-        -v $(pwd)/data:/app/data \
+        -e ADMIN_PORT={{.ADMIN_PORT}} \
+        -e OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://host.docker.internal:6701/v1}" \
+        -e OPENAI_MODEL \
+        -e OPENAI_API_KEY \
+        -e OPENAI_REASONING_EFFORT \
+        -e OPENCODE_SESSION_ID \
+        -e MUTATION_ROUNDS \
+        -e ADMIN_PASSWORD \
+        -e ADMIN_URL \
         -p $PORT:$PORT \
-        beaverdream:latest
+        -p {{.ADMIN_PORT}}:{{.ADMIN_PORT}} \
+        -v "{{.ROOT_DIR}}/data:/app/data" \
+        beaverdream:latest 2>&1 \
+        | { if command -v hl >/dev/null 2>&1; then hl -P; else cat; fi; }
 
   build.docker:
     desc: Build the production docker image

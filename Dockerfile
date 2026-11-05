@@ -1,13 +1,12 @@
-FROM golang:1.27-trixie AS builder
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends unzip && \
-    curl -fsSL https://bun.sh/install | bash && \
-    ln -s /root/.bun/bin/bun /usr/local/bin/bun && \
-    ln -s /root/.bun/bin/bunx /usr/local/bin/bunx && \
-    curl -1sLf 'https://dl.cloudsmith.io/public/task/task/setup.deb.sh' | bash && \
-    apt-get install -y task && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Go matches go.mod. bun and task match mise.toml. Neither comes from an
+# installer script: bun is copied from its image, task is built from the module.
+FROM golang:1.27.3-trixie AS builder
+
+COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/local/bin/bun
+RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx && \
+    GOBIN=/usr/local/bin go install github.com/go-task/task/v3/cmd/task@v3.54.0
 
 WORKDIR /app
 
@@ -21,21 +20,29 @@ RUN go mod download
 RUN --mount=type=cache,target=/root/.cache/go-build \
     go tool templ version
 
+# .dockerignore keeps .env and local data out of this layer
 COPY . .
+RUN mkdir -p /app/data
 
+# Same order as `task build.go`: templ, tailwind, the js bundle, then go build.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     ENV=prod CGO_ENABLED=0 task build.go && \
     chmod +x /app/bin/app
 
 FROM scratch
 
-COPY --from=builder app/bin/app /app/bin/app
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /app/bin/app /app/bin/app
+# Owned by the app user so a fresh named volume starts writable.
+COPY --from=builder --chown=65532:65532 /app/data /app/data
 
 WORKDIR /app
+USER 65532:65532
 
-# 0.0.0.0 so the published port is reachable from the host; a bare `docker run`
-# needs it (a container can't bind localhost). PORT comes from the Taskfile.
-ENV HOST=0.0.0.0 DB_MIGRATE_ON_START=true
+# HOST=0.0.0.0 so published ports reach the host. The admin listens on its own
+# port, so ADMIN_PORT is set here and published by build.docker.run.
+ENV HOST=0.0.0.0 PORT=6930 ADMIN_PORT=6932 DB_PATH=/app/data/sqlite.db DB_MIGRATE_ON_START=true
 
-ENTRYPOINT ["bin/app"]
+EXPOSE 6930 6932
+
+ENTRYPOINT ["/app/bin/app"]

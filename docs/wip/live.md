@@ -127,12 +127,12 @@ A password, once entered, sets `beaverdream_admin`: a signed expiry, HttpOnly,
 SameSite=Strict, host-only, good for 30 days. The login answers with a 303 to
 the same path, so the next request has the cookie and the page can render its
 CSRF token. Nothing like the token appears in the page or in a URL. A new
-`ADMIN_TOKEN` invalidates every remembered login.
+`ADMIN_PASSWORD` invalidates every remembered login.
 
 Cookies ignore ports, so the board's page does send this cookie to the admin
 port. That is harmless for reads (the browser refuses to hand a cross-origin
 response to a script) but not for writes, which is why every
-cookie-authenticated POST must carry `csrf`: HMAC(ADMIN_TOKEN, "admin-csrf:" +
+cookie-authenticated POST must carry `csrf`: HMAC(ADMIN_PASSWORD, "admin-csrf:" +
 the cookie's signed expiry), in constant time. The panel puts it in every
 action form, and the stream puts it in the fragments that contain forms. The
 board cannot read the admin HTML, so it cannot learn the token. A request
@@ -146,7 +146,7 @@ localhost.
 
 Any cookie with the login's name is tried and the first one that verifies is
 used, so a cookie planted by the board's page cannot lock the admin out.
-Signing out clears this browser only; rotating `ADMIN_TOKEN` signs out
+Signing out clears this browser only; rotating `ADMIN_PASSWORD` signs out
 everyone. Without cookies the form works but every visit asks again.
 
 A page without a login returns only the password form, which POSTs back to the

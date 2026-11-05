@@ -1,16 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="beaver" fill="none">
-  <circle cx="32" cy="33" r="28" fill="#6b4a33"/>
-  <circle cx="16" cy="18" r="8" fill="#6b4a33"/>
-  <circle cx="48" cy="18" r="8" fill="#6b4a33"/>
-  <circle cx="16" cy="18" r="4.5" fill="#8d6547"/>
-  <circle cx="48" cy="18" r="4.5" fill="#8d6547"/>
-  <circle cx="23" cy="30" r="4" fill="#f4ead9"/>
-  <circle cx="41" cy="30" r="4" fill="#f4ead9"/>
-  <circle cx="23" cy="30" r="1.9" fill="#1b120b"/>
-  <circle cx="41" cy="30" r="1.9" fill="#1b120b"/>
-  <ellipse cx="32" cy="43" rx="9" ry="6" fill="#8d6547"/>
-  <ellipse cx="30" cy="41" rx="1.6" ry="1.2" fill="#4a3122"/>
-  <ellipse cx="34" cy="41" rx="1.6" ry="1.2" fill="#4a3122"/>
-  <rect x="26.5" y="43" width="4" height="9" rx="1.2" fill="#fffdf7"/>
-  <rect x="33.5" y="43" width="4" height="9" rx="1.2" fill="#fffdf7"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="112" height="112">
+  <!-- Simple Tail -->
+  <ellipse cx="94" cy="82" rx="16" ry="9" fill="#5c4033" stroke="#1a110b" stroke-width="3" />
+
+  <!-- Bean Body -->
+  <path d="M22 84 C20 48, 88 48, 88 84 C88 94, 22 94, 22 84 Z" fill="#b07d62" stroke="#1a110b" stroke-width="3" />
+
+  <!-- Cute Ears -->
+  <circle cx="30" cy="46" r="7.5" fill="#855030" stroke="#1a110b" stroke-width="3" />
+  <circle cx="30" cy="46" r="3.5" fill="#ffb5a7" />
+  <circle cx="70" cy="46" r="7.5" fill="#855030" stroke="#1a110b" stroke-width="3" />
+
+  <!-- Head -->
+  <ellipse cx="50" cy="65" rx="27" ry="22" fill="#c38e70" stroke="#1a110b" stroke-width="3" />
+
+  <!-- Happy Crescent Closed Eyes -->
+  <path d="M34 60 Q38 64 42 60" fill="none" stroke="#1a110b" stroke-width="3" stroke-linecap="round" />
+  <path d="M58 60 Q62 64 66 60" fill="none" stroke="#1a110b" stroke-width="3" stroke-linecap="round" />
+
+  <!-- Small Nose & Buck Teeth -->
+  <ellipse cx="50" cy="68" rx="3.5" ry="2.5" fill="#1a110b" />
+  <rect x="47.5" y="72" width="5" height="6" rx="1" fill="#ffffff" stroke="#1a110b" stroke-width="2.2" />
+
+  <!-- Minimal Blush -->
+  <circle cx="28" cy="68" r="5" fill="#ff758f" opacity="0.6" />
+  <circle cx="72" cy="68" r="5" fill="#ff758f" opacity="0.6" />
 </svg>

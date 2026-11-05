@@ -23,7 +23,7 @@ const AdminCookieName = "beaverdream_admin"
 
 // adminCookieAge is how long a login lasts. The cookie carries a signed
 // expiry, so there is no session table, and a restart with the same
-// ADMIN_TOKEN keeps logins valid.
+// ADMIN_PASSWORD keeps logins valid.
 const adminCookieAge = 30 * 24 * time.Hour
 
 // adminSession is the cookie value for a login that lasts until expiry: the
@@ -159,8 +159,12 @@ func scheme(r *http.Request) string {
 }
 
 // adminURL is where the admin page lives for a request on the board's port:
-// the same host, the admin port, and the path the visitor asked for.
+// AdminURL when it is configured, otherwise the same host on the admin port.
+// Either way the path the visitor asked for is kept.
 func (h *Handlers) adminURL(r *http.Request) string {
+	if h.cfg.AdminURL != "" {
+		return h.cfg.AdminURL + r.URL.RequestURI()
+	}
 	return origin(scheme(r), r.Host, h.cfg.AdminPort, r.URL.RequestURI())
 }
 

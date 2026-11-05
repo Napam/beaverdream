@@ -189,6 +189,24 @@ const steps = {
     window.bd._rows([row(6, 2)])
     await settle()
   },
+  // A pushed row from an older match that the page never read means the feed
+  // was cleared and started over, so the feed reads itself again.
+  clearedFeed: async () => {
+    state.read = 'match'
+    start()
+    await settle()
+    state.read = 'ok'
+    window.bd._rows([row(7, 1)])
+    await settle()
+  },
+  // A late echo of a row the page already read is not a clear.
+  oldMatchEcho: async () => {
+    start()
+    await settle()
+    feed.match = 2
+    window.bd._rows([row(2, 1)])
+    await settle()
+  },
   // A resync reads every started feed again.
   resync: async () => {
     start()
@@ -672,6 +690,34 @@ func TestJournalRuntimeReadsANewMatch(t *testing.T) {
 	}
 	if !sameIDs(got.IDs, []int64{6}) {
 		t.Fatalf("rows = %v, want only the new match's row", got.IDs)
+	}
+}
+
+// An admin clear sends the key back to match 1. A page that was only
+// watching a later match reads the feed again when the first new row arrives,
+// instead of dropping it.
+func TestJournalRuntimeReadsAClearedFeed(t *testing.T) {
+	got := runRuntime(t, "clearedFeed")
+
+	if got.Match != 1 {
+		t.Fatalf("match = %d, want 1 after the clear", got.Match)
+	}
+	if !sameIDs(got.IDs, []int64{1, 2}) {
+		t.Fatalf("rows = %v, want the cleared feed's rows", got.IDs)
+	}
+}
+
+func TestJournalRuntimeIgnoresALateEchoOfAnOldMatch(t *testing.T) {
+	got := runRuntime(t, "oldMatchEcho")
+
+	reads := 0
+	for _, f := range got.Fetches {
+		if strings.HasSuffix(f, "since=0") {
+			reads++
+		}
+	}
+	if reads != 1 {
+		t.Fatalf("reads = %d, want only the start (%v)", reads, got.Fetches)
 	}
 }
 

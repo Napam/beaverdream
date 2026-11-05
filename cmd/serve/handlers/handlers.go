@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -108,6 +109,11 @@ type Handlers struct {
 	// stateMu serializes shared-state writes, so two clicks cannot read the
 	// same counter and write the same next value.
 	stateMu sync.Mutex
+
+	// journalClears counts admin clears of a journal key. A stream that has
+	// seen fewer tells its page to read its feeds again, because a clear can
+	// leave the newest row id where it was and the page would never notice.
+	journalClears atomic.Int64
 
 	// The worker coalesces posts that arrive while a mutation is running, so
 	// a burst becomes one rewrite instead of a queue of them.

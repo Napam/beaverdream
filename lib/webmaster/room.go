@@ -28,6 +28,9 @@ const (
 	TurnHeal      = "heal"
 	TurnUndo      = "undo"
 	TurnRestore   = "restore"
+	// TurnJournal is the admin clearing one journal key. The page's data
+	// changed under the webmaster, so the room log says so.
+	TurnJournal = "journal"
 	// TurnAlert is a browser error the page reported about itself, so the
 	// webmaster can see that its own script broke.
 	TurnAlert = "alert"
@@ -103,7 +106,7 @@ func renderTurn(turn Turn) string {
 	case TurnWebmaster:
 		return renderWebmasterTurn(turn)
 
-	case TurnHeal, TurnUndo, TurnRestore:
+	case TurnHeal, TurnUndo, TurnRestore, TurnJournal:
 		return fmt.Sprintf("#%d server: %s", turn.ID, turn.Body)
 
 	case TurnAlert:

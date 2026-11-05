@@ -78,17 +78,15 @@ func TestAdminLivePushesThePanel(t *testing.T) {
 		t.Fatalf("declare state: %v", err)
 	}
 
-	live := openAdminLive(t, h, "page=site", testAdminToken)
+	live := openAdminLive(t, h, "page=journal", testAdminToken)
 	live.next(t, []string{`id="admin-live"`, `waiting for a post`})
-	live.next(t, []string{`id="admin-version"`})
-	live.next(t, []string{`id="admin-versions"`, `v1`, "current"})
-	live.next(t, []string{`id="admin-feeds"`, `likes = 0`})
+	live.next(t, []string{`id="admin-journal"`, `likes = 0`})
 
 	rec := datastarPost(t, h.SetState, "/x/state/likes", nil, "dave")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("state write: status = %d, want 204", rec.Code)
 	}
-	live.next(t, []string{`id="admin-feeds"`, `likes = 1`})
+	live.next(t, []string{`id="admin-journal"`, `likes = 1`})
 }
 
 // The stream is admin-only and answers 204 so Datastar stops retrying a page
@@ -238,7 +236,7 @@ func TestAdminLoginReturnsToThePage(t *testing.T) {
 	req.AddCookie(authed.Result().Cookies()[0])
 	page := httptest.NewRecorder()
 	h.AdminSite(page, req)
-	if !strings.Contains(page.Body.String(), "journal and shared state") {
+	if !strings.Contains(page.Body.String(), "versions") {
 		t.Fatal("the redirected page is missing the site panel")
 	}
 }

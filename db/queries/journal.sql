@@ -107,3 +107,87 @@ SELECT
   CAST(COUNT(*) AS INTEGER)
 FROM
   journal;
+
+-- name: DeleteJournalKey :exec
+DELETE FROM journal
+WHERE
+  key = ?;
+
+-- name: JournalKeyStats :many
+-- One row per key that has rows, declared or not. Every aggregate is bounded
+-- by the trim, so the scan stays small.
+SELECT
+  j.key,
+  CAST(COUNT(*) AS INTEGER) AS row_count,
+  CAST(MIN(j.id) AS INTEGER) AS first_id,
+  CAST(MAX(j.id) AS INTEGER) AS last_id,
+  CAST(MIN(j.created_at) AS TEXT) AS first_at,
+  CAST(MAX(j.created_at) AS TEXT) AS last_at,
+  CAST(COUNT(DISTINCT j.visitor) AS INTEGER) AS visitors,
+  CAST(SUM(LENGTH(j.payload)) AS INTEGER) AS payload_bytes,
+  CAST(MAX(LENGTH(j.payload)) AS INTEGER) AS largest_payload,
+  CAST(MIN(j.rules) AS INTEGER) AS min_rules,
+  CAST(MAX(j.rules) AS INTEGER) AS max_rules,
+  CAST(MAX(j.match) AS INTEGER) AS current_match,
+  CAST(
+    SUM(
+      CASE
+        WHEN j.match < (
+          SELECT
+            MAX(m.match)
+          FROM
+            journal m
+          WHERE
+            m.key = j.key
+        ) THEN 1
+        ELSE 0
+      END
+    ) AS INTEGER
+  ) AS older_match_rows,
+  CAST(
+    SUM(
+      CASE
+        WHEN j.created_at >= CAST(sqlc.arg(since) AS TEXT) THEN 1
+        ELSE 0
+      END
+    ) AS INTEGER
+  ) AS recent_rows
+FROM
+  journal j
+GROUP BY
+  j.key
+ORDER BY
+  j.key;
+
+-- name: JournalMatches :many
+-- The matches a key holds, newest first, for the browser's match picker.
+SELECT
+  match,
+  CAST(COUNT(*) AS INTEGER) AS row_count
+FROM
+  journal
+WHERE
+  key = ?
+GROUP BY
+  match
+ORDER BY
+  match DESC
+LIMIT
+  50;
+
+-- name: JournalPage :many
+-- A page of one key, newest first. A zero match, an empty visitor or a zero
+-- before leaves that filter off.
+SELECT
+  *
+FROM
+  journal
+WHERE
+  key = sqlc.arg(key)
+  AND (CAST(sqlc.arg(match) AS INTEGER) = 0 OR match = sqlc.arg(match))
+  AND (CAST(sqlc.arg(visitor) AS TEXT) = '' OR visitor = sqlc.arg(visitor))
+  AND (CAST(sqlc.arg(before) AS INTEGER) = 0 OR id < sqlc.arg(before))
+ORDER BY
+  id DESC
+LIMIT
+  sqlc.arg(page_size);

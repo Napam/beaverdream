@@ -31,6 +31,8 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	panel := pages.Panel{Page: r.URL.Query().Get("page")}
 	switch panel.Page {
 	case pages.PageOverview, pages.PageSite:
+	case pages.PageJournal:
+		panel = journalPanel(r.URL.Query())
 	case pages.PageTurns:
 		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
 		// The page says whether it rendered the turn in flight, so a turn
@@ -70,6 +72,17 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 		case <-sub.wake:
 			if err := h.syncAdmin(ctx, sse, panel, csrf, &wasLive, sub.take()); err != nil {
 				return
+			}
+			// Every append publishes, and the journal page scans every key.
+			// Waiting here lets a burst coalesce into one patch a second.
+			if panel.Page == pages.PageJournal {
+				select {
+				case <-ctx.Done():
+					return
+				case <-h.stop:
+					return
+				case <-time.After(adminJournalEvery):
+				}
 			}
 		}
 	}
@@ -130,14 +143,15 @@ func (h *Handlers) syncAdmin(
 				}
 			}
 		}
-	case pages.PageSite:
-		if t&topicSite != 0 {
-			if err := h.patchAdminVersion(ctx, sse, csrf); err != nil {
+	case pages.PageJournal:
+		if t&(topicSite|topicState|topicJournal) != 0 {
+			if err := h.patchAdminJournal(ctx, sse, panel, csrf); err != nil {
 				return err
 			}
 		}
-		if t&(topicSite|topicState|topicJournal) != 0 {
-			if err := h.patchAdminFeeds(ctx, sse); err != nil {
+	case pages.PageSite:
+		if t&topicSite != 0 {
+			if err := h.patchAdminVersion(ctx, sse, csrf); err != nil {
 				return err
 			}
 		}
@@ -209,7 +223,12 @@ func (h *Handlers) patchAdminMemory(
 	sse *datastar.ServerSentEventGenerator,
 ) error {
 	summary, through := h.adminSummary(ctx)
-	return h.patchAdmin(ctx, sse, "admin-memory", pages.AdminMemory(summary, through))
+	return h.patchAdmin(
+		ctx,
+		sse,
+		"admin-memory",
+		pages.AdminMemory(summary, through, h.adminNotes(ctx)),
+	)
 }
 
 // patchAdminMetrics brings the charts forward.
@@ -291,16 +310,24 @@ func (h *Handlers) patchAdminBudget(
 	return h.patchAdmin(ctx, sse, "admin-budget", pages.AdminBudget(h.adminBudget(ctx, site)))
 }
 
-// patchAdminFeeds brings the journal and shared state forward.
-func (h *Handlers) patchAdminFeeds(
+// patchAdminJournal brings the journal page forward. The selection comes from
+// the panel, so a patch keeps the picked key, match, visitor and page.
+func (h *Handlers) patchAdminJournal(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
+	panel pages.Panel,
+	csrf string,
 ) error {
 	site, err := h.queries.CurrentSite(ctx)
 	if err != nil {
 		h.logger.Error("Live admin stream could not load the site", slog.Any("error", err))
 		return nil
 	}
-	feeds, states := h.adminFeeds(ctx, site)
-	return h.patchAdmin(ctx, sse, "admin-feeds", pages.AdminFeeds(feeds, states))
+	keys, browse := h.adminJournal(ctx, site, panel)
+	return h.patchAdmin(
+		ctx,
+		sse,
+		"admin-journal",
+		pages.AdminJournal(h.adminStates(ctx, site), keys, browse, panel, csrf),
+	)
 }

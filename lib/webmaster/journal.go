@@ -367,8 +367,9 @@ const JournalRuntime = `<script>
   }
 
   // receive takes rows the stream pushed. Rows under other rules expire the
-  // page; a row from a newer match means someone started the next game, so
-  // the feed reads it whole.
+  // page; a row from a newer match means someone started the next game, and
+  // one from an older match means the feed was cleared, so the feed reads
+  // itself whole either way.
   Journal.prototype.receive = function (rows) {
     if (this.stale || !this.started) return
     if (!this.loaded) this.load()
@@ -383,6 +384,13 @@ const JournalRuntime = `<script>
         return
       }
       if (rows[j].match > this.match) {
+        this.load()
+        return
+      }
+      // The server never accepts a lower match than the newest, so a row
+      // from an older match that this page has not read means the feed was
+      // cleared and started over. A row already read is only a late echo.
+      if (rows[j].match < this.match && !this.seen[rows[j].id]) {
         this.load()
         return
       }

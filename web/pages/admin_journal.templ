@@ -1,0 +1,213 @@
+package pages
+
+// journalPage is the data tab: the shared values, every journal key with its
+// stats, then the rows of the one picked.
+templ journalPage(view AdminView) {
+	@AdminJournal(view.States, view.Journal, view.Browse, view.Panel, view.CSRF)
+}
+
+// AdminJournal is the data tab's one patched element. The stream replaces it
+// as state and feeds change, and the selection comes from the URL, so a patch
+// keeps the picked key, match and page.
+templ AdminJournal(states []StateView, keys []JournalKeyView, browse *JournalBrowse, panel Panel, csrf string) {
+	<div id="admin-journal" class="flex flex-col gap-6">
+		<section class={ adminCard }>
+			<p class={ adminLabel }>shared state</p>
+			if len(states) == 0 {
+				<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">no value is declared</p>
+			} else {
+				<pre class={ adminPre + " mt-2 max-h-64" }>{ stateText(states) }</pre>
+			}
+		</section>
+		if len(keys) == 0 {
+			<section class={ adminCard }>
+				<p class={ adminLabel }>journal</p>
+				<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">no key is declared and no rows are stored</p>
+			</section>
+		}
+		<div class="grid gap-3 md:grid-cols-2">
+			for _, key := range keys {
+				@journalKeyCard(key, browsed(browse), panel, csrf)
+			}
+		</div>
+		if browse != nil {
+			@journalBrowse(browse)
+		}
+	</div>
+}
+
+templ journalKeyCard(k JournalKeyView, picked string, panel Panel, csrf string) {
+	<section class={ adminCard + " flex flex-col gap-3" + pickedFeed(k.Key, picked) }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class="text-sm">
+				<span class="font-mono font-medium">{ k.Key }</span>
+				if !k.Declared {
+					<span class="ml-1 rounded-sm bg-amber-100 px-1.5 py-px text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">not declared</span>
+				}
+			</p>
+			<p class={ adminMuted }>match { itoa(k.Match) }{ rulesPart(k) }</p>
+		</div>
+		<div>
+			<div class="flex items-baseline justify-between">
+				<p class="font-mono text-xs text-gray-700 dark:text-neutral-300">{ feedFill(k) }</p>
+				<p class={ adminMuted }>{ plural(k.RecentRows, "row") } in the last hour</p>
+			</div>
+			if k.Max > 0 {
+				<div class="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-neutral-800">
+					<span class="block h-full bg-emerald-500" style={ "width:" + itoa(feedFillPercent(k)) + "%" }></span>
+				</div>
+			}
+		</div>
+		if k.Rows > 0 {
+			<div class="flex flex-wrap gap-1.5">
+				<span class={ adminChip }>{ plural(k.Visitors, "visitor") }</span>
+				<span class={ adminChip }>{ payloadSize(k.PayloadBytes) } stored</span>
+				<span class={ adminChip }>largest { payloadSize(k.LargestPayload) }</span>
+				if k.OlderMatchRows > 0 {
+					<span class={ adminChip }>{ plural(k.OlderMatchRows, "row") } from older matches</span>
+				}
+			</div>
+			<p class={ adminMuted }>#{ i64(k.FirstID) } { clock(k.FirstAt) } to #{ i64(k.LastID) } { clock(k.LastAt) } UTC</p>
+		}
+		if note := rulesNote(k); note != "" {
+			<p class="text-xs text-amber-700 dark:text-amber-400">{ note }</p>
+		}
+		<div class="flex flex-wrap items-center gap-2">
+			if k.Rows > 0 {
+				<a
+					href={ templ.SafeURL(journalPath(k.Key, 0, "", 0)) }
+					data-on:click={ navTo(journalPath(k.Key, 0, "", 0)) }
+					class={ adminButton }
+				>browse rows</a>
+				<form
+					method="post"
+					action={ clearAction(k.Key, panel) }
+					onsubmit={ templ.JSUnsafeFuncCall("return " + clearConfirm(k.Key)) }
+					data-indicator:_clearing
+				>
+					@csrfInput(csrf)
+					<button
+						type="submit"
+						data-attr:disabled="$_clearing"
+						data-on:click={ "evt.preventDefault(); if (" + clearConfirm(k.Key) + ") @post('" + clearAction(k.Key, panel) + "', {contentType: 'form'})" }
+						class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
+					>clear</button>
+				</form>
+			} else {
+				<p class="text-xs text-gray-400 dark:text-neutral-600">no rows yet</p>
+			}
+		</div>
+	</section>
+}
+
+// browsed is the key whose rows are listed, or empty.
+func browsed(b *JournalBrowse) string {
+	if b == nil {
+		return ""
+	}
+	return b.Key
+}
+
+func rulesPart(k JournalKeyView) string {
+	if !k.Declared {
+		return ""
+	}
+	return " · rules " + itoa(k.Rules)
+}
+
+func pickedFeed(key, picked string) string {
+	if key == picked {
+		return " ring-1 ring-gray-900/30 dark:ring-neutral-100/30"
+	}
+	return ""
+}
+
+// journalBrowse lists one page of a key's rows, newest first, with a match
+// picker and a visitor filter. Every pick is a link, so the selection is in
+// the URL and a patch from the stream cannot reset it.
+templ journalBrowse(b *JournalBrowse) {
+	<section class={ adminCard + " p-0" }>
+		<div class="flex flex-col gap-2 border-b border-gray-200 px-4 py-3 dark:border-neutral-800">
+			<div class="flex items-baseline justify-between gap-2">
+				<p class={ adminLabel }>rows of <span class="font-mono normal-case">{ b.Key }</span></p>
+				<p class={ adminMuted }>newest first</p>
+			</div>
+			<div class="flex flex-wrap items-center gap-1.5 text-xs">
+				<span class="text-gray-500 dark:text-neutral-500">match</span>
+				@browseLink(journalPath(b.Key, 0, b.Visitor, 0), "all", b.Match == 0)
+				for _, m := range b.Matches {
+					@browseLink(journalPath(b.Key, m.Match, b.Visitor, 0), i64(m.Match)+" ("+itoa(m.Rows)+")", b.Match == m.Match)
+				}
+			</div>
+			if b.Visitor != "" {
+				<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-neutral-400">
+					<span>visitor <span class="font-mono">{ b.Visitor }</span></span>
+					<a
+						href={ templ.SafeURL(journalPath(b.Key, b.Match, "", 0)) }
+						data-on:click={ navTo(journalPath(b.Key, b.Match, "", 0)) }
+						class="text-sky-700 hover:underline dark:text-sky-400"
+					>show everyone</a>
+				</div>
+			}
+		</div>
+		if len(b.Rows) == 0 {
+			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">no rows match</p>
+		} else {
+			<ol class="divide-y divide-gray-100 dark:divide-neutral-800">
+				for _, row := range b.Rows {
+					<li class="flex flex-col gap-1 px-4 py-2">
+						<p class="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-gray-500 dark:text-neutral-500">
+							<span class="text-gray-900 dark:text-neutral-100">#{ i64(row.ID) }</span>
+							<span>{ clock(row.At) } UTC</span>
+							<span>match { i64(row.Match) }</span>
+							<span>rules { i64(row.Rules) }</span>
+							<a
+								href={ templ.SafeURL(journalPath(b.Key, b.Match, row.Visitor, 0)) }
+								data-on:click={ navTo(journalPath(b.Key, b.Match, row.Visitor, 0)) }
+								title="show only this visitor"
+								class="text-sky-700 hover:underline dark:text-sky-400"
+							>{ row.Visitor }</a>
+						</p>
+						<pre class={ adminPre + " max-h-40" }>{ payloadText(row.Payload) }</pre>
+					</li>
+				}
+			</ol>
+		}
+		if b.Before > 0 || b.OlderBefore > 0 {
+			<div class="flex justify-between border-t border-gray-200 px-4 py-2 text-xs dark:border-neutral-800">
+				if b.Before > 0 {
+					<a
+						href={ templ.SafeURL(journalPath(b.Key, b.Match, b.Visitor, 0)) }
+						data-on:click={ navTo(journalPath(b.Key, b.Match, b.Visitor, 0)) }
+						class="text-sky-700 hover:underline dark:text-sky-400"
+					>back to the newest</a>
+				} else {
+					<span></span>
+				}
+				if b.OlderBefore > 0 {
+					<a
+						href={ templ.SafeURL(journalPath(b.Key, b.Match, b.Visitor, b.OlderBefore)) }
+						data-on:click={ navTo(journalPath(b.Key, b.Match, b.Visitor, b.OlderBefore)) }
+						class="text-sky-700 hover:underline dark:text-sky-400"
+					>older rows</a>
+				}
+			</div>
+		}
+	</section>
+}
+
+templ browseLink(path string, label string, picked bool) {
+	<a
+		href={ templ.SafeURL(path) }
+		data-on:click={ navTo(path) }
+		class={ browseLinkClass(picked) }
+	>{ label }</a>
+}
+
+func browseLinkClass(picked bool) string {
+	base := "rounded-md px-2 py-0.5 font-mono "
+	if picked {
+		return base + "bg-gray-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
+	}
+	return base + "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+}

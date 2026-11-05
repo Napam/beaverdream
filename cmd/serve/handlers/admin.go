@@ -216,6 +216,7 @@ func (h *Handlers) loadAdmin(
 		view.Metrics = pages.NewMetrics(turns)
 		view.Budget = h.adminBudget(ctx, site)
 		view.Summary, view.SummaryThrough = h.adminSummary(ctx)
+		view.Notes = h.adminNotes(ctx)
 	case pages.PageTurns:
 		// The list always shows the running turn's progress. The inspector
 		// is live when it follows the newest or holds the running turn; any
@@ -246,9 +247,13 @@ func (h *Handlers) loadAdmin(
 		// older row current when a version lands between two queries.
 		view.Site = versions[0]
 		view.Versions = versions
-		// The panel shows the same journal and state the page and the prompt
-		// see, so a stuck feed can be read without opening sqlite.
-		view.Feeds, view.States = h.adminFeeds(ctx, view.Site)
+	case pages.PageJournal:
+		site, err := h.queries.CurrentSite(ctx)
+		if err != nil {
+			return view, fmt.Errorf("load current site: %w", err)
+		}
+		view.States = h.adminStates(ctx, site)
+		view.Journal, view.Browse = h.adminJournal(ctx, site, panel)
 	}
 	return view, nil
 }
@@ -450,30 +455,25 @@ func liveInspector(picked int64, run *pages.RunProgress) bool {
 	return picked == 0 || (run != nil && run.TurnID == picked)
 }
 
-// adminFeeds is what the panel shows of the journal and shared state.
-func (h *Handlers) adminFeeds(
-	ctx context.Context,
-	site sqlc.SiteVersion,
-) ([]pages.FeedView, []pages.StateView) {
+// adminStates is the shared state the page and the prompt see, so a stuck
+// value can be read without opening sqlite.
+func (h *Handlers) adminStates(ctx context.Context, site sqlc.SiteVersion) []pages.StateView {
 	live := h.siteWithState(ctx, site)
-	feeds := make([]pages.FeedView, 0, len(live.Journal))
-	for key, state := range live.Journal {
-		feeds = append(feeds, pages.FeedView{
-			Key:   key,
-			Match: state.Match,
-			Rules: state.Rules,
-			Rows:  state.Rows,
-			Last:  state.Last,
-		})
-	}
-	sort.Slice(feeds, func(i, j int) bool { return feeds[i].Key < feeds[j].Key })
-
 	states := make([]pages.StateView, 0, len(live.State))
 	for key, value := range live.State {
 		states = append(states, pages.StateView{Key: key, Value: string(value)})
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].Key < states[j].Key })
-	return feeds, states
+	return states
+}
+
+// adminNotes is what the next prompt will carry as the webmaster's notes.
+func (h *Handlers) adminNotes(ctx context.Context) string {
+	notes, err := h.queries.LatestNotes(ctx)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		h.logger.Warn("Failed to load the webmaster's notes", slog.Any("error", err))
+	}
+	return notes
 }
 
 // UndoLast copies the version before the current one forward. It is the

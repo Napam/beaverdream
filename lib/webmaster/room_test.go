@@ -102,3 +102,18 @@ func TestRenderLogLabelsBrowserErrors(t *testing.T) {
 		t.Fatalf("log = %q, want a line containing %q", got, want)
 	}
 }
+
+// A cleared journal is a server event in words, with no payloads.
+func TestRenderLogShowsAClearedJournal(t *testing.T) {
+	got := RenderLog([]Turn{
+		{
+			ID:   9,
+			Kind: TurnJournal,
+			Body: `the admin cleared journal "moves" (12 rows, was match 3); it starts empty at match 1`,
+		},
+	}, nil)
+	want := `#9 server: the admin cleared journal "moves" (12 rows, was match 3)`
+	if !strings.Contains(got, want) {
+		t.Fatalf("log = %q, want a line containing %q", got, want)
+	}
+}

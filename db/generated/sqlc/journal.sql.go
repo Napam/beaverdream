@@ -70,6 +70,119 @@ func (q *Queries) DeleteJournal(ctx context.Context) error {
 	return err
 }
 
+const deleteJournalKey = `-- name: DeleteJournalKey :exec
+DELETE FROM journal
+WHERE
+  key = ?
+`
+
+func (q *Queries) DeleteJournalKey(ctx context.Context, key string) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalKey, key)
+	return err
+}
+
+const journalKeyStats = `-- name: JournalKeyStats :many
+SELECT
+  j.key,
+  CAST(COUNT(*) AS INTEGER) AS row_count,
+  CAST(MIN(j.id) AS INTEGER) AS first_id,
+  CAST(MAX(j.id) AS INTEGER) AS last_id,
+  CAST(MIN(j.created_at) AS TEXT) AS first_at,
+  CAST(MAX(j.created_at) AS TEXT) AS last_at,
+  CAST(COUNT(DISTINCT j.visitor) AS INTEGER) AS visitors,
+  CAST(SUM(LENGTH(j.payload)) AS INTEGER) AS payload_bytes,
+  CAST(MAX(LENGTH(j.payload)) AS INTEGER) AS largest_payload,
+  CAST(MIN(j.rules) AS INTEGER) AS min_rules,
+  CAST(MAX(j.rules) AS INTEGER) AS max_rules,
+  CAST(MAX(j.match) AS INTEGER) AS current_match,
+  CAST(
+    SUM(
+      CASE
+        WHEN j.match < (
+          SELECT
+            MAX(m.match)
+          FROM
+            journal m
+          WHERE
+            m.key = j.key
+        ) THEN 1
+        ELSE 0
+      END
+    ) AS INTEGER
+  ) AS older_match_rows,
+  CAST(
+    SUM(
+      CASE
+        WHEN j.created_at >= CAST(?1 AS TEXT) THEN 1
+        ELSE 0
+      END
+    ) AS INTEGER
+  ) AS recent_rows
+FROM
+  journal j
+GROUP BY
+  j.key
+ORDER BY
+  j.key
+`
+
+type JournalKeyStatsRow struct {
+	Key            string
+	RowCount       int64
+	FirstID        int64
+	LastID         int64
+	FirstAt        string
+	LastAt         string
+	Visitors       int64
+	PayloadBytes   int64
+	LargestPayload int64
+	MinRules       int64
+	MaxRules       int64
+	CurrentMatch   int64
+	OlderMatchRows int64
+	RecentRows     int64
+}
+
+// One row per key that has rows, declared or not. Every aggregate is bounded
+// by the trim, so the scan stays small.
+func (q *Queries) JournalKeyStats(ctx context.Context, since string) ([]JournalKeyStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, journalKeyStats, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalKeyStatsRow
+	for rows.Next() {
+		var i JournalKeyStatsRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.RowCount,
+			&i.FirstID,
+			&i.LastID,
+			&i.FirstAt,
+			&i.LastAt,
+			&i.Visitors,
+			&i.PayloadBytes,
+			&i.LargestPayload,
+			&i.MinRules,
+			&i.MaxRules,
+			&i.CurrentMatch,
+			&i.OlderMatchRows,
+			&i.RecentRows,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const journalLatest = `-- name: JournalLatest :one
 SELECT
   CAST(COALESCE(MAX(match), 0) AS INTEGER) AS current_match,
@@ -92,6 +205,114 @@ func (q *Queries) JournalLatest(ctx context.Context, key string) (JournalLatestR
 	var i JournalLatestRow
 	err := row.Scan(&i.CurrentMatch, &i.CurrentRules, &i.RowCount)
 	return i, err
+}
+
+const journalMatches = `-- name: JournalMatches :many
+SELECT
+  match,
+  CAST(COUNT(*) AS INTEGER) AS row_count
+FROM
+  journal
+WHERE
+  key = ?
+GROUP BY
+  match
+ORDER BY
+  match DESC
+LIMIT
+  50
+`
+
+type JournalMatchesRow struct {
+	Match    int64
+	RowCount int64
+}
+
+// The matches a key holds, newest first, for the browser's match picker.
+func (q *Queries) JournalMatches(ctx context.Context, key string) ([]JournalMatchesRow, error) {
+	rows, err := q.db.QueryContext(ctx, journalMatches, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JournalMatchesRow
+	for rows.Next() {
+		var i JournalMatchesRow
+		if err := rows.Scan(&i.Match, &i.RowCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const journalPage = `-- name: JournalPage :many
+SELECT
+  id, "key", visitor, payload, "match", rules, created_at
+FROM
+  journal
+WHERE
+  key = ?1
+  AND (CAST(?2 AS INTEGER) = 0 OR match = ?2)
+  AND (CAST(?3 AS TEXT) = '' OR visitor = ?3)
+  AND (CAST(?4 AS INTEGER) = 0 OR id < ?4)
+ORDER BY
+  id DESC
+LIMIT
+  ?5
+`
+
+type JournalPageParams struct {
+	Key      string
+	Match    int64
+	Visitor  string
+	Before   int64
+	PageSize int64
+}
+
+// A page of one key, newest first. A zero match, an empty visitor or a zero
+// before leaves that filter off.
+func (q *Queries) JournalPage(ctx context.Context, arg JournalPageParams) ([]Journal, error) {
+	rows, err := q.db.QueryContext(ctx, journalPage,
+		arg.Key,
+		arg.Match,
+		arg.Visitor,
+		arg.Before,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Journal
+	for rows.Next() {
+		var i Journal
+		if err := rows.Scan(
+			&i.ID,
+			&i.Key,
+			&i.Visitor,
+			&i.Payload,
+			&i.Match,
+			&i.Rules,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const journalRulesUsed = `-- name: JournalRulesUsed :many

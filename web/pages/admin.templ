@@ -1,7 +1,7 @@
 package pages
 
 import (
-	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -14,16 +14,6 @@ import (
 // resetConfirm asks before the one destructive action. Both the plain form and
 // the Datastar click ask the same question.
 const resetConfirm = "confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
-
-// FeedView is one declared journal key: the match being played, its rules and
-// size, and the last rows the page would fold.
-type FeedView struct {
-	Key   string
-	Match int
-	Rules int
-	Rows  int
-	Last  []webmaster.JournalTailRow
-}
 
 // StateView is one value in the model-declared shared state.
 type StateView struct {
@@ -63,23 +53,6 @@ func dash(s string) string {
 	return s
 }
 
-// feedText prints the last rows of a match in the shape the page's reducer
-// sees them, one per line.
-func feedText(rows []webmaster.JournalTailRow) string {
-	lines := make([]string, 0, len(rows))
-	for _, row := range rows {
-		lines = append(lines, fmt.Sprintf("#%d %s %s", row.ID, row.Visitor, row.Payload))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func rowCount(n int) string {
-	if n == 1 {
-		return "1 row"
-	}
-	return strconv.Itoa(n) + " rows"
-}
-
 func stateText(states []StateView) string {
 	lines := make([]string, 0, len(states))
 	for _, state := range states {
@@ -117,6 +90,7 @@ const (
 	PageOverview = "overview"
 	PageTurns    = "turns"
 	PageSite     = "site"
+	PageJournal  = "journal"
 )
 
 // Panel names one admin page. Turn is the turn the turns page shows, or 0 to
@@ -124,6 +98,13 @@ const (
 type Panel struct {
 	Page string
 	Turn int64
+	// Feed, Match, Visitor and Before are what the journal page browses: a
+	// key, one match of it, one visitor's rows, and the row id to page back
+	// from. They live in the URL, so the stream renders the same selection.
+	Feed    string
+	Match   int64
+	Visitor string
+	Before  int64
 	// Live is true when the render showed a turn still in flight, so the
 	// stream patches the inspector once even if the turn lands first.
 	Live bool
@@ -139,8 +120,32 @@ func (p Panel) Path() string {
 		return "/admin/turns"
 	case p.Page == PageSite:
 		return "/admin/site"
+	case p.Page == PageJournal:
+		return "/admin/journal" + p.query()
 	}
 	return "/admin"
+}
+
+// query is the journal selection as a query string, empty when nothing is
+// picked.
+func (p Panel) query() string {
+	v := url.Values{}
+	if p.Feed != "" {
+		v.Set("feed", p.Feed)
+		if p.Match > 0 {
+			v.Set("match", i64(p.Match))
+		}
+		if p.Visitor != "" {
+			v.Set("visitor", p.Visitor)
+		}
+		if p.Before > 0 {
+			v.Set("before", i64(p.Before))
+		}
+	}
+	if len(v) == 0 {
+		return ""
+	}
+	return "?" + v.Encode()
 }
 
 // LivePath is the page's stream. It names the page, so the stream pushes only
@@ -153,6 +158,9 @@ func (p Panel) LivePath() string {
 	if p.Live {
 		path += "&live=1"
 	}
+	if q := p.query(); q != "" {
+		path += "&" + q[1:]
+	}
 	return path
 }
 
@@ -161,11 +169,14 @@ func (p Panel) LivePath() string {
 // navigation render from the same value, so nothing redirects and no secret
 // lands in a URL.
 type AdminView struct {
-	Panel          Panel
-	Site           sqlc.SiteVersion
-	Live           LiveView
-	Feeds          []FeedView
+	Panel Panel
+	Site  sqlc.SiteVersion
+	Live  LiveView
+	// States, Journal and Browse are the data page: the shared values, a
+	// card per journal key, and the rows of the picked key.
 	States         []StateView
+	Journal        []JournalKeyView
+	Browse         *JournalBrowse
 	Turns          []TurnRow
 	Turn           *TurnDetail
 	Metrics        MetricsView
@@ -173,7 +184,9 @@ type AdminView struct {
 	Versions       []sqlc.SiteVersion
 	Summary        string
 	SummaryThrough int64
-	Flash          string
+	// Notes is what the webmaster left itself on its last finished turn.
+	Notes string
+	Flash string
 	// CSRF is the token every action form carries for this login. Empty when
 	// the request has no login cookie, which is why login redirects.
 	CSRF string
@@ -291,6 +304,7 @@ templ AdminBody(view AdminView) {
 					@navLink(view.Panel, PageOverview, "/admin", "overview")
 					@navLink(view.Panel, PageTurns, "/admin/turns", "turns")
 					@navLink(view.Panel, PageSite, "/admin/site", "site")
+					@navLink(view.Panel, PageJournal, "/admin/journal", "data")
 				</nav>
 				<div class="ml-auto flex items-center gap-1.5">
 					@themeToggle()
@@ -317,6 +331,8 @@ templ AdminBody(view AdminView) {
 				@turnsPage(view)
 			case PageSite:
 				@sitePage(view)
+			case PageJournal:
+				@journalPage(view)
 			default:
 				@overviewPage(view)
 		}
@@ -337,13 +353,13 @@ templ navLink(current Panel, page string, path string, label string) {
 
 // overviewPage is the glance, top to bottom: talk to the webmaster, how
 // recent turns went, how close the room is to compaction, and what it
-// remembers.
+// remembers: the compacted history and its own notes.
 templ overviewPage(view AdminView) {
 	<div class="flex flex-col gap-6">
 		@adminInstruct(view.CSRF)
 		@AdminMetrics(view.Metrics)
 		@AdminBudget(view.Budget)
-		@AdminMemory(view.Summary, view.SummaryThrough)
+		@AdminMemory(view.Summary, view.SummaryThrough, view.Notes)
 	</div>
 }
 
@@ -357,13 +373,12 @@ templ turnsPage(view AdminView) {
 	</div>
 }
 
-// sitePage is the page as it stands, the versions before it, the data it
-// keeps, and the destructive action, top to bottom.
+// sitePage is the page as it stands, the versions before it, and the
+// destructive action, top to bottom.
 templ sitePage(view AdminView) {
 	<div class="flex flex-col gap-6">
 		@AdminVersion(view.Site, view.CSRF)
 		@AdminVersions(view.Versions, view.Site.ID, view.CSRF)
-		@AdminFeeds(view.Feeds, view.States)
 	</div>
 	<section class={ adminCard + " border-red-500/30 dark:border-red-500/30" }>
 		<p class={ adminLabel }>danger zone</p>
@@ -581,21 +596,37 @@ templ AdminBudget(b BudgetView) {
 	</section>
 }
 
-// AdminMemory is the compacted history. The stream patches it when a run
-// ends, so a summary written during compaction shows without a reload.
-templ AdminMemory(summary string, through int64) {
-	<section id="admin-memory" class={ adminCard }>
-		<p class={ adminLabel }>compacted memory</p>
-		if summary == "" {
-			<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
-		} else {
-			<details class="mt-2" data-preserve-attr="open">
-				<summary class="cursor-pointer text-sm text-gray-600 dark:text-neutral-400">
-					one message standing in for turns through #{ i64(through) } · { tokens(utf8.RuneCountInString(summary)) } tokens
-				</summary>
-				<pre class={ adminPre + " mt-2 max-h-96" }>{ summary }</pre>
-			</details>
-		}
+// AdminMemory is what the webmaster carries between turns: the compacted
+// history and its own notes. The stream patches it when a run ends, so a
+// summary written during compaction shows without a reload.
+templ AdminMemory(summary string, through int64, notes string) {
+	<section id="admin-memory" class={ adminCard + " flex flex-col gap-3" }>
+		<div>
+			<p class={ adminLabel }>compacted memory</p>
+			if summary == "" {
+				<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
+			} else {
+				<details class="mt-2" data-preserve-attr="open">
+					<summary class="cursor-pointer text-sm text-gray-600 dark:text-neutral-400">
+						one message standing in for turns through #{ i64(through) } · { tokens(utf8.RuneCountInString(summary)) } tokens
+					</summary>
+					<pre class={ adminPre + " mt-2 max-h-96" }>{ summary }</pre>
+				</details>
+			}
+		</div>
+		<div>
+			<p class={ adminLabel }>notes</p>
+			if notes == "" {
+				<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">no notes yet</p>
+			} else {
+				<details class="mt-2" data-preserve-attr="open">
+					<summary class="cursor-pointer text-sm text-gray-600 dark:text-neutral-400">
+						left by the last finished turn · { tokens(utf8.RuneCountInString(notes)) } tokens
+					</summary>
+					<pre class={ adminPre + " mt-2 max-h-96" }>{ notes }</pre>
+				</details>
+			}
+		</div>
 	</section>
 }
 
@@ -1231,7 +1262,7 @@ templ AdminVersion(site sqlc.SiteVersion, csrf string) {
 				<button type="submit" data-attr:disabled="$_healing" class={ adminButton }>heal now</button>
 			</form>
 		</div>
-		<p class={ adminMuted }>Heal clears the journal and shared state with the page, so a game in progress ends.</p>
+		<p class={ adminMuted }>Heal clears the journal and shared state (see the data tab) with the page, so a game in progress ends.</p>
 	</section>
 }
 
@@ -1245,36 +1276,6 @@ func largestVersion(versions []sqlc.SiteVersion) int64 {
 		largest = max(largest, versionSize(v))
 	}
 	return largest
-}
-
-// AdminFeeds shows the journal and shared state the page and the prompt see,
-// so a stuck feed can be read without opening sqlite.
-templ AdminFeeds(feeds []FeedView, states []StateView) {
-	<section id="admin-feeds" class={ adminCard + " flex flex-col gap-3" }>
-		<p class={ adminLabel }>journal and shared state</p>
-		if len(feeds) == 0 && len(states) == 0 {
-			<p class="text-sm text-gray-400 dark:text-neutral-600">nothing declared</p>
-		}
-		for _, feed := range feeds {
-			<div>
-				<p class="text-sm">
-					<span class="font-mono font-medium">{ feed.Key }</span>
-					<span class="text-gray-400 dark:text-neutral-600">· { rowCount(feed.Rows) } · match { strconv.Itoa(feed.Match) } · rules { strconv.Itoa(feed.Rules) }</span>
-				</p>
-				if len(feed.Last) == 0 {
-					<p class="text-xs text-gray-400 dark:text-neutral-600">no rows in this match yet</p>
-				} else {
-					<pre class={ adminPre + " mt-1 max-h-64" }>{ feedText(feed.Last) }</pre>
-				}
-			</div>
-		}
-		if len(states) > 0 {
-			<div>
-				<p class="mb-1 text-xs text-gray-400 dark:text-neutral-600">shared state</p>
-				<pre class={ adminPre + " max-h-64" }>{ stateText(states) }</pre>
-			</div>
-		}
-	</section>
 }
 
 // AdminVersions lists the newest versions with their size, and a restore

@@ -218,6 +218,23 @@ prefer simple, readable code over production hardening.
   `render`, its send cadence and when to offer the next match, so those are the
   parts a bad page can get wrong.
   The log is public, so the reducer, not the server, rejects illegal rows.
+- The admin data page (`/admin/journal`, labelled "data") shows the shared
+  state first, then lists every key that has rows, declared or not, with stats
+  from one aggregate query, and browses one key's rows newest first. The site
+  tab holds only versions and the reset; the overview shows the compacted
+  memory and the latest notes. The selection (`feed`, `match`, `visitor`,
+  `before`) is in the URL, and the page's stream renders the same selection, so
+  a patch never resets what the admin picked. The stream waits a second after
+  each patch, because every append publishes and the stats scan every key.
+  Payloads are shown as text only.
+- Clearing a key (`POST /admin/journal/{key}/clear`) deletes its rows and
+  records a `journal` event turn in one transaction, under `stateMu` like an
+  append, never `mu`, and it never calls the model. The key falls back to match
+  1; rules belong to the schema and do not change, and the id sequence is left
+  alone so cursors stay monotonic. A clear bumps `journalClears`, and each
+  stream that has seen fewer sends `bd._resync()`, because a clear can leave
+  the newest row id where it was. The client reads the feed again on a pushed
+  row from an older match it has not read, which covers a stream that was down.
 - A browser error is a turn, not a console line. `/x/err` records one `alert`
   turn per message per stretch, labelled as visitor-reported, and never
   triggers a turn, or a script that throws again would loop forever. The

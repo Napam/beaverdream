@@ -1719,20 +1719,27 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 		t.Fatalf("upsert state: %v", err)
 	}
 
-	rec := getAdmin(t, h.AdminSite, "/admin/site")
+	site2 := getAdmin(t, h.AdminSite, "/admin/site")
+	if site2.Code != http.StatusOK || !strings.Contains(site2.Body.String(), "journal schema") {
+		t.Fatalf("site page = %d, want the journal schema", site2.Code)
+	}
+	if strings.Contains(site2.Body.String(), "taps = 7") {
+		t.Error("the site page still shows shared state")
+	}
+
+	rec := getAdmin(t, h.AdminJournal, "/admin/journal")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"journal and shared state",
-		"1 row · match 1 · rules 1",
-		publicID(visitorA),
+		"shared state",
 		"taps = 7",
-		"journal schema",
+		"1 / 50 rows",
+		publicID(visitorA),
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("admin page is missing %q", want)
+			t.Errorf("data page is missing %q", want)
 		}
 	}
 }

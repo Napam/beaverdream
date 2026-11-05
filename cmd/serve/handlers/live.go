@@ -31,6 +31,8 @@ type liveView struct {
 	cursor webmaster.LiveCursor
 	busy   bool
 	state  string
+	// clears is the journal clear count this stream has told its page about.
+	clears int64
 }
 
 // Live is the read side of the board: one Datastar stream per open page.
@@ -57,7 +59,7 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
-	view := liveView{cursor: signals.BD}
+	view := liveView{cursor: signals.BD, clears: h.journalClears.Load()}
 	if err := h.syncLive(ctx, sse, &view, topicAll); err != nil {
 		return
 	}
@@ -278,6 +280,13 @@ func (h *Handlers) syncJournal(
 	if err != nil {
 		h.logRead("Live stream could not read the journal", err)
 		return nil
+	}
+	// An admin cleared a key. The page's rows are gone, so it reads again,
+	// even when the newest row id did not move.
+	if clears := h.journalClears.Load(); clears != view.clears {
+		view.clears = clears
+		view.cursor.Journal = newest
+		return sse.ExecuteScript("window.bd && bd._resync()")
 	}
 	if newest == view.cursor.Journal {
 		return nil

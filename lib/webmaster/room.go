@@ -8,10 +8,12 @@ import (
 // Turn is one thing that happened in the room: a visitor post, a webmaster
 // turn, or a server event. ID is the conversation order.
 type Turn struct {
-	ID        int64
-	Kind      string
-	Author    string
-	Body      string
+	ID     int64
+	Kind   string
+	Author string
+	Body   string
+	// Said is the done reason, the webmaster's one sentence. The admin panel
+	// shows it as the reply.
 	Said      string
 	Changes   string
 	Status    string
@@ -137,7 +139,7 @@ func renderWebmasterTurn(turn Turn) string {
 	case turn.Status == "kept":
 		b.WriteString(" [kept the page]")
 	case turn.Status == "silent":
-		b.WriteString(" [said nothing]")
+		b.WriteString(" [ended without done]")
 	default:
 		b.WriteString(" [no visible change]")
 	}

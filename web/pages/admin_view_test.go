@@ -141,6 +141,34 @@ func TestNewTurnRowSumsRounds(t *testing.T) {
 	}
 }
 
+// The trigger box is named for what started the turn, and a turn that never
+// called done reads as unfinished.
+func TestTriggerAndStatusLabels(t *testing.T) {
+	run, messages := storedTurn()
+	row := NewTurnRow(run, messages)
+	if got := triggerLabel(row); got != "post" {
+		t.Errorf("one post = %q, want post", got)
+	}
+	row.Batched = true
+	if got := triggerLabel(row); got != "posts" {
+		t.Errorf("a batch = %q, want posts", got)
+	}
+	row.Run.Author = "admin"
+	if got := triggerLabel(row); got != "instruction" {
+		t.Errorf("admin = %q, want instruction", got)
+	}
+	if got := statusLabel("silent"); got != "unfinished" {
+		t.Errorf("silent = %q, want unfinished", got)
+	}
+	if got := statusLabel("changed"); got != "changed" {
+		t.Errorf("changed = %q, want changed", got)
+	}
+	row.Run.Said = "hello"
+	if title := turnTitle(row); !strings.Contains(title, "reply: hello") {
+		t.Errorf("title = %q, want the reply", title)
+	}
+}
+
 // The inspector shows the prompt by its recorded sections, and each round
 // carries what earlier rounds appended, reasoning included.
 func TestNewTurnDetailLaysOutTheConversation(t *testing.T) {

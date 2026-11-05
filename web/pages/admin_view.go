@@ -23,7 +23,9 @@ type TurnRow struct {
 	Run sqlc.ListWebmasterTurnsRow
 	// Trigger is what the turn answered: the admin instruction, or the new
 	// posts as the prompt showed them.
-	Trigger          string
+	Trigger string
+	// Batched is true when the turn started from several posts at once.
+	Batched          bool
 	Rounds           int
 	PromptTokens     int64
 	CachedTokens     int64
@@ -39,6 +41,7 @@ func NewTurnRow(run sqlc.ListWebmasterTurnsRow, messages []webmaster.Message) Tu
 	for _, message := range messages {
 		if message.Role == "user" && row.Trigger == "" {
 			row.Trigger = newPostText(message)
+			row.Batched = newPostsBatched(message)
 		}
 		if message.Stats == nil {
 			continue
@@ -124,6 +127,16 @@ func newPostText(message webmaster.Message) string {
 		return strings.Join(lines, "\n")
 	}
 	return ""
+}
+
+// newPostsBatched reports whether the prompt's new post section held a batch.
+func newPostsBatched(message webmaster.Message) bool {
+	for _, section := range message.Sections {
+		if section.Name == "new post" && section.End <= len(message.Content) {
+			return strings.HasPrefix(message.Content[section.Start:section.End], "NEW POSTS")
+		}
+	}
+	return false
 }
 
 // ContextPart is one piece of what a request carried: the system prompt, the
@@ -780,17 +793,42 @@ func turnAuthor(row TurnRow) string {
 	return row.Run.Author
 }
 
+// triggerLabel names what started the turn: a visitor's post, or an
+// instruction typed in the admin panel.
+func triggerLabel(row TurnRow) string {
+	if row.Run.Author == "admin" {
+		return "instruction"
+	}
+	if row.Batched {
+		return "posts"
+	}
+	return "post"
+}
+
+// statusLabel is the status as the admin reads it. The stored value for a turn
+// that never called done is "silent", which sounds chosen; it is unfinished.
+func statusLabel(status string) string {
+	if status == "silent" {
+		return "unfinished"
+	}
+	return status
+}
+
 func turnTitle(row TurnRow) string {
 	if row.Run.Status == "running" {
 		return fmt.Sprintf("#%d %s · %s in (%s cached) · %s out · %d rounds",
-			row.Run.ID, row.Run.Status,
+			row.Run.ID, statusLabel(row.Run.Status),
 			short(row.PromptTokens), short(row.CachedTokens), short(row.CompletionTokens),
 			row.Rounds)
 	}
-	return fmt.Sprintf("#%d %s · %s · %s in (%s cached) · %s out · %d rounds",
-		row.Run.ID, row.Run.Status, millis(row.Run.DurationMs),
+	title := fmt.Sprintf("#%d %s · %s · %s in (%s cached) · %s out · %d rounds",
+		row.Run.ID, statusLabel(row.Run.Status), millis(row.Run.DurationMs),
 		short(row.PromptTokens), short(row.CachedTokens), short(row.CompletionTokens),
 		row.Rounds)
+	if reply := strings.TrimSpace(row.Run.Said); reply != "" {
+		title += "\nreply: " + reply
+	}
+	return title
 }
 
 func oneLine(s string) string {

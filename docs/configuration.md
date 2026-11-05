@@ -9,7 +9,8 @@ Every setting is an environment variable. The defaults below come from
   not read `.env`.
 - `task` loads `.env` for every task. Values in the Taskfile's `env:` block
   override `.env`. Shell variables override both.
-- `.env` is gitignored. `.env.example` is the template.
+- `.env` is gitignored. `.env.example` is the template: `cp .env.example .env`
+  makes your copy. Every line in the template is optional.
 
 ## Running the binary
 

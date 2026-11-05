@@ -6,7 +6,8 @@ leaves the page unchanged.
 
 ## Setup
 
-1. Put these in `.env`:
+1. Create `.env` from the template if you do not have one: `cp .env.example .env`.
+   Then set these in it, uncommenting the lines:
 
    ```sh
    OPENAI_BASE_URL=https://your-endpoint.example.com/v1

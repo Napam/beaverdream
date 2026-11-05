@@ -32,8 +32,9 @@ task dev            # terminal 2: the server on port 6930
 
 Open http://localhost:6930 and post something. Try `matrix`, `pink` or `brutalist`.
 The fake model picks its theme from keywords in the post, so the page changes
-without a real model. If your `.env` sets a real model, `task dev` uses that
-instead.
+without a real model. No `.env` file is needed for this. To change a setting,
+copy the template with `cp .env.example .env` and edit the copy. If your `.env`
+sets a real model, `task dev` uses that instead.
 
 ## Run with Docker
 
@@ -43,8 +44,9 @@ database, so the data survives restarts. The details are in
 
 ## Use a real model
 
-Any OpenAI-compatible endpoint works, as long as it supports tool calls. Put
-your endpoint and key in `.env`, then run `task dev`. Each post can trigger
+Any OpenAI-compatible endpoint works, as long as it supports tool calls. Create
+your `.env` with `cp .env.example .env`, set `OPENAI_BASE_URL`, `OPENAI_MODEL`
+and `OPENAI_API_KEY` in it (uncomment the lines), then run `task dev`. Each post can trigger
 several paid model calls, so set a spend cap with your provider first. More in
 [docs/real-models.md](docs/real-models.md).
 

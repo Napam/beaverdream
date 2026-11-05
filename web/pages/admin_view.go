@@ -198,9 +198,12 @@ type RunProgress struct {
 // DraftView is the round being written, laid out the way a finished round is,
 // with arguments read as far as they have arrived.
 type DraftView struct {
-	Round     int
-	Phase     string
-	Since     time.Time
+	Round int
+	Phase string
+	Since time.Time
+	// Updated is when the stream last added anything, zero before the first
+	// chunk.
+	Updated   time.Time
 	Reasoning string
 	Content   string
 	Calls     []CallView
@@ -220,6 +223,7 @@ func (r RunProgress) LiveDraft() DraftView {
 	if r.Draft.Round > 0 {
 		view.Round = r.Draft.Round
 	}
+	view.Updated = r.Draft.Updated
 	view.Reasoning = r.Draft.Reasoning
 	view.Content = r.Draft.Content
 	for _, call := range r.Draft.Calls {
@@ -802,4 +806,40 @@ func plural(n int, word string) string {
 		return "1 " + word
 	}
 	return strconv.Itoa(n) + " " + word + "s"
+}
+
+// stallNote explains a round that was thrown away and asked for again.
+func stallNote(stats webmaster.RoundStats) string {
+	t := stats.Trace
+	if t != nil && t.Stalled {
+		return fmt.Sprintf(
+			"stalled: the stream added nothing for %s while %s, so the round was dropped",
+			t.StallLimit.Round(time.Second),
+			t.StallPhase,
+		)
+	}
+	return "the stream ended with no finish reason and no usable call, so the round was dropped"
+}
+
+// traceSummary is the one line over a round's stream details.
+func traceSummary(stats webmaster.RoundStats) string {
+	t := stats.Trace
+	line := "longest quiet " + millis(t.LongestGap.Milliseconds())
+	if !t.Finished {
+		line += ", no finish reason"
+	}
+	return line
+}
+
+func fingerprintSuffix(fingerprint string) string {
+	if fingerprint == "" {
+		return ""
+	}
+	return " · " + fingerprint
+}
+
+// charsPerToken is the measured size of the prompt per token the provider
+// counted, which calibrates the section estimates.
+func charsPerToken(runes int, tokens int64) string {
+	return strconv.FormatFloat(float64(runes)/float64(tokens), 'f', 2, 64)
 }

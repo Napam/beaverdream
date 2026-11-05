@@ -586,6 +586,27 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// StopTurn cancels the turn that is running, when it is the one named. The
+// turn ends as an error labeled "stopped by admin", the page stays as it was,
+// and posts that queued meanwhile still get their turn. It does not take h.mu:
+// the running turn holds it, so waiting there would wait for the thing to stop.
+func (h *Handlers) StopTurn(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Bad turn id", http.StatusBadRequest)
+		return
+	}
+	panel := pages.Panel{Page: pages.PageTurns, Turn: id}
+	if h.stopTurn(id) {
+		h.adminDone(w, r, panel, "stop sent, the turn is ending")
+		return
+	}
+	h.adminDone(w, r, panel, "that turn is not running")
+}
+
 // errNoRetryTurn is a retry whose id names no webmaster turn.
 var errNoRetryTurn = errors.New("no such webmaster turn")
 

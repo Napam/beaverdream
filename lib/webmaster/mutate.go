@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -24,12 +25,25 @@ const maxOutputTokens = 131072
 // edit the model can see and fix: the call arrived as raw tool markup.
 const maxBrokenArgumentRounds = 5
 
+// maxStallStreak ends a turn whose rounds keep stalling or ending without a
+// finish reason, one after another. A stall is the provider's fault, so the
+// turn stops with an error and the page stays as it was.
+const maxStallStreak = 3
+
+// defaultStallPause is the wait before a stalled round is sent again, plus up
+// to as much again in jitter, so a retry is not a hammer.
+const defaultStallPause = 2 * time.Second
+
 // Mutator asks the model to rewrite the site.
 type Mutator struct {
 	client    openai.Client
 	model     string
 	maxRounds int
 	effort    shared.ReasoningEffort
+	// idle is how long a round's stream may stay quiet before it is cut and
+	// asked for again. stallPause is the wait before that second try.
+	idle       IdleLimits
+	stallPause time.Duration
 
 	// OnRound, when set, reports the round that is about to run. The admin
 	// panel uses it to show progress.
@@ -58,6 +72,9 @@ func New(client openai.Client, model string, maxRounds int, effort string) *Muta
 		model:     model,
 		maxRounds: maxRounds,
 		effort:    shared.ReasoningEffort(effort),
+
+		idle:       DefaultIdleLimits,
+		stallPause: defaultStallPause,
 	}
 }
 
@@ -129,6 +146,12 @@ type RoundStats struct {
 	// Resampled is set when no call in the round had JSON arguments, so the
 	// round was dropped from the conversation and asked for again.
 	Resampled bool `json:"resampled,omitempty"`
+	// Stalled is set when the round was thrown away because its stream went
+	// quiet or ended without a finish reason, and asked for again. Its token
+	// counts are zero because they are unknown.
+	Stalled bool `json:"stalled,omitempty"`
+	// Trace is how the stream looked from the client. See RoundTrace.
+	Trace *RoundTrace `json:"trace,omitempty"`
 }
 
 // Mutate asks the model to rewrite the site in response to one trigger. The
@@ -179,9 +202,17 @@ func (m *Mutator) MutatePosts(
 	proseRound := 0
 	truncatedRound := 0
 	emptyRound := 0
-	for round := 0; round < m.maxRounds; round++ {
+	// work counts rounds the model got to act on. A resampled or stalled
+	// round does not use one up; attempt numbers every request, and the
+	// resample and stall caps bound the retries.
+	work, attempt, stallStreak := 0, 0, 0
+	// promptSize counts the runes of the text the request carries, so prompt
+	// tokens over it is the provider's real ratio.
+	promptSize := utf8.RuneCountInString(sys) + utf8.RuneCountInString(usr)
+	for work < m.maxRounds {
+		attempt++
 		if m.OnRound != nil {
-			m.OnRound(round + 1)
+			m.OnRound(attempt)
 		}
 		roundStart := time.Now()
 		reply, err := m.complete(ctx, openai.ChatCompletionNewParams{
@@ -196,21 +227,49 @@ func (m *Mutator) MutatePosts(
 			MaxTokens:       openai.Int(maxOutputTokens),
 			Temperature:     openai.Float(0.8),
 			ReasoningEffort: m.effort,
-		}, round+1)
+		}, attempt)
 		stats := RoundStats{
-			Round:      round + 1,
+			Round:      attempt,
 			Elapsed:    time.Since(roundStart),
 			FirstToken: reply.FirstToken,
+			Trace:      reply.Trace,
+		}
+		if stats.Trace != nil {
+			stats.Trace.PromptRunes = promptSize
 		}
 		if err != nil {
 			m.reportRound(&res, stats)
 			return res, fmt.Errorf("chat completion: %w", err)
 		}
+		if reply.Stalled || endedWithoutFinish(reply) {
+			// The stream went quiet or closed early. Nothing it sent is used,
+			// and nothing goes in the conversation: the same request is sent
+			// again after a pause, which may land on a healthy backend.
+			stats.Stalled = true
+			stats.FinishReason = "stalled"
+			if !reply.Stalled {
+				stats.FinishReason = "no finish reason"
+			}
+			m.reportRound(&res, stats)
+			m.record(&res, Message{Role: "assistant", Stats: &stats})
+			stallStreak++
+			if stallStreak >= maxStallStreak {
+				return res, fmt.Errorf(
+					"the model stream failed %d rounds in a row (last: %s)",
+					stallStreak, stallCause(reply),
+				)
+			}
+			if err := pause(ctx, m.stallPause); err != nil {
+				return res, fmt.Errorf("chat completion: %w", err)
+			}
+			continue
+		}
+		stallStreak = 0
 		stats.PromptTokens = reply.Usage.PromptTokens
 		stats.CachedTokens = cachedTokens(reply.Usage)
 		stats.CompletionTokens = reply.Usage.CompletionTokens
 		if !reply.Choices {
-			emptyRound = round + 1
+			emptyRound = attempt
 			m.reportRound(&res, stats)
 			break
 		}
@@ -224,9 +283,9 @@ func (m *Mutator) MutatePosts(
 		stats.ReplyRunes = utf8.RuneCountInString(strings.TrimSpace(reply.Content))
 		stats.ReasoningRunes = utf8.RuneCountInString(reply.Reasoning)
 		if len(reply.Calls) == 0 {
-			proseRound = round + 1
+			proseRound = attempt
 			if stats.FinishReason == "length" {
-				truncatedRound = round + 1
+				truncatedRound = attempt
 			}
 			m.reportRound(&res, stats)
 			entry.Stats = &stats
@@ -255,9 +314,18 @@ func (m *Mutator) MutatePosts(
 		}
 		ed.rejected = 0
 		ed.badArguments = 0
+		// A call cut off by the output cap is not a broken sample: resampling
+		// would truncate the same way. It is rejected like any other call, with
+		// a message that points at smaller writes.
+		truncated := stats.FinishReason == "length"
 		for _, record := range reply.Calls {
 			assistant.ToolCalls = append(assistant.ToolCalls, toolCallParam(record))
-			record.Result = ed.run(record.Name, record.Arguments)
+			if truncated && !json.Valid([]byte(record.Arguments)) {
+				record.Result = callTruncated
+				ed.rejected++
+			} else {
+				record.Result = ed.run(record.Name, record.Arguments)
+			}
 			entry.ToolCalls = append(entry.ToolCalls, record)
 			stats.Tools = append(stats.Tools, record.Name)
 		}
@@ -274,7 +342,7 @@ func (m *Mutator) MutatePosts(
 		// A page whose posts this turn's edits hid behind an unclosed tag
 		// gets the same pause, once. Calling done again keeps the page.
 		deferred := ""
-		if ed.done && round+1 < m.maxRounds {
+		if ed.done && work+1 < m.maxRounds {
 			switch {
 			case ed.rejected > 0:
 				deferred = doneDeferred
@@ -328,14 +396,22 @@ func (m *Mutator) MutatePosts(
 			messages,
 			openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant},
 		)
+		promptSize += utf8.RuneCountInString(content)
+		if reply.HasReasoning {
+			promptSize += utf8.RuneCountInString(reply.Reasoning)
+		}
 		for _, call := range entry.ToolCalls {
 			messages = append(messages, openai.ToolMessage(call.Result, call.ID))
+			promptSize += utf8.RuneCountInString(call.Name) +
+				utf8.RuneCountInString(call.Arguments) +
+				utf8.RuneCountInString(call.Result)
 		}
 
 		if ed.done {
-			res.DoneRound = round + 1
+			res.DoneRound = attempt
 			break
 		}
+		work++
 	}
 
 	res.Site = ed.site
@@ -366,8 +442,13 @@ func (m *Mutator) MutatePosts(
 		// A prose reply is the model trying to talk. Keep the last thing it
 		// said rather than a mechanical error line.
 		for i := len(res.Messages) - 1; i >= 0; i-- {
-			content := strings.TrimSpace(res.Messages[i].Content)
-			if res.Messages[i].Role == "assistant" && content != "" {
+			message := res.Messages[i]
+			if message.Stats != nil && (message.Stats.Resampled || message.Stats.Stalled) {
+				// A dropped round can carry the provider's tool markup.
+				continue
+			}
+			content := strings.TrimSpace(message.Content)
+			if message.Role == "assistant" && content != "" {
 				res.Reason = clip(content, 200)
 				break
 			}
@@ -380,10 +461,61 @@ func (m *Mutator) MutatePosts(
 		case emptyRound > 0:
 			res.Reason = fmt.Sprintf("the model returned no choices in round %d", emptyRound)
 		default:
-			res.Reason = fmt.Sprintf("no done call after %d rounds", len(res.Rounds))
+			res.Reason = fmt.Sprintf("no done call after %d rounds", work)
 		}
 	}
 	return res, nil
+}
+
+// callTruncated is the result of a call the output cap cut off.
+const callTruncated = "rejected: the reply hit the output cap and this call was cut off. " +
+	"Send smaller pieces: use edit for part of a field instead of set_site for all of it."
+
+// endedWithoutFinish reports a stream that closed cleanly with no finish
+// reason and nothing usable: no calls, or a call whose arguments are not
+// JSON. A round that carries complete calls is kept even if only the finish
+// chunk is missing.
+func endedWithoutFinish(r reply) bool {
+	if !r.Choices {
+		// A stream with no chunk at all is broken. One that reports usage but
+		// no choices is a provider answering with nothing, handled apart.
+		return r.Usage.PromptTokens == 0 && r.Usage.CompletionTokens == 0
+	}
+	if r.FinishReason != "" {
+		return false
+	}
+	if len(r.Calls) == 0 {
+		return true
+	}
+	for _, call := range r.Calls {
+		if !json.Valid([]byte(call.Arguments)) {
+			return true
+		}
+	}
+	return false
+}
+
+// stallCause says why a round was dropped, for the error that ends a turn.
+func stallCause(r reply) string {
+	if r.Stalled && r.Trace != nil {
+		return fmt.Sprintf("quiet for over %s while %s", r.Trace.StallLimit, r.Trace.StallPhase)
+	}
+	return "the stream ended empty or with no finish reason"
+}
+
+// pause waits for the stall pause plus jitter, or until ctx ends.
+func pause(ctx context.Context, base time.Duration) error {
+	if base <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(base + time.Duration(rand.Int64N(int64(base))))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // toolChoiceRequired makes every response a tool call. The model's only way
@@ -713,7 +845,9 @@ var systemPromptMiddle = fmt.Sprintf(
 You have one edit round. In your first response, call every edit or set_* tool
 you need, then call done in the same response. Do not use one response per
 tool. The server applies the calls in order. If you split the edits across
-responses, the page updates slower and feels dead. If a call is rejected, its
+responses, the page updates slower and feels dead. Keep it to about six calls
+per response: past that, a call is likelier to arrive broken, so write that
+field once with set_site instead. If a call is rejected, its
 result says why, and the turn stays open so you can fix it in the next
 response; call done again after the fix.
 

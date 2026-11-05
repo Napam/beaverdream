@@ -128,6 +128,22 @@ prefer simple, readable code over production hardening.
   returns `reasoning_content` gets it back with every assistant tool call,
   since its thinking mode requires it; without it the model loses the tool
   format.
+- A round whose stream goes quiet is dropped and sent again, never acted on.
+  `IdleLimits` (3 min before the first event and while thinking, 2 min once a
+  tool call's name has arrived) reset on every chunk that adds text, reasoning
+  or call bytes, so a slow stream that keeps moving is never cut. A stream that
+  closes with no finish reason and no usable call is treated the same way. A
+  retry sends the identical request after a short pause, keeps nothing of the
+  dropped round (its reasoning must not go back to the provider), and counts
+  toward a streak of three, which ends the turn as an error with the page
+  untouched. Stalled and resampled rounds do not use up `maxRounds`. A call cut
+  off by `finish_reason: length` is rejected with a message, not resampled.
+  Never put raw stream text in `Message.Content` or `Message.Reasoning`: the
+  first goes back to the provider and the second can become the turn's reason.
+  It lives in `RoundStats.Trace`, which only the admin reads.
+- Stop turn cancels the running turn with the cause `errAdminStop`. It names
+  the turn id, so a late click cannot stop the next turn, and it never takes
+  `h.mu`. The turn is stored as an error labeled "stopped by admin".
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.

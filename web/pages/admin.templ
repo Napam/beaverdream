@@ -773,7 +773,7 @@ templ turnInspector(d TurnDetail, run *RunProgress, csrf string) {
 	<div class="flex flex-col gap-4">
 		@turnHeader(d, csrf)
 		if d.Row.Run.Status == "running" {
-			@turnRunning(d, run)
+			@turnRunning(d, run, csrf)
 		} else if !d.Stored {
 			<div class={ adminCard }>
 				<p class="text-sm text-gray-500 dark:text-neutral-400">No conversation was stored for this turn.</p>
@@ -793,7 +793,7 @@ templ turnInspector(d TurnDetail, run *RunProgress, csrf string) {
 // turnRunning is the inspector before the conversation is stored. It shows
 // what the model read, every finished round in full, and the round being
 // written as it streams. The stored turn replaces it when the turn lands.
-templ turnRunning(d TurnDetail, run *RunProgress) {
+templ turnRunning(d TurnDetail, run *RunProgress, csrf string) {
 	if run == nil || run.TurnID != d.Row.Run.ID {
 		<div class={ adminCard }>
 			<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
@@ -803,6 +803,16 @@ templ turnRunning(d TurnDetail, run *RunProgress) {
 			<span class={ adminLabel }>in flight</span>
 			<span class={ adminChip }>round { itoa(run.Round) } with the model</span>
 			<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
+			<form
+				method="post"
+				action={ "/admin/stop/" + i64(d.Row.Run.ID) }
+				data-on:submit={ "@post('/admin/stop/" + i64(d.Row.Run.ID) + "', {contentType: 'form'})" }
+				data-indicator:_stopping
+				class="ml-auto"
+			>
+				@csrfInput(csrf)
+				<button type="submit" data-attr:disabled="$_stopping" title="cancel this turn; the page stays as it was and queued posts still run" class={ adminButton }>stop turn</button>
+			</form>
 		</div>
 		if len(d.Context) > 0 {
 			@turnContext(d)
@@ -828,6 +838,9 @@ templ AdminDraft(run *RunProgress) {
 			<span class="font-semibold text-gray-900 dark:text-neutral-100">round { itoa(draft.Round) }</span>
 			<span class={ adminChip }>{ draft.Phase }</span>
 			<span class={ adminChip }>started { draft.Since.UTC().Format("15:04:05") } UTC</span>
+			if !draft.Updated.IsZero() {
+				<span class={ adminChip }>last chunk { draft.Updated.UTC().Format("15:04:05") } UTC</span>
+			}
 		</div>
 		if draft.Reasoning != "" {
 			<div>
@@ -940,7 +953,7 @@ templ turnContext(d TurnDetail) {
 	<div class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<p class={ adminLabel }>what the model read</p>
-			<p class="font-mono text-xs text-gray-500 dark:text-neutral-400">{ tokens(d.ContextRunes()) } tokens estimated · { short(int64(d.ContextRunes())) } chars</p>
+			<p class="font-mono text-xs text-gray-500 dark:text-neutral-400">{ tokens(d.ContextRunes()) } tokens estimated, a floor: html and scripts run denser · { short(int64(d.ContextRunes())) } chars</p>
 		</div>
 		<div class="flex h-4 overflow-hidden rounded-md bg-gray-100 dark:bg-neutral-800">
 			for _, part := range d.Context {
@@ -1049,6 +1062,12 @@ templ roundCard(round RoundView) {
 		if round.Stats.Resampled {
 			<p class="rounded-md border border-rose-400/40 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-300">resampled: no call in this round had JSON arguments, so the model never saw it</p>
 		}
+		if round.Stats.Stalled {
+			<p class="rounded-md border border-rose-400/40 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:bg-rose-950/30 dark:text-rose-300">{ stallNote(round.Stats) }</p>
+		}
+		if round.Stats.Trace != nil {
+			@traceBlock(round.Stats)
+		}
 		if round.Reasoning != "" {
 			<details data-preserve-attr="open">
 				<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">reasoning · { short(int64(utf8.RuneCountInString(round.Reasoning))) } chars</summary>
@@ -1065,6 +1084,47 @@ templ roundCard(round RoundView) {
 			@callBlock(call)
 		}
 	</div>
+}
+
+// traceBlock is what the round's stream looked like from the client: the
+// backend that answered, the timing, the chunk counts and the raw chunks at
+// either end. Raw text lives only here, never in the message bodies.
+templ traceBlock(stats webmaster.RoundStats) {
+	{{ t := stats.Trace }}
+	<details data-preserve-attr="open">
+		<summary class="cursor-pointer text-xs text-gray-500 dark:text-neutral-500">stream · { traceSummary(stats) }</summary>
+		<div class="mt-2 flex flex-col gap-2">
+			<div class="flex flex-wrap gap-2">
+				if t.Model != "" {
+					<span class={ adminChip }>backend { t.Model }{ fingerprintSuffix(t.Fingerprint) }</span>
+				}
+				if t.Status > 0 {
+					<span class={ adminChip }>{ plural(t.Attempts, "attempt") }, status { itoa(t.Status) }</span>
+					<span class={ adminChip }>headers { millis(t.Headers.Milliseconds()) }</span>
+				}
+				<span class={ adminChip }>first event { millis(t.FirstEvent.Milliseconds()) }</span>
+				if t.Name > 0 {
+					<span class={ adminChip }>tool name { millis(t.Name.Milliseconds()) }</span>
+				}
+				<span class={ adminChip }>last event { millis(t.LastEvent.Milliseconds()) }</span>
+				<span class={ adminChip }>ended { millis(t.Total.Milliseconds()) }</span>
+				<span class={ adminChip }>longest gap { millis(t.LongestGap.Milliseconds()) } while { t.GapPhase }</span>
+				<span class={ adminChip }>{ short(t.ReasoningTokens) } reasoning tokens</span>
+				if t.PromptRunes > 0 && stats.PromptTokens > 0 {
+					<span class={ adminChip }>{ charsPerToken(t.PromptRunes, stats.PromptTokens) } chars per prompt token</span>
+				}
+			</div>
+			<p class="font-mono text-[11px] text-gray-500 dark:text-neutral-500">
+				chunks: { itoa(t.Events.Reasoning) } reasoning, { itoa(t.Events.Content) } content, { itoa(t.Events.ToolName) } tool name, { itoa(t.Events.ToolArgs) } tool args, { itoa(t.Events.UsageOnly) } usage, { itoa(t.Events.Empty) } empty
+				if t.OtherChoices > 0 || t.FunctionCalls > 0 || len(t.UnknownFields) > 0 {
+					· ignored: { itoa(t.OtherChoices) } other choices, { itoa(t.FunctionCalls) } function_call, fields { strings.Join(t.UnknownFields, ", ") }
+				}
+			</p>
+			if len(t.Head) > 0 || len(t.Tail) > 0 {
+				<pre class={ adminPre + " max-h-72" }>{ strings.Join(append(append([]string{}, t.Head...), t.Tail...), "\n") }</pre>
+			}
+		</div>
+	</details>
 }
 
 func callTone(call CallView) string {

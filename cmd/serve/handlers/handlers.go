@@ -37,10 +37,11 @@ const (
 	compactMaxChunks = 8
 	// summarizeTimeout is separate from the mutation budget so a slow summary
 	// cannot starve the rewrite that follows it.
-	summarizeTimeout = 10 * time.Minute
-	// mutationTimeout bounds one model call sequence. A reasoning model at
-	// high effort can think for a long time per round, and many rounds add up.
-	mutationTimeout = 2 * time.Hour
+	summarizeTimeout = 5 * time.Minute
+	// mutationTimeout bounds one model call sequence. It is a backstop: a
+	// quiet stream is cut by the idle limits long before. A whole legal page
+	// is about 17 minutes of generation, and a few rounds follow it.
+	mutationTimeout = time.Hour
 	// draftEvery bounds how often a streaming round repaints the admin panel.
 	// A fast model sends dozens of chunks a second; the panel needs a few.
 	draftEvery = 100 * time.Millisecond
@@ -83,6 +84,9 @@ type runState struct {
 	Messages   []webmaster.Message `json:"-"`
 	Draft      *webmaster.Draft    `json:"-"`
 	RoundDone  bool                `json:"-"`
+	// Finishing is true once the model is done and the turn is being stored.
+	// A stop after that point would change nothing but the label.
+	Finishing bool `json:"-"`
 }
 
 // Handlers serves the board and the admin panel.
@@ -122,7 +126,7 @@ type Handlers struct {
 	// cancelRun stops the model call in flight; stopped counts the resets
 	// that have not finished yet, so overlapping resets keep work paused.
 	// Both guarded by liveMu.
-	cancelRun context.CancelFunc
+	cancelRun context.CancelCauseFunc
 	stopped   int
 	wake      chan struct{}
 	stop      chan struct{}
@@ -331,7 +335,7 @@ func (h *Handlers) mutateLocked(
 	triggers []sqlc.Post,
 ) (webmaster.Result, error) {
 	ctx, cancel := mutationContext(ctx)
-	defer cancel()
+	defer cancel(nil)
 	if !h.startRun(cancel) {
 		return webmaster.Result{}, errors.New("the board is resetting")
 	}
@@ -450,6 +454,7 @@ func (h *Handlers) mutateHeld(
 	start := time.Now()
 	res, mutErr := h.mutator.MutatePosts(ctx, currentSite, room, triggers)
 	elapsed := time.Since(start).Milliseconds()
+	h.setFinishing()
 
 	if mutErr != nil {
 		res.Changed = false
@@ -496,6 +501,10 @@ func (h *Handlers) mutateHeld(
 	errorText := ""
 	if mutErr != nil {
 		errorText = mutErr.Error()
+		if errors.Is(context.Cause(ctx), errAdminStop) {
+			errorText = errAdminStop.Error()
+			mutErr = errAdminStop
+		}
 	}
 
 	// The version and the finished turn land together, so a reader never sees
@@ -933,6 +942,16 @@ func (h *Handlers) runPending() {
 		return
 	}
 	if len(batch) > maxBatchPosts {
+		dropped := batch[:len(batch)-maxBatchPosts]
+		droppedIDs := make([]int64, len(dropped))
+		for i, post := range dropped {
+			droppedIDs[i] = post.ID
+		}
+		h.logger.Warn("Queued posts dropped from the batch",
+			slog.Int("dropped", len(dropped)),
+			slog.Any("post_ids", droppedIDs),
+			slog.Int("kept", maxBatchPosts),
+		)
 		batch = batch[len(batch)-maxBatchPosts:]
 	}
 
@@ -945,14 +964,14 @@ func (h *Handlers) runPending() {
 		slog.Any("post_ids", batchIDs),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), mutationTimeout)
+	ctx, cancel := runContext(context.Background())
 	if !h.startRun(cancel) {
-		cancel()
+		cancel(nil)
 		return
 	}
 	h.beginRun("post", postAuthors(batch))
 	_, err := h.mutateHeld(ctx, "post", "", batch)
-	cancel()
+	cancel(nil)
 	h.clearRun()
 	h.endRun(err)
 
@@ -1033,7 +1052,7 @@ func (h *Handlers) endRun(err error) {
 // startRun remembers how to cancel the model call. It returns false when a
 // reset has already stopped work, so the caller drops its batch instead of
 // starting a turn the reset would have to wait for.
-func (h *Handlers) startRun(cancel context.CancelFunc) bool {
+func (h *Handlers) startRun(cancel context.CancelCauseFunc) bool {
 	h.liveMu.Lock()
 	defer h.liveMu.Unlock()
 	if h.stopped > 0 {
@@ -1060,9 +1079,33 @@ func (h *Handlers) stopWork() {
 	h.cancelRun = nil
 	h.liveMu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(errBoardReset)
 	}
 	h.hub.publish(topicBusy)
+}
+
+// errBoardReset and errAdminStop are the causes a turn's context carries when
+// it is canceled on purpose.
+var (
+	errBoardReset = errors.New("the board was reset")
+	errAdminStop  = errors.New("stopped by admin")
+)
+
+// stopTurn cancels the running turn when it is the one the admin looked at.
+// A stop that arrives after the turn ended names an old id and does nothing,
+// so it cannot cancel the next turn. It never takes h.mu, which the running
+// turn holds, and it leaves the queue alone: the posts still get their turn.
+func (h *Handlers) stopTurn(turnID int64) bool {
+	h.liveMu.Lock()
+	cancel := h.cancelRun
+	match := h.running != nil && h.running.TurnID == turnID && turnID != 0 &&
+		!h.running.Finishing
+	h.liveMu.Unlock()
+	if !match || cancel == nil {
+		return false
+	}
+	cancel(errAdminStop)
+	return true
 }
 
 // resumeWork lets the worker run again. A post that arrived during the reset
@@ -1093,6 +1136,16 @@ func (h *Handlers) setRunningRound(round int) {
 	h.liveMu.Unlock()
 	h.logger.Info("Mutation round started", slog.Int("round", round))
 	h.hub.publish(topicBusy)
+}
+
+// setFinishing marks the run as past its model calls, so a stop that arrives
+// now is refused instead of mislabeling a turn that is already complete.
+func (h *Handlers) setFinishing() {
+	h.liveMu.Lock()
+	if h.running != nil {
+		h.running.Finishing = true
+	}
+	h.liveMu.Unlock()
 }
 
 // setRunningTurn names the stored turn this run is writing, and tells the
@@ -1182,6 +1235,23 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 	}
 	if stats.Resampled {
 		attrs = append(attrs, slog.Bool("resampled", true))
+	}
+	if stats.Stalled {
+		attrs = append(attrs, slog.Bool("stalled", true))
+	}
+	if t := stats.Trace; t != nil {
+		attrs = append(attrs,
+			slog.String("backend_model", t.Model),
+			slog.String("fingerprint", t.Fingerprint),
+			slog.Int("attempts", t.Attempts),
+			slog.Int64("headers_ms", t.Headers.Milliseconds()),
+			slog.Int64("tool_name_ms", t.Name.Milliseconds()),
+			slog.Int64("last_event_ms", t.LastEvent.Milliseconds()),
+			slog.Int64("longest_gap_ms", t.LongestGap.Milliseconds()),
+			slog.String("gap_phase", t.GapPhase),
+			slog.Int64("reasoning_tokens", t.ReasoningTokens),
+			slog.Bool("finished", t.Finished),
+		)
 	}
 	h.logger.Info("Mutation round finished", attrs...)
 }
@@ -1361,8 +1431,19 @@ func utcDayStart() string {
 
 // mutationContext detaches the work from the request, so a refresh does not
 // cancel a mutation halfway, then bounds it.
-func mutationContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), mutationTimeout)
+func mutationContext(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+	return runContext(context.WithoutCancel(ctx))
+}
+
+// runContext bounds one turn by mutationTimeout. Its cancel takes a cause, so
+// a stop from the admin can be told from a timeout or a reset.
+func runContext(parent context.Context) (context.Context, context.CancelCauseFunc) {
+	base, cancelCause := context.WithCancelCause(parent)
+	ctx, cancelTimeout := context.WithTimeout(base, mutationTimeout)
+	return ctx, func(cause error) {
+		cancelCause(cause)
+		cancelTimeout()
+	}
 }
 
 func truncate(s string, limit int) string {

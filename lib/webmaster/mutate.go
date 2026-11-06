@@ -825,8 +825,10 @@ all in one response of its own: controls for a world someone moves through,
 feel for any game with actions, space when things break, block or hide,
 entities for several kinds of characters or enemies, paths when anything
 must find its way around walls, random for anything generated: levels,
-mazes, terrain, decks, daily puzzles, and canvas for anything drawn on a 2D
-canvas.
+mazes, terrain, decks, daily puzzles, canvas for anything drawn on a 2D
+canvas, and characters for anyone a visitor plays or meets. A character
+needs a face, limbs and motion; a capsule with a ball on top is not one,
+and more glow does not make it one.
 
 For 3D, use three.js 0.187, served by this page: import * as THREE from
 'three' in a module script. These extras come from 'three/addons' and
@@ -1337,7 +1339,7 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString("This page already moves with keys. Before you change how it moves,\n")
 		b.WriteString("call load_skill with controls. Load feel for hits and effects, space\n")
 		b.WriteString("for walls and damage, entities for kinds of characters, paths for\n")
-		b.WriteString("finding the way around walls.\n")
+		b.WriteString("finding the way around walls, characters for how they look and move.\n")
 	}
 
 	b.close()

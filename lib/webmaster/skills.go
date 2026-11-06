@@ -47,6 +47,11 @@ var skills = []skill{
 		summary: "sharp, cheap 2D drawing: pixel ratio, a camera with mouse to world, cached autotiled tile maps, sprites from text, parallax, y sorting, light",
 		body:    canvasReference,
 	},
+	{
+		name:    "characters",
+		summary: "3D figures that look alive: body plans (biped, quadruped, bug, flyer, blob, vehicle), a walk, run, jump and land from movement, seeded looks, moves; the same gait for 2D",
+		body:    charactersReference,
+	},
 }
 
 // skillBody returns the body of the named skill.

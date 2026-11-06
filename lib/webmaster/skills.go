@@ -32,6 +32,11 @@ var skills = []skill{
 		summary: "several kinds of characters or enemies from tables: moves per kind, charge, cooldowns, transforms, shots, spawning",
 		body:    entitiesReference,
 	},
+	{
+		name:    "paths",
+		summary: "find the way around walls: A* for a few seekers, one flow field for a crowd, path following and spreading apart",
+		body:    pathsReference,
+	},
 }
 
 // skillBody returns the body of the named skill.

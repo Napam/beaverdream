@@ -326,9 +326,10 @@ prefer simple, readable code over production hardening.
   page or the system prompt. A turn loads each skill once; a second load points
   back at the first result. A skill load is not an edit and does not end the
   turn, so the system prompt has the model send its loads in one response of
-  their own, then edit. The skills are `controls`, `feel`, `space` and
-  `entities`; each teaches general technique, never one board's game. Each
-  holds one script block that its `*_test.go` runs; change both together.
+  their own, then edit. The skills are `controls`, `feel`, `space`,
+  `entities` and `paths`; each teaches general technique, never one board's
+  game. Each holds one script block that its `*_test.go` runs; change both
+  together.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.

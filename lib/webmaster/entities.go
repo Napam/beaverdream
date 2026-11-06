@@ -215,8 +215,9 @@ move. A post about one kind changes that kind's lines and no others.
   fx.impact) and rows. The core draws nothing and has no effects.
 - Enemies: a kind with a brain and a max. spawnAway(kind, bounds, min) on a
   timer, min at least a screen from every player. Brains chase, keep
-  distance, wander, and shoot only when the space skill's g.sees says so. A
-  few readable enemies beat many: wind up 0.4s before an attack.
+  distance, wander, and shoot only when the space skill's g.sees says so.
+  The chase brain walks straight; with walls in the way, use the paths
+  skill. A few readable enemies beat many: wind up 0.4s before an attack.
 - Balance lives in the tables: damage in SHOTS, health and speed in KINDS,
   cooldown and charge in MOVES.
 - 3D: x and y here are the ground, which is x and z in three.js and in a 3D

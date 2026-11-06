@@ -126,11 +126,11 @@ var game = (function () {
 - Steps: one tile per press, tweened over 0.1s. A held key repeats after 0.18s,
   then 8 a second; a press mid-step is kept. Snake: a fixed tick, two queued
   turns, no reversing.
-- 3D: import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js'
-  in a module script. rotation.order 'YXZ'; yaw and pitch -= movementX and
-  movementY * 0.0025, pitch clamped to -1.4..1.4. Forward (-sin yaw, 0, -cos
-  yaw) and right (cos yaw, 0, -sin yaw) sum, normalized, eased. Move x then z,
-  each against walls, so the player slides.
+- 3D: import * as THREE from 'three' in a module script. rotation.order
+  'YXZ'; yaw and pitch -= movementX and movementY * 0.0025, pitch clamped to
+  -1.4..1.4. Forward (-sin yaw, 0, -cos yaw) and right (cos yaw, 0, -sin yaw)
+  sum, normalized, eased. Move x then z, each against walls, so the player
+  slides.
 - Touch: buttons under @media (pointer: coarse), touch-action:none.
   pointerdown calls game.press(code) and preventDefault; pointerup, cancel and
   leave call game.release(code). Keep the code in data-hold.

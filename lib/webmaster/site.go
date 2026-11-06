@@ -41,6 +41,12 @@ type Site struct {
 	ChangesSinceHeal int
 	// Datastar is the script path the page loads. Empty uses DatastarPath.
 	Datastar string
+	// Three is the path the page's import map gives the bare name "three".
+	// Empty uses ThreePath.
+	Three string
+	// ThreeAddons is the path the import map gives "three/addons". Empty
+	// uses ThreeAddonsPath.
+	ThreeAddons string
 }
 
 // Post is one message on the board.
@@ -208,6 +214,15 @@ func PostsContainer(rendered string) string {
 // DatastarPath is where the page loads Datastar from when the server does not
 // pass a content-hashed path.
 const DatastarPath = "/static/datastar.js"
+
+// ThreePath is where the import map points "three" when the server does not
+// pass a content-hashed path. The file is three.js 0.187.0, vendored in
+// web/vendor, so model pages need no CDN.
+const ThreePath = "/static/three.module.js"
+
+// ThreeAddonsPath is where the import map points "three/addons": a chosen
+// set of three.js examples bundled into one file that imports "three".
+const ThreeAddonsPath = "/static/three-addons.js"
 
 // FaviconPath is the beaver icon the code-owned pages put in their tab. The
 // path is literal, not content-hashed: the document builders do not know the
@@ -491,6 +506,16 @@ func SiteDoc(site Site, posts []Post) string {
 	if datastar == "" {
 		datastar = DatastarPath
 	}
+	imports := map[string]string{"three": site.Three, "three/addons": site.ThreeAddons}
+	if imports["three"] == "" {
+		imports["three"] = ThreePath
+	}
+	if imports["three/addons"] == "" {
+		imports["three/addons"] = ThreeAddonsPath
+	}
+	// A map of strings always marshals, and Marshal escapes < and >, so a
+	// path cannot close the script tag.
+	threeMap, _ := json.Marshal(map[string]map[string]string{"imports": imports})
 
 	var b strings.Builder
 	// data-name is code-owned so the model's JavaScript can tell who is
@@ -505,6 +530,11 @@ func SiteDoc(site Site, posts []Post) string {
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`)
 	b.WriteString(`<title>beaverdream</title>`)
+	// The import map must come before every module script, so model scripts
+	// can import "three" and "three/addons" without a URL.
+	b.WriteString(`<script type="importmap">`)
+	b.Write(threeMap)
+	b.WriteString(`</script>`)
 	// A module script is deferred, so Datastar starts after the whole page,
 	// model scripts included, has parsed.
 	b.WriteString(`<script type="module" src="` + html.EscapeString(datastar) + `"></script>`)

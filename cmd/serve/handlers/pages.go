@@ -54,6 +54,8 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	docSite.Name = identityFromRequest(r)
 	docSite.Visitor = publicVisitor(visitorFromRequest(w, r))
 	docSite.Datastar = h.cfg.DatastarSrc
+	docSite.Three = h.cfg.ThreeSrc
+	docSite.ThreeAddons = h.cfg.ThreeAddonsSrc
 	// The stream pushes rows after this id. A failed read starts the page at
 	// zero, which only means the first push carries rows it already has.
 	if cursor, err := h.queries.MaxJournalID(r.Context()); err == nil {

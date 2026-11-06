@@ -100,11 +100,13 @@ func run(logger *slog.Logger) error {
 	}
 
 	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
-		AdminToken:  adminToken,
-		AdminPort:   env.Vars.AdminPort,
-		AdminURL:    env.Vars.AdminURL,
-		Port:        env.Vars.Port,
-		DatastarSrc: beaverdream.StaticRootPath("static/datastar.js"),
+		AdminToken:     adminToken,
+		AdminPort:      env.Vars.AdminPort,
+		AdminURL:       env.Vars.AdminURL,
+		Port:           env.Vars.Port,
+		DatastarSrc:    beaverdream.StaticRootPath("static/datastar.js"),
+		ThreeSrc:       beaverdream.StaticRootPath("static/three.module.js"),
+		ThreeAddonsSrc: beaverdream.StaticRootPath("static/three-addons.js"),
 	})
 	defer h.Close()
 

@@ -151,9 +151,12 @@ prefer simple, readable code over production hardening.
 - There is no sandbox. `webmaster.SiteDoc` is the document: the model's HTML,
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
-- The only fixed markup is the document shell, Datastar and the live stream
-  mount, the live script, the `bd-posts` container, the `bd-state` JSON tag,
-  the small `set name` link, and the busy spinner. The spinner is
+- The only fixed markup is the document shell, the import map that gives
+  `three` and `three/addons` to three.js 0.187 (vendored in `web/vendor`, so
+  pages need no CDN),
+  Datastar and the live stream mount, the live script, the `bd-posts`
+  container, the `bd-state` JSON tag, the small `set name` link, and the busy
+  spinner. The spinner is
   inline-styled and patched by the stream while a rewrite is queued or
   running, so a model stylesheet cannot move or hide it. The server also
   replaces `{{name}}`

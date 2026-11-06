@@ -182,7 +182,11 @@ function exposeFiles() {
  * Vendored scripts are served as-is under a fixed name, so the Go side can
  * point at static/datastar.js without knowing the version.
  */
-const vendored = [{ src: 'vendor/datastar-v1.0.4.js', dest: `${outdir}/datastar.js` }]
+const vendored = [
+  { src: 'vendor/datastar-v1.0.4.js', dest: `${outdir}/datastar.js` },
+  { src: 'vendor/three-v0.187.0.module.min.js', dest: `${outdir}/three.module.js` },
+  { src: 'vendor/three-addons-v0.187.0.min.js', dest: `${outdir}/three-addons.js` },
+]
 
 function exposeVendored() {
   let linked = 0

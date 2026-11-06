@@ -71,6 +71,12 @@ type Config struct {
 	// DatastarSrc is the script path the board loads Datastar from, content
 	// hashed in production. Empty uses webmaster.DatastarPath.
 	DatastarSrc string
+	// ThreeSrc is the path the import map gives "three", content hashed in
+	// production. Empty uses webmaster.ThreePath.
+	ThreeSrc string
+	// ThreeAddonsSrc is the path the import map gives "three/addons". Empty
+	// uses webmaster.ThreeAddonsPath.
+	ThreeAddonsSrc string
 }
 
 // runState is what the live endpoint and the admin panel show while a

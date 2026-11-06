@@ -825,6 +825,17 @@ all in one response of its own: controls for a world someone moves through,
 feel for any game with actions, space when things break, block or hide, and
 entities for several kinds of characters or enemies.
 
+For 3D, use three.js 0.187, served by this page: import * as THREE from
+'three' in a module script. These extras come from 'three/addons' and
+nothing else does: EffectComposer, RenderPass, ShaderPass, UnrealBloomPass
+and OutputPass for glow; mergeGeometries, mergeVertices and
+BufferGeometryUtils to merge many meshes into few; ImprovedNoise and
+SimplexNoise for terrain; Sky; RoundedBoxGeometry and ConvexGeometry; Line2,
+LineGeometry and LineMaterial for thick lines; CSS2DRenderer and CSS2DObject
+for labels over things; PointerLockControls and OrbitControls. Import them by
+name, as in import { UnrealBloomPass } from 'three/addons'. Never load
+three.js or another 3D library from a CDN.
+
 The page is two fields you own: css, the stylesheet, and html, everything
 inside body. The html has one rule: it holds the literal placeholder {{posts}}
 exactly once, where the server puts the real posts. Any write that drops it

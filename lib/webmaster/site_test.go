@@ -2,6 +2,8 @@ package webmaster
 
 import (
 	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -158,6 +160,64 @@ func TestACSSOnlySiteCarriesBothStamps(t *testing.T) {
 	for _, want := range []string{`data-version="5"`, `data-post="2"`} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("page is missing %q", want)
+		}
+	}
+}
+
+// The import map gives model scripts "three" and "three/addons". It comes before
+// every module script, or the browser ignores it.
+func TestSiteDocMapsThree(t *testing.T) {
+	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
+	want := `<script type="importmap">{"imports":{"three":"/static/three.module.js",` +
+		`"three/addons":"/static/three-addons.js"}}</script>`
+	at := strings.Index(doc, want)
+	if at < 0 {
+		t.Fatalf("no import map for three in %.400q", doc)
+	}
+	if first := strings.Index(doc, `type="module"`); first < at {
+		t.Error("a module script comes before the import map")
+	}
+
+	hashed := SiteDoc(Site{
+		HTML:        PostsPlaceholder,
+		Three:       "/static/three-abc.module.js",
+		ThreeAddons: "/static/three-addons-def.js",
+	}, nil)
+	if !strings.Contains(
+		hashed,
+		`{"three":"/static/three-abc.module.js","three/addons":"/static/three-addons-def.js"}`,
+	) {
+		t.Error("the page ignores the hashed three.js paths")
+	}
+}
+
+// The system prompt names every export of the vendored addons bundle, so an
+// addon added to the bundle is never hidden from the model. The bundle's
+// header lists its entry file.
+func TestSystemPromptListsTheThreeAddons(t *testing.T) {
+	raw, err := os.ReadFile("../../web/vendor/three-addons-v0.187.0.min.js")
+	if err != nil {
+		t.Fatalf("read the addons bundle: %v", err)
+	}
+	header, _, _ := strings.Cut(string(raw), "*/")
+	exports := regexp.MustCompile(`export (?:\* as (\w+)|\{([^}]*)\})`)
+	var names []string
+	for _, m := range exports.FindAllStringSubmatch(header, -1) {
+		if m[1] != "" {
+			names = append(names, m[1])
+			continue
+		}
+		for _, name := range strings.Split(m[2], ",") {
+			names = append(names, strings.TrimSpace(name))
+		}
+	}
+	if len(names) < 10 {
+		t.Fatalf("found %d exports in the bundle header: %v", len(names), names)
+	}
+	sys := systemPrompt()
+	for _, name := range names {
+		if !regexp.MustCompile(`\b` + name + `\b`).MatchString(sys) {
+			t.Errorf("the system prompt does not name the addon %s", name)
 		}
 	}
 }

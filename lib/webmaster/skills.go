@@ -37,6 +37,11 @@ var skills = []skill{
 		summary: "find the way around walls: A* for a few seekers, one flow field for a crowd, path following and spreading apart",
 		body:    pathsReference,
 	},
+	{
+		name:    "random",
+		summary: "seeded randomness everyone agrees on: daily seeds, forks, noise terrain, mazes, dungeons, caves and even scatter",
+		body:    randomReference,
+	},
 }
 
 // skillBody returns the body of the named skill.

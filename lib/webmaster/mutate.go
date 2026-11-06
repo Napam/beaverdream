@@ -824,8 +824,9 @@ Before you build a game or change how it plays, load the skills it needs,
 all in one response of its own: controls for a world someone moves through,
 feel for any game with actions, space when things break, block or hide,
 entities for several kinds of characters or enemies, paths when anything
-must find its way around walls, and random for anything generated: levels,
-mazes, terrain, decks, daily puzzles.
+must find its way around walls, random for anything generated: levels,
+mazes, terrain, decks, daily puzzles, and canvas for anything drawn on a 2D
+canvas.
 
 For 3D, use three.js 0.187, served by this page: import * as THREE from
 'three' in a module script. These extras come from 'three/addons' and

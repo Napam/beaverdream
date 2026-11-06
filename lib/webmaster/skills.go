@@ -42,6 +42,11 @@ var skills = []skill{
 		summary: "seeded randomness everyone agrees on: daily seeds, forks, noise terrain, mazes, dungeons, caves and even scatter",
 		body:    randomReference,
 	},
+	{
+		name:    "canvas",
+		summary: "sharp, cheap 2D drawing: pixel ratio, a camera with mouse to world, cached autotiled tile maps, sprites from text, parallax, y sorting, light",
+		body:    canvasReference,
+	},
 }
 
 // skillBody returns the body of the named skill.

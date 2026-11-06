@@ -164,9 +164,11 @@ changes every cell or none.
   along its path every half cell. Without power the cells go at once; with it
   tough cells take several hits. It returns how many broke: scale the effect
   by that.
-- Draw. Canvas: fillRect each solid cell in view. 3D: one InstancedMesh per
-  chunk of 8 by 8 by 8 cells, keyed by g.takeDirty(), rebuilt only when
-  dirty. Skip cells with all six neighbors solid. Shade by depth or hp so a hole's inside shows.
+- Draw. Canvas: the canvas skill's cached layer, or fillRect each solid
+  cell in view for a small grid. 3D: one InstancedMesh per chunk of 8 by 8
+  by 8 cells, keyed by g.takeDirty(), rebuilt only when dirty. Skip cells
+  with all six neighbors solid. Shade by depth or hp so a hole's inside
+  shows.
 - Many things: rebuild a space.hash(size) every step, with size at least
   twice the largest r, then ask near() for hits, pickups and crowding instead
   of every pair. near() also returns the asker: skip it.

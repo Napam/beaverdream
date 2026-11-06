@@ -1004,7 +1004,8 @@ The live page:
     data-init="..."                        run once when the element appears
   Expressions are JavaScript: $name reads or writes a signal, el is the
   element, evt the event. Signals live in one tab and reset on reload; shared
-  values go through state or the journal. These attribute names belong to
+  values go through state or the journal, and the visitor's own things
+  through bd.save. These attribute names belong to
   Datastar, so do not use a Datastar name for your own data; data-cell and
   data-label are safe.
 - Use @post only for /posts and /x/state/KEY. They answer with nothing; the
@@ -1087,6 +1088,30 @@ Visitor state:
   counter brings them back. Hidden keys are listed with the current state, so
   reuse a name rather than start a coins2.
 
+Saving in this browser:
+- Any change to your html or scripts reloads every open page, and its scripts
+  start over. Whatever lives only in a variable is lost: where the visitor
+  stood, the camera, the open tab or panel, the tool or hero they picked, a
+  half-built thing, a level reached, settings like mute. Save it as it changes
+  and restore it when the script starts, so a rewrite feels like nothing
+  happened. Do this on every page that has such things, unasked.
+- bd.save(name, value) keeps a JSON value in this browser; bd.load(name,
+  fallback) returns it, or fallback when there is none. Saves survive reloads,
+  rewrites, heals and later visits. They never throw and are cheap enough to
+  call every frame. bd.save(name, null) forgets. A value must stay under
+  %d characters as JSON.
+    var view = bd.load('view', { tab: 'map', zoom: 1 })
+    if (typeof view.zoom !== 'number' || view.zoom < 0.5 || view.zoom > 4) view.zoom = 1
+    function setZoom(z) { view.zoom = z; bd.save('view', view); draw() }
+- A save is this browser's own copy. Other visitors never see it, and another
+  browser starts fresh. Shared things go in state or the journal, and counts
+  that matter (coins, items) in visitor state.
+- A saved value may come from an older page. Check its type and range before
+  you use it, as you would a journal payload. Keep a name when you rewrite the
+  page, so the new page picks the value up. When its meaning or shape changes,
+  use a new name (spot2) and the old value is ignored.
+- Write the names you save in your notes, so the next turn keeps them.
+
 Rules:
 - The server inserts every current post at {{posts}}, newest first. Never
   invent a post and never drop one. The page around the posts is yours. Posts
@@ -1122,6 +1147,7 @@ Rules:
 	maxStateKeys,
 	maxJournalKeys,
 	MaxBodyLen,
+	maxSaveLen,
 )
 
 // journalPrompt explains the one shared store the page can write to. It spells
@@ -1190,26 +1216,32 @@ seats.start(function (rows) {
 
 var me = { x: 50, y: 50 }        // fixed spawn, never random
 var pos = {}, ready = false
+function inBounds(x, y) {
+  return isFinite(x) && isFinite(y) && x >= 0 && y >= 0 && x <= 100 && y <= 100
+}
 
 moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
-    if (!isFinite(x) || !isFinite(y) || x < 0 || y < 0 || x > 100 || y > 100) continue
-    p[r.visitor] = { x: x, y: y }                // the referee: in bounds only
+    if (inBounds(x, y)) p[r.visitor] = { x: x, y: y }  // the referee: in bounds only
   }
   return p
 }, function (p) {
   pos = p
   if (!ready) {                                  // first render: put the visitor back
-    var mine = p[bd.visitor]
-    if (mine) { me.x = mine.x; me.y = mine.y }
+    var back = p[bd.visitor] || bd.load('spot', null)  // newest row, else this browser's save
+    if (back && inBounds(Number(back.x), Number(back.y))) {
+      me.x = Number(back.x); me.y = Number(back.y)
+    }
     ready = true
   }
 })
 
 setInterval(function () {
-  if (ready) moves.append({ x: me.x, y: me.y })
+  if (!ready) return
+  moves.append({ x: me.x, y: me.y })
+  bd.save('spot', me)
 }, 60)
 function frame() { draw(pos); requestAnimationFrame(frame) }
 requestAnimationFrame(frame)
@@ -1218,7 +1250,8 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
 
   draw and showScore stand for your canvas and markup. me is the viewer's own
   position: it starts at the spawn, and the first render moves it to their
-  newest row.
+  newest row, or to the spot this browser saved when the feed has no row of
+  theirs left.
 - bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
   once; after that the server pushes every new row as it is written, so each
   open page redraws within a moment. reduce(rows) gets the rows of the current
@@ -1250,10 +1283,13 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
   it names.
 - Any change to your html or scripts reloads every open page, and your script
   starts over. Rebuild the world and the visitor from journal rows.
-- Spawn the viewer at their own newest row (row.visitor === bd.visitor), and
-  fall back to a fixed spawn point. Do not send before the first render.
+- Spawn the viewer at their own newest row (row.visitor === bd.visitor), then
+  at their bd.load save if it is in bounds, then at a fixed spawn point. The
+  feed keeps seconds of motion, so the save is what brings back a visitor who
+  was away. Do not send before the first render.
 - Put everything the viewer must get back after a reload in the same payload
-  as the position: whether they are inside the world, which room.
+  as the position, and in the save: whether they are inside the world, which
+  room.
 - Keep the world seed and layout as a constant in the page, never a random
   value.
 - For a visitor who stands still, keep sending on the timer, or write a slow
@@ -1276,7 +1312,8 @@ const systemPromptTail = `- For a joke about one viewer, or anything only the br
 - Images are allowed. An <img> or a background-image url() can point at any
   https address, and the visitor's browser loads it. Use only hosts you are
   sure exist; a broken image is worse than none.
-- Do not use localStorage, sessionStorage or cookies. Do not open alert or
+- Do not use localStorage, sessionStorage or cookies directly; bd.save is the
+  browser store. Do not open alert or
   confirm loops, and do not ask for notifications. Prank the page, not the
   browser.
 `

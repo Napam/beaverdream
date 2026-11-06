@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,10 @@ const (
 	maxJournalRows    = 1000
 	defaultJournalMax = 300
 	maxJournalPayload = 600
+
+	// maxSaveLen is the longest JSON text bd.save keeps for one name. The
+	// browser gives an origin a few megabytes, shared by every name.
+	maxSaveLen = 8192
 
 	// JournalBurst and JournalRate are one visitor's write allowance for one
 	// key: a burst of tokens, then a refill at JournalRate per second. The
@@ -224,7 +229,7 @@ const JournalMatchClosed = "that match is not open"
 //
 // It is deliberately small. Keep it that way: anything the model has to
 // reimplement is page code it reads back on every turn.
-const JournalRuntime = `<script>
+var JournalRuntime = `<script>
 (function () {
   var tag = document.getElementById('bd-journal')
   var conf = {}
@@ -569,9 +574,80 @@ const JournalRuntime = `<script>
     }
   }
 
+  // bd.save and bd.load keep small things in this browser across reloads
+  // and page changes: where the visitor stood, the camera, settings. A save
+  // lands in memory at once and reaches localStorage at most twice a second
+  // and when the page hides, so a page can save every frame. Storage that
+  // throws (private mode, full, blocked) still leaves the memory copy for
+  // this tab. A value that is not JSON or is too long is the page's own
+  // mistake: it is reported once per name and not kept. A stored value that
+  // does not parse loads as the fallback.
+  var savePrefix = 'bd:save:'
+  var saveMax = ` + strconv.Itoa(maxSaveLen) + `
+  var saved = Object.create(null)
+  var dirty = Object.create(null)
+  var saveReported = Object.create(null)
+  var flushTimer = null
+  function storage() {
+    try { return window.localStorage || null } catch (e) { return null }
+  }
+  function flush() {
+    if (flushTimer) clearTimeout(flushTimer)
+    flushTimer = null
+    var ls = storage()
+    for (var name in dirty) {
+      delete dirty[name]
+      try {
+        if (!ls) continue
+        if (saved[name] === null) ls.removeItem(savePrefix + name)
+        else ls.setItem(savePrefix + name, saved[name])
+      } catch (e) {}
+    }
+  }
+  function saveProblem(name, what) {
+    if (saveReported[name]) return
+    saveReported[name] = 1
+    report('save(' + name + '): ' + what)
+  }
+  function save(name, value) {
+    name = String(name)
+    var text = null
+    if (value !== null && value !== undefined) {
+      try { text = JSON.stringify(value) } catch (e) { text = undefined }
+      if (typeof text !== 'string') {
+        saveProblem(name, 'the value is not JSON')
+        return false
+      }
+      if (text.length > saveMax) {
+        saveProblem(name, 'the value is longer than ' + saveMax + ' characters')
+        return false
+      }
+    }
+    saved[name] = text
+    dirty[name] = 1
+    if (!flushTimer) flushTimer = setTimeout(flush, 500)
+    return true
+  }
+  function load(name, fallback) {
+    name = String(name)
+    var text = saved[name]
+    if (text === undefined) {
+      var ls = storage()
+      try { text = ls ? ls.getItem(savePrefix + name) : null } catch (e) { text = null }
+    }
+    if (typeof text !== 'string') return fallback
+    try { return JSON.parse(text) } catch (e) { return fallback }
+  }
+  window.addEventListener('pagehide', flush)
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) flush()
+  })
+
   window.bd = {
     visitor: visitor,
     state: state,
+    save: save,
+    load: load,
     journal: function (key) {
       if (!Object.prototype.hasOwnProperty.call(keys, key)) {
         throw new Error('undeclared journal key: ' + key)

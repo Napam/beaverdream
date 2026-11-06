@@ -166,7 +166,7 @@ WIRING:
   GRAVITY for y up. Color by event when you draw.
 - A body that is hit: fx.pop(body, 0.2 to 0.4), then fx.settle(body, dt) each
   frame. Draw it scaled (1 + pop, 1 - pop), white while body.flash > 0.
-- A mute: the M key and a small button toggle fx.muted, kept in localStorage.
+- A mute: the M key and a small button toggle fx.muted, kept with bd.save('muted', fx.muted).
 - Multiplayer: effects are local. When a row says something happened, call
   fx.impact where it happened, with mine if it happened to you. Rows never
   carry effects.

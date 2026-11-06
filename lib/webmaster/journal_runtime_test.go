@@ -14,26 +14,32 @@ import (
 // both together.
 const exampleMotion = `var me = { x: 50, y: 50 }        // fixed spawn, never random
 var pos = {}, ready = false
+function inBounds(x, y) {
+  return isFinite(x) && isFinite(y) && x >= 0 && y >= 0 && x <= 100 && y <= 100
+}
 
 moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
-    if (!isFinite(x) || !isFinite(y) || x < 0 || y < 0 || x > 100 || y > 100) continue
-    p[r.visitor] = { x: x, y: y }                // the referee: in bounds only
+    if (inBounds(x, y)) p[r.visitor] = { x: x, y: y }  // the referee: in bounds only
   }
   return p
 }, function (p) {
   pos = p
   if (!ready) {                                  // first render: put the visitor back
-    var mine = p[bd.visitor]
-    if (mine) { me.x = mine.x; me.y = mine.y }
+    var back = p[bd.visitor] || bd.load('spot', null)  // newest row, else this browser's save
+    if (back && inBounds(Number(back.x), Number(back.y))) {
+      me.x = Number(back.x); me.y = Number(back.y)
+    }
     ready = true
   }
 })
 
 setInterval(function () {
-  if (ready) moves.append({ x: me.x, y: me.y })
+  if (!ready) return
+  moves.append({ x: me.x, y: me.y })
+  bd.save('spot', me)
 }, 60)
 `
 
@@ -82,7 +88,9 @@ global.document = {
   dispatchEvent: (e) => { events.push(e.name) }
 }
 global.window = global
-global.addEventListener = () => {}
+const pagehide = []
+global.addEventListener = (name, fn) => { if (name === 'pagehide') pagehide.push(fn) }
+global.dispatchPagehide = () => pagehide.forEach((fn) => fn())
 // Node has a read-only navigator of its own, so plain assignment is ignored.
 Object.defineProperty(global, 'navigator', {
   value: { sendBeacon: (url, blob) => { reports.push(blob.body); return true } },
@@ -98,6 +106,17 @@ global.requestAnimationFrame = (fn) => {
   return setTimeout(fn, 0)
 }
 process.on('unhandledRejection', () => { unhandled++ })
+// This browser's storage. Node has a localStorage of its own that warns on
+// stdout, so the fake replaces it.
+const stored = {}
+Object.defineProperty(global, 'localStorage', {
+  value: {
+    getItem: (k) => (k in stored ? stored[k] : null),
+    setItem: (k, v) => { stored[k] = String(v) },
+    removeItem: (k) => { delete stored[k] }
+  },
+  configurable: true
+})
 
 function reply(status, body) {
   return { ok: status >= 200 && status < 300, status: status, json: async () => body }
@@ -154,7 +173,10 @@ const beforeInit = {
   clearedFeed: () => { state.read = 'match' },
   exampleTickFirst: () => { state.read = 'own'; state.hold = hold },
   exampleReadFirst: () => { state.read = 'own' },
-  exampleFallback: () => { state.hold = hold }
+  exampleFallback: () => { state.hold = hold },
+  exampleFromSave: () => { stored['bd:save:spot'] = '{"x":10,"y":30}' },
+  exampleRowBeatsSave: () => { state.read = 'own'; stored['bd:save:spot'] = '{"x":10,"y":30}' },
+  exampleBadSave: () => { stored['bd:save:spot'] = '{"x":500,"y":30}' }
 }
 if (beforeInit[scenario]) beforeInit[scenario]()
 
@@ -491,6 +513,30 @@ const steps = {
     run.tick()
     await settle()
     hold.release()
+    await settle()
+    run.tick()
+    await settle()
+    results.push({ me: run.me(), own: run.pos().me || null })
+  },
+  // The feed has no row of the viewer's, so the first render takes the spot
+  // this browser saved, when it is in bounds. The tick saves where they are.
+  exampleFromSave: async () => {
+    const run = exampleRun()
+    await settle()
+    run.tick()
+    await settle()
+    window.dispatchPagehide()
+    results.push({ me: run.me(), own: run.pos().me || null, saved: JSON.parse(stored['bd:save:spot']) })
+  },
+  exampleRowBeatsSave: async () => {
+    const run = exampleRun()
+    await settle()
+    run.tick()
+    await settle()
+    results.push({ me: run.me(), own: run.pos().me || null })
+  },
+  exampleBadSave: async () => {
+    const run = exampleRun()
     await settle()
     run.tick()
     await settle()
@@ -1143,5 +1189,44 @@ func TestJournalExampleFallsBackToSpawn(t *testing.T) {
 	}
 	if own != nil {
 		t.Errorf("the feed has a row for the viewer %+v, want none", own)
+	}
+}
+
+// With no row of the viewer's in the feed, the example restores the spot this
+// browser saved, and keeps saving where the viewer is. A row in the feed is
+// newer than any save, so it wins, and a saved spot out of bounds is ignored.
+func TestJournalExampleRestoresFromTheSave(t *testing.T) {
+	cases := []struct {
+		scenario string
+		want     examplePoint
+	}{
+		{"exampleFromSave", examplePoint{X: 10, Y: 30}},
+		{"exampleRowBeatsSave", examplePoint{X: 20, Y: 70}},
+		{"exampleBadSave", examplePoint{X: 50, Y: 50}},
+	}
+	for _, c := range cases {
+		t.Run(c.scenario, func(t *testing.T) {
+			got := runRuntime(t, c.scenario)
+			if sent := exampleSent(t, got); len(sent) != 1 || sent[0] != c.want {
+				t.Errorf("sent = %+v, want one append at %+v", sent, c.want)
+			}
+			me, _ := examplePage(t, got)
+			if me != c.want {
+				t.Errorf("me = %+v, want %+v", me, c.want)
+			}
+			if len(got.Reports) != 0 {
+				t.Errorf("reports = %+v, want none", got.Reports)
+			}
+		})
+	}
+	got := runRuntime(t, "exampleFromSave")
+	var page struct {
+		Saved examplePoint `json:"saved"`
+	}
+	if err := json.Unmarshal(got.Results[0], &page); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if page.Saved != (examplePoint{X: 10, Y: 30}) {
+		t.Errorf("saved = %+v after pagehide, want where the viewer is", page.Saved)
 	}
 }

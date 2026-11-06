@@ -283,6 +283,18 @@ prefer simple, readable code over production hardening.
   the visitor from their own newest row on the first render and sends nothing
   before that, because a reload restarts the page script at the spawn point. The
   log is public, so the reducer, not the server, rejects illegal rows.
+- `bd.save(name, value)` and `bd.load(name, fallback)` in the code-owned
+  runtime are the browser store: JSON under `bd:save:` in localStorage, at
+  most `maxSaveLen` characters a name. A save lands in memory at once and
+  reaches storage on a 500 ms timer and on `pagehide` or a hidden tab, so a
+  page can save every frame. They never throw: storage that throws keeps the
+  memory copy, a stored value that does not parse loads as the fallback, and
+  a value that is not JSON or is too long is refused and reported once per
+  name. The prompt has the model save what a reload would lose (position,
+  camera, picks, settings) and restore it, unasked; it forbids touching
+  localStorage directly. The motion example restores from the viewer's newest
+  row, then the save, then the spawn, because the feed keeps only seconds of
+  motion. Saves outlive reset; pages check what they load.
 - The admin data page (`/admin/journal`, labelled "data") shows the shared
   state first, then every visitor counter, declared or hidden, with its
   holders and the picked visitor's state ops, then lists every journal key

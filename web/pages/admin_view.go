@@ -55,6 +55,25 @@ func NewTurnRow(run sqlc.ListWebmasterTurnsRow, messages []webmaster.Message) Tu
 	return row
 }
 
+// WithPosts names the posts a turn answered when its conversation does not:
+// a turn cut off before its prompt was saved has no new post section to read.
+func (row TurnRow) WithPosts(posts []sqlc.Post) TurnRow {
+	if row.Trigger != "" || len(posts) == 0 {
+		return row
+	}
+	if len(posts) == 1 {
+		row.Trigger = posts[0].Body
+		return row
+	}
+	lines := make([]string, 0, len(posts))
+	for _, post := range posts {
+		lines = append(lines, post.Author+": "+post.Body)
+	}
+	row.Trigger = strings.Join(lines, "\n")
+	row.Batched = true
+	return row
+}
+
 // QueueView is what waits for a turn: the batch of posts, which the worker
 // coalesces into one turn and the list shows as one queued row, and the admin
 // instructions, which each get their own row.

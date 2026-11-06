@@ -487,6 +487,15 @@ func (h *Handlers) mutateHeld(
 			10*time.Second,
 		)
 		defer cancel()
+		h.liveMu.Lock()
+		var messages []webmaster.Message
+		if h.running != nil && h.running.TurnID == turn.ID {
+			messages = h.running.Messages
+		}
+		h.liveMu.Unlock()
+		if len(messages) > 0 {
+			h.saveRunningMessages(turn.ID, messages)
+		}
 		if err := h.queries.FailTurn(closeCtx, sqlc.FailTurnParams{
 			ErrorText: "the mutation did not finish",
 			ID:        turn.ID,
@@ -1262,6 +1271,8 @@ func (h *Handlers) finishRunningTurn() {
 // each finished round, which replaces the draft it grew from. The turns page
 // shows it in full before the turn is stored.
 func (h *Handlers) addRunMessage(message webmaster.Message) {
+	var turnID int64
+	var messages []webmaster.Message
 	h.liveMu.Lock()
 	if h.running != nil {
 		h.running.Messages = append(h.running.Messages, message)
@@ -1269,9 +1280,37 @@ func (h *Handlers) addRunMessage(message webmaster.Message) {
 			h.running.Draft = nil
 			h.running.RoundDone = true
 		}
+		turnID, messages = h.running.TurnID, h.running.Messages
 	}
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
+	// The prompt and each finished round go to the row too, so a turn cut
+	// off by a crash or a restart still shows what it read and did. Tool
+	// results ride along with the next round or the finish.
+	if turnID > 0 && (message.Role == "user" || message.Role == "assistant") {
+		h.saveRunningMessages(turnID, messages)
+	}
+}
+
+// saveRunningMessages writes the conversation so far to a running turn. A
+// failed write only costs the admin a view of a crashed turn, so it logs.
+func (h *Handlers) saveRunningMessages(turnID int64, messages []webmaster.Message) {
+	data, err := json.Marshal(messages)
+	if err != nil {
+		h.logger.Error("Failed to marshal running messages", slog.Any("error", err))
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.queries.SaveRunningMessages(ctx, sqlc.SaveRunningMessagesParams{
+		Messages: string(data),
+		ID:       turnID,
+	}); err != nil {
+		h.logger.Warn("Failed to save running messages",
+			slog.Int64("turn_id", turnID),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // say posts the webmaster's say call on the board while its turn still runs,

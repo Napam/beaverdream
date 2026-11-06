@@ -151,15 +151,15 @@ const failRunningTurns = `-- name: FailRunningTurns :exec
 UPDATE turns
 SET
   status = 'error',
-  error_text = 'interrupted by a restart',
-  messages = '[]'
+  error_text = 'interrupted by a restart'
 WHERE
   kind = 'webmaster'
   AND status = 'running'
 `
 
 // A restart leaves the turn that was running behind. It never finished, so it
-// must not look like a turn the model can read back.
+// must not look like a turn the model can read back. It keeps the
+// conversation saved while it ran, for the admin.
 func (q *Queries) FailRunningTurns(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, failRunningTurns)
 	return err
@@ -169,8 +169,7 @@ const failTurn = `-- name: FailTurn :exec
 UPDATE turns
 SET
   status = 'error',
-  error_text = ?,
-  messages = '[]'
+  error_text = ?
 WHERE
   id = ?
 `
@@ -181,7 +180,8 @@ type FailTurnParams struct {
 }
 
 // Close a turn that never reached its finish transaction without touching
-// notes or messages. The row already inherited the previous notes at start.
+// notes. The row already inherited the previous notes at start, and keeps
+// the conversation saved while it ran.
 func (q *Queries) FailTurn(ctx context.Context, arg FailTurnParams) error {
 	_, err := q.db.ExecContext(ctx, failTurn, arg.ErrorText, arg.ID)
 	return err
@@ -676,6 +676,28 @@ func (q *Queries) PreviousWebmasterTurnID(ctx context.Context, id int64) (int64,
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const saveRunningMessages = `-- name: SaveRunningMessages :exec
+UPDATE turns
+SET
+  messages = ?
+WHERE
+  id = ?
+  AND status = 'running'
+`
+
+type SaveRunningMessagesParams struct {
+	Messages string
+	ID       int64
+}
+
+// The conversation so far of a turn still running, so a crash leaves the
+// prompt and the finished rounds for the admin. A finished turn is never
+// overwritten.
+func (q *Queries) SaveRunningMessages(ctx context.Context, arg SaveRunningMessagesParams) error {
+	_, err := q.db.ExecContext(ctx, saveRunningMessages, arg.Messages, arg.ID)
+	return err
 }
 
 const startTurn = `-- name: StartTurn :one

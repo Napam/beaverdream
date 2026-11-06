@@ -62,7 +62,11 @@ prefer simple, readable code over production hardening.
   that arrived while it ran: those get higher ids and appear after it in the
   next log. When the turn finishes, the version (if any) and the finished turn
   are written in one transaction. A crash leaves a running turn; `New` marks it
-  as an error so it is never read back.
+  as an error so it is never read back. While it runs, the prompt and each
+  finished round are saved to its `messages`, and failing a turn keeps them,
+  so the admin sees what a crashed turn read and did. A failed turn with no
+  saved prompt shows the posts it answered, read back from `turns` the way a
+  retry reads them.
 - The webmaster answers on the board through `done`'s optional `reply`
   (`maxReplyLen`). `reason` stays the short log line, stored as `said`, and
   visitors never see it. A turn that did not fail and has a reply inserts one
@@ -371,7 +375,8 @@ prefer simple, readable code over production hardening.
   a URL. Admin pages and actions answer Datastar with `#admin-body` patched in
   place (a plain request renders the whole page), so no redirect needs a
   secret. Each page opens its own stream for its own panels. A turn's
-  conversation is only stored when it finishes, so the turns page shows the
+  conversation is stored whole when it finishes (a running turn saves only
+  the prompt and its rounds, for crashes), so the turns page shows the
   running turn from memory: the prompt and every finished round in full as
   `Mutator.OnMessage` hears them, and the round being written as
   `#admin-draft`, which `OnDraft` fills chunk by chunk. A draft publishes
@@ -406,8 +411,8 @@ prefer simple, readable code over production hardening.
   retries the posts between it and the webmaster turn before it, trimmed to
   the newest `maxBatchPosts` like the worker, which is the batch that turn ran.
   A retry of a retry has no posts of its own, so it walks back to the turn it
-  copied. A crash leaves no stored prompt, so the posts are read back from
-  `turns` rather than parsed out of the messages.
+  copied. A crash can leave no stored prompt, so the posts are read back
+  from `turns` rather than parsed out of the messages.
 - Heal puts the seed page back by copying it forward as a new row and
   recording a heal turn. It keeps posts and the webmaster's notes, clears shared
   state and the journal in the same transaction as that version, takes `h.mu`,

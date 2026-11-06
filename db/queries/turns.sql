@@ -152,25 +152,36 @@ SET
 WHERE
   id = ?;
 
+-- name: SaveRunningMessages :exec
+-- The conversation so far of a turn still running, so a crash leaves the
+-- prompt and the finished rounds for the admin. A finished turn is never
+-- overwritten.
+UPDATE turns
+SET
+  messages = ?
+WHERE
+  id = ?
+  AND status = 'running';
+
 -- name: FailTurn :exec
 -- Close a turn that never reached its finish transaction without touching
--- notes or messages. The row already inherited the previous notes at start.
+-- notes. The row already inherited the previous notes at start, and keeps
+-- the conversation saved while it ran.
 UPDATE turns
 SET
   status = 'error',
-  error_text = ?,
-  messages = '[]'
+  error_text = ?
 WHERE
   id = ?;
 
 -- name: FailRunningTurns :exec
 -- A restart leaves the turn that was running behind. It never finished, so it
--- must not look like a turn the model can read back.
+-- must not look like a turn the model can read back. It keeps the
+-- conversation saved while it ran, for the admin.
 UPDATE turns
 SET
   status = 'error',
-  error_text = 'interrupted by a restart',
-  messages = '[]'
+  error_text = 'interrupted by a restart'
 WHERE
   kind = 'webmaster'
   AND status = 'running';

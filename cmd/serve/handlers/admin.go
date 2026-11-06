@@ -323,8 +323,32 @@ func (h *Handlers) adminTurns(
 		d := pages.NewTurnDetail(run, h.turnMessages(run), webmaster.ToolsRunes())
 		detail = &d
 	}
+	for i := range rows {
+		rows[i] = h.withStoredPosts(ctx, rows[i])
+	}
+	if detail != nil {
+		detail.Row = h.withStoredPosts(ctx, detail.Row)
+	}
 	addLiveTurn(rows, detail, live)
 	return rows, detail, nil
+}
+
+// withStoredPosts fills in the posts of a failed turn that saved no prompt,
+// read back from turns the way a retry reads them, so the admin still sees
+// what it was answering.
+func (h *Handlers) withStoredPosts(ctx context.Context, row pages.TurnRow) pages.TurnRow {
+	if row.Trigger != "" || row.Run.Status != "error" {
+		return row
+	}
+	posts, err := h.postsAnsweredBy(ctx, row.Run.ID)
+	if err != nil {
+		h.logger.Warn("Failed to read a failed turn's posts",
+			slog.Int64("turn_id", row.Run.ID),
+			slog.Any("error", err),
+		)
+		return row
+	}
+	return row.WithPosts(posts)
 }
 
 // addLiveTurn lays the running turn out from its conversation so far, in the

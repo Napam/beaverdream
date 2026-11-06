@@ -10,19 +10,72 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster/skills"
 )
 
-// StateKey is one model-declared shared value. Op decides how a visitor may
-// change it; the handler owns the actual application.
+// StateKey is one model-declared entry in the state schema. Op decides how a
+// visitor may change it; the handler owns the actual application.
+//
+// A counter with Scope "visitor" is a count each visitor owns. Max is then
+// the most one visitor can hold and PerHour the most one visitor can gain in
+// a rolling hour; 0 means the ceiling. A "recipe" is not a value at all: it
+// trades the Cost counts for the Gain counts in one step.
 type StateKey struct {
-	Op      string   `json:"op"`
-	Max     int      `json:"max,omitempty"`
-	Options []string `json:"options,omitempty"`
+	Op      string           `json:"op"`
+	Scope   string           `json:"scope,omitempty"`
+	Label   string           `json:"label,omitempty"`
+	Max     int64            `json:"max,omitempty"`
+	PerHour int64            `json:"per_hour,omitempty"`
+	Options []string         `json:"options,omitempty"`
+	Cost    map[string]int64 `json:"cost,omitempty"`
+	Gain    map[string]int64 `json:"gain,omitempty"`
+}
+
+// ScopeVisitor marks a counter that every visitor holds on their own.
+const ScopeVisitor = "visitor"
+
+// Visitor reports a per-visitor counter.
+func (k StateKey) Visitor() bool { return k.Op == "counter" && k.Scope == ScopeVisitor }
+
+// Global reports a value everyone shares: a counter, list or choice.
+func (k StateKey) Global() bool { return !k.Visitor() && k.Op != "recipe" }
+
+// HoldingCap is the most one visitor can hold of a visitor counter.
+func (k StateKey) HoldingCap() int64 {
+	if k.Max <= 0 || k.Max > MaxVisitorHolding {
+		return MaxVisitorHolding
+	}
+	return k.Max
+}
+
+// HourCap is the most one visitor can gain of a visitor counter in an hour.
+func (k StateKey) HourCap() int64 {
+	if k.PerHour <= 0 || k.PerHour > MaxVisitorPerHour {
+		return MaxVisitorPerHour
+	}
+	return k.PerHour
+}
+
+// ParseStateSchema reads a stored state schema. A broken one reads as
+// empty, so a bad row cannot open writes to undeclared keys.
+func ParseStateSchema(raw string) map[string]StateKey {
+	schema := make(map[string]StateKey)
+	if strings.TrimSpace(raw) == "" {
+		return schema
+	}
+	if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+		return make(map[string]StateKey)
+	}
+	return schema
 }
 
 type stateKeyInput struct {
-	Name    string   `json:"name"`
-	Op      string   `json:"op"`
-	Max     int      `json:"max"`
-	Options []string `json:"options"`
+	Name    string           `json:"name"`
+	Op      string           `json:"op"`
+	Scope   string           `json:"scope"`
+	Label   string           `json:"label"`
+	Max     int64            `json:"max"`
+	PerHour int64            `json:"per_hour"`
+	Options []string         `json:"options"`
+	Cost    map[string]int64 `json:"cost"`
+	Gain    map[string]int64 `json:"gain"`
 }
 
 // editor applies tool calls to a copy of the site. Nothing reaches the
@@ -383,12 +436,12 @@ func cleanHTML(html string) (string, error) {
 	return html, nil
 }
 
-// cleanStateSchema validates the model's state keys and stores them as a
-// compact JSON object. Only declared keys can be written, so a visitor cannot
-// invent state the model did not ask for.
+// cleanStateSchema validates the model's state keys and recipes and stores
+// them as one compact JSON object. Only declared keys can be written, so a
+// visitor cannot invent state the model did not ask for.
 func cleanStateSchema(keys []stateKeyInput) (string, error) {
 	if len(keys) > maxStateKeys {
-		return "", fmt.Errorf("at most %d state keys", maxStateKeys)
+		return "", fmt.Errorf("at most %d state keys and recipes together", maxStateKeys)
 	}
 
 	schema := make(map[string]StateKey, len(keys))
@@ -400,10 +453,23 @@ func cleanStateSchema(keys []stateKeyInput) (string, error) {
 		if _, exists := schema[name]; exists {
 			return "", fmt.Errorf("duplicate state key %q", name)
 		}
+		scope := strings.TrimSpace(input.Scope)
+		if scope != "" && scope != "global" && scope != ScopeVisitor {
+			return "", fmt.Errorf("state key %q: scope is global or visitor", name)
+		}
+		if scope == ScopeVisitor && input.Op != "counter" {
+			return "", fmt.Errorf("state key %q: only a counter can have scope visitor", name)
+		}
 
 		key := StateKey{Op: input.Op}
 		switch input.Op {
 		case "counter":
+			if scope == ScopeVisitor {
+				key.Scope = ScopeVisitor
+				key.Label = truncateRunes(CleanStateValue(input.Label), maxStateLabel)
+				key.Max = clampPositive(input.Max, MaxVisitorHolding)
+				key.PerHour = clampPositive(input.PerHour, MaxVisitorPerHour)
+			}
 		case "list":
 			key.Max = input.Max
 			if key.Max <= 0 {
@@ -423,10 +489,32 @@ func cleanStateSchema(keys []stateKeyInput) (string, error) {
 				}
 				key.Options = append(key.Options, option)
 			}
+		case "recipe":
+			key.Cost = input.Cost
+			key.Gain = input.Gain
 		default:
-			return "", fmt.Errorf("unknown state op %q, use counter, list or choice", input.Op)
+			return "", fmt.Errorf(
+				"unknown state op %q, use counter, list, choice or recipe", input.Op)
 		}
 		schema[name] = key
+	}
+
+	// Recipes name visitor counters, which may be declared after them.
+	for name, key := range schema {
+		if key.Op != "recipe" {
+			continue
+		}
+		if err := checkRecipeSide(schema, name, "cost", key.Cost); err != nil {
+			return "", err
+		}
+		if err := checkRecipeSide(schema, name, "gain", key.Gain); err != nil {
+			return "", err
+		}
+		for item := range key.Cost {
+			if _, ok := key.Gain[item]; ok {
+				return "", fmt.Errorf("recipe %q has %q in both cost and gain", name, item)
+			}
+		}
 	}
 
 	data, err := json.Marshal(schema)
@@ -434,6 +522,37 @@ func cleanStateSchema(keys []stateKeyInput) (string, error) {
 		return "", fmt.Errorf("encode state schema: %w", err)
 	}
 	return string(data), nil
+}
+
+func checkRecipeSide(
+	schema map[string]StateKey,
+	recipe, side string,
+	items map[string]int64,
+) error {
+	if len(items) < 1 || len(items) > maxRecipeSide {
+		return fmt.Errorf("recipe %q needs 1 to %d entries in %s", recipe, maxRecipeSide, side)
+	}
+	for item, amount := range items {
+		if !schema[item].Visitor() {
+			return fmt.Errorf(
+				"recipe %q %s names %q, which is not a counter with scope visitor",
+				recipe, side, item)
+		}
+		if amount < 1 || amount > MaxVisitorAmount {
+			return fmt.Errorf(
+				"recipe %q %s for %q must be 1 to %d", recipe, side, item, MaxVisitorAmount)
+		}
+	}
+	return nil
+}
+
+// clampPositive keeps 0 for "the ceiling" and clamps anything else into
+// 1..ceiling.
+func clampPositive(value, ceiling int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return min(value, ceiling)
 }
 
 func validStateName(name string) bool {

@@ -7,10 +7,10 @@ prefer simple, readable code over production hardening.
 ## Ground rules
 
 - Use `tmp/` for scratch files and test output. It is gitignored.
-- The schema lives in one rewritten migration, `000001_init.sql`, not an
-  additive 000002. Goose will not re-run an applied version, so after a schema
-  change delete `data/sqlite.db*` and let the server recreate it. Never edit an
-  applied migration on a board you want to keep.
+- `000001_init.sql` is frozen. A schema change is a new numbered migration,
+  because goose will not re-run an applied version and the live board keeps
+  its data. Never edit an applied migration. Reset clears every table a
+  migration adds, and its `sqlite_sequence` row.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`
@@ -35,8 +35,10 @@ prefer simple, readable code over production hardening.
   `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
   holds the compacted history: the newest row is one message standing in for
   everything through `through_turn_id`. `site_state` holds the model-declared
-  shared values, and its schema travels on the version row. `journal` holds the
-  model-declared append-only feeds, and their schema travels there too.
+  shared values, and its schema travels on the version row. `state_holdings`
+  holds what each visitor owns of a visitor counter, and `state_ops` logs every
+  successful visitor op for a day. `journal` holds the model-declared
+  append-only feeds, and their schema travels there too.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
@@ -209,9 +211,39 @@ prefer simple, readable code over production hardening.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
-  serialized and cooled down per visitor. Do not let visitors create keys or
-  store raw HTML. Reset and heal clear the state; restores keep the values and
-  take the old schema.
+  serialized and cooled down per browser and key (the visitor cookie, not the
+  name; a write without the cookie falls back to the name, never a fresh id).
+  Do not let visitors create keys or store raw HTML. Reset and heal clear the
+  shared values; restores keep them and take the old schema.
+- A counter with `scope: "visitor"` is a whole-number count each visitor owns,
+  and a `recipe` entry in the same schema map trades visitor counts. Keys and
+  recipes share `maxStateKeys`. `SetState` branches on the current schema:
+  a global key takes its op, a visitor counter takes `add=N` or `spend=N` and
+  never the global +1, and a recipe trades. A visitor op runs in one
+  transaction under `stateMu`: costs must be held, gains stay under `max` and
+  the rolling-hour `per_hour`, and any miss rolls back everything and stores
+  nothing. A visitor op without the visitor cookie is refused. Refusals carry
+  a reason (`short`, `full`, `cap`, `slow`, `gone`, `bad`) and keep their real
+  status; Datastar only patches a 200, so success is 204 to Datastar and JSON
+  to a fetch. Cheating is accepted: the server keeps counts valid, not
+  honest, and the prompt says so, because the page decides what earns.
+- Holdings belong to the key's name, not to a schema. They survive every
+  rewrite, heal and restore; a schema that omits a key hides it, and declaring
+  the name again as a visitor counter brings it back. The current schema
+  always wins, so a hidden name reused as a shared counter is just that. Only
+  reset and the admin's clear key delete holdings, and a clear is a `state`
+  event turn. Visitor counters stay out of `$shared`, `bd-state` and
+  `GET /x/state`. Each page gets its own `$mine` and everyone's `$tops`
+  (top 10, `id` = `publicVisitor`, the page's `bd.visitor`), seeded on the
+  first render and pushed by its stream, which reads the visitor cookie
+  without drawing one. Only the stream writes them: an op's answer can be
+  older than a push from another tab. A push sends `null` for a key the
+  schema dropped, since Datastar merges patches, and a new version pushes
+  the state signals too. The top lists are cached per holdings write, so a
+  burst of ops runs the query once, not once per stream. `bd.state` in the
+  code-owned runtime runs one call at a time, resolves `{ok, mine}` or
+  `{ok: false, reason}`, aborts a call after 10 s as `slow`, and never sends
+  a refusal to the error beacon.
 - The journal is the model's one flexible store and the server never reads a
   payload. Rows are append-only, grouped by a model-declared key, and carry the
   browser's opaque visitor id plus the match and rules numbers. Only keys in
@@ -237,7 +269,9 @@ prefer simple, readable code over production hardening.
   before that, because a reload restarts the page script at the spawn point. The
   log is public, so the reducer, not the server, rejects illegal rows.
 - The admin data page (`/admin/journal`, labelled "data") shows the shared
-  state first, then lists every key that has rows, declared or not, with stats
+  state first, then every visitor counter, declared or hidden, with its
+  holders and the picked visitor's state ops, then lists every journal key
+  that has rows, declared or not, with stats
   from one aggregate query, and browses one key's rows newest first. The site
   tab holds only versions and the reset; the overview shows the compacted
   memory and the latest notes. The selection (`feed`, `match`, `visitor`,
@@ -348,7 +382,7 @@ prefer simple, readable code over production hardening.
   its page however long it sits.
 - Reset is the one destructive action: it keeps the oldest version, deletes
   every turn (posts, webmaster turns, events, notes) with the compacted
-  summaries, later versions and shared state, and
+  summaries, later versions, shared state and visitor holdings, and
   rewinds the id sequences. It cancels the turn in flight and drops the queue
   before it takes `h.mu`, so it never waits on a model call and cannot race a
   mutation. Posts that arrive during the reset stay queued and run after it.
@@ -370,6 +404,8 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   Keywords pick themes: `matrix`, `pink`/`cute`, `brutalist`/`concrete`;
   `mocknoop` and `mockfail` test the no-op and error
   paths. `mockskill` loads the controls skill in its first round.
+  `mockwallet` declares two visitor counters and a recipe and ships a purse
+  page that earns, trades and lists the top holders.
   `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.

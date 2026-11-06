@@ -253,6 +253,8 @@ func (h *Handlers) loadAdmin(
 			return view, fmt.Errorf("load current site: %w", err)
 		}
 		view.States = h.adminStates(ctx, site)
+		view.Holdings = h.adminHoldings(ctx, site)
+		view.StateOps = h.adminStateOps(ctx, panel)
 		view.Journal, view.Browse = h.adminJournal(ctx, site, panel)
 	}
 	return view, nil

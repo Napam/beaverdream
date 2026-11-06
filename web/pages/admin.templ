@@ -21,6 +21,37 @@ type StateView struct {
 	Value string
 }
 
+// HoldingView is one visitor counter on the data page: declared now, or
+// hidden with holdings kept.
+type HoldingView struct {
+	Key        string
+	Label      string
+	Declared   bool
+	Total      int64
+	Holders    int64
+	GainedHour int64
+	Top        []HolderView
+}
+
+// HolderView is one row of a top list. Visitor is the raw browser id, which
+// only the admin sees.
+type HolderView struct {
+	Visitor string
+	Name    string
+	Amount  int64
+}
+
+// StateOpView is one key one op changed, for the picked visitor's op log.
+type StateOpView struct {
+	OpID   int64
+	Op     string
+	Source string
+	Key    string
+	Delta  int64
+	Name   string
+	At     string
+}
+
 // LiveView is the admin card's snapshot of the worker right now. It is built
 // on the server and patched into the page as the topics change.
 type LiveView struct {
@@ -135,12 +166,14 @@ func (p Panel) query() string {
 		if p.Match > 0 {
 			v.Set("match", i64(p.Match))
 		}
-		if p.Visitor != "" {
-			v.Set("visitor", p.Visitor)
-		}
 		if p.Before > 0 {
 			v.Set("before", i64(p.Before))
 		}
+	}
+	// A picked visitor filters the feed and opens their state ops, so it
+	// stays without a feed too.
+	if p.Visitor != "" {
+		v.Set("visitor", p.Visitor)
 	}
 	if len(v) == 0 {
 		return ""
@@ -176,6 +209,8 @@ type AdminView struct {
 	// card per journal key, and the rows of the picked key.
 	States         []StateView
 	Journal        []JournalKeyView
+	Holdings       []HoldingView
+	StateOps       []StateOpView
 	Browse         *JournalBrowse
 	Turns          []TurnRow
 	Turn           *TurnDetail

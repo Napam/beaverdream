@@ -650,8 +650,10 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "set_state_schema",
 			Description: openai.String(
-				"Declare the shared state the page can read and write. " +
-					"counter increments, list appends a short string, choice tallies an option.",
+				"Declare the state the page can read and write. " +
+					"counter increments, list appends a short string, choice tallies an option. " +
+					"A counter with scope visitor is a whole-number count each visitor owns; " +
+					"a recipe trades cost counts for gain counts. Send every key you keep.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -667,11 +669,36 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 								},
 								"op": map[string]any{
 									"type": "string",
-									"enum": []string{"counter", "list", "choice"},
+									"enum": []string{"counter", "list", "choice", "recipe"},
+								},
+								"scope": map[string]any{
+									"type": "string",
+									"enum": []string{"global", "visitor"},
+									"description": "For counter: global (one shared count, the default) " +
+										"or visitor (each visitor holds their own).",
+								},
+								"label": map[string]any{
+									"type":        "string",
+									"description": "For a visitor counter: a name for the admin and the prompt. The page never sees it.",
 								},
 								"max": map[string]any{
+									"type": "integer",
+									"description": "For list: how many entries to keep. " +
+										"For a visitor counter: the most one visitor can hold.",
+								},
+								"per_hour": map[string]any{
 									"type":        "integer",
-									"description": "For list: how many entries to keep.",
+									"description": "For a visitor counter: the most one visitor can gain in any rolling hour. Spending does not give it back.",
+								},
+								"cost": map[string]any{
+									"type":                 "object",
+									"additionalProperties": map[string]any{"type": "integer"},
+									"description":          "For recipe: visitor counters paid, name to amount.",
+								},
+								"gain": map[string]any{
+									"type":                 "object",
+									"additionalProperties": map[string]any{"type": "integer"},
+									"description":          "For recipe: visitor counters received, name to amount.",
 								},
 								"options": map[string]any{
 									"type":        "array",
@@ -876,7 +903,9 @@ var systemPromptMiddle = fmt.Sprintf(
   that asks for a different page is worth the time.
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
-  the options). Up to %d keys. Declare only what the page actually uses.
+  the options). A counter with scope visitor is a count each visitor owns, and
+  a recipe trades visitor counts. Up to %d keys and recipes together. Declare
+  only what the page actually uses.
 - set_journal_schema(keys): declare append-only feeds the page writes and
   folds. Use it when a post asks for something people do together: a game, a
   chat, votes, a shared list. It is the only way to give the page real shared
@@ -958,7 +987,8 @@ The live page:
   @post a page like /: the reply would be patched into the document.
 - These ids belong to the page and the live stream. Do not reuse them:
   bd-live, bd-posts, bd-css, bd-busy, bd-busy-ring, bd-state, bd-journal. Do not
-  name your own signals shared, or anything that starts with _bd.
+  name your own signals shared, mine or tops, or anything that starts with
+  _bd.
 - Page scripts can listen on document for beaverdream:post (new posts just
   landed), beaverdream:state (shared values changed) and beaverdream:update
   (the stylesheet changed in place). beaverdream:post carries detail.mode and
@@ -985,8 +1015,52 @@ Shared state:
   input named value and data-on:submit="@post('/x/state/wall', {contentType:
   'form'}); el.reset()". GET /x/state returns {"schema": ..., "state": ...}.
 - Use state only when a post asks for something people can click, vote on or
-  leave behind. Do not add widgets just because you can. State survives
-  restores; reset clears it. Do not store HTML in it.
+  leave behind. Do not add widgets just because you can. Shared values survive
+  restores; heal and reset clear them. Do not store HTML in it.
+
+Visitor state:
+- A counter with "scope": "visitor" is a count each visitor holds on their
+  own: coins, fish, hats, xp. It takes an optional "label" (shown in the
+  admin panel and in this prompt, never on the page), "max" (the most one
+  visitor can hold) and "per_hour" (the most one visitor can gain in any
+  rolling hour; spending does not give it back). A recipe is one more entry
+  with "op": "recipe", "cost" and "gain", each naming 1 to 4 visitor counters
+  with whole amounts:
+    {"name":"coins","op":"counter","scope":"visitor","label":"Gold"}
+    {"name":"rod","op":"counter","scope":"visitor","label":"Rod","max":5}
+    {"name":"buy_rod","op":"recipe","cost":{"coins":150},"gain":{"rod":1}}
+- The server takes any add the page sends. Your page decides when a visitor
+  earns and how much, so award only for something they did: a fish caught,
+  a level cleared. A bare button that adds is free money.
+- Scripts use bd.state.add('coins', 5), bd.state.spend('coins', 5) and
+  bd.state.trade('buy_rod'). Calls run one at a time and resolve
+  {ok: true, mine} or {ok: false, reason}. reason is short (not enough), full
+  (at max), cap (hour budget used), slow (too fast or no answer, try again),
+  gone (not declared now) or bad (amount). Tell the visitor which:
+    bd.state.trade('buy_rod').then(function (r) {
+      note.textContent = r.ok ? 'bought a rod' : r.reason === 'short' ? 'not enough gold' : r.reason
+    })
+  Markup can also send @post('/x/state/coins?add=5') or
+  @post('/x/state/coins?add=' + $catch), but a refused @post shows nothing,
+  so a shop button calls bd.state.trade from a script.
+- $mine.KEY (by name, not label) is this visitor's count, kept live; bind
+  markup to it and never keep your own copy of a balance. $tops.KEY is the
+  top 10 holders as [{name, id, amount}]; the visitor's own row, if they hold
+  any, has id === bd.visitor. Scripts read bd.state.mine and bd.state.tops,
+  and the beaverdream:state event carries detail.mine and detail.tops.
+    <span data-text="$mine.coins"></span> gold
+- Counts are whole numbers. A page that earns fractions keeps the remainder in
+  the tab and sends whole ones. Each visitor gets one write per key every
+  250 ms, so a timer ticks at most once a second and sends the sum. A recipe
+  has one fixed price; rising prices are several recipes (buy_rod_1,
+  buy_rod_2). Nothing runs on the server: a timer runs only while a tab is
+  open, and two tabs tick twice.
+- The journal is what happens; state is what lasts. Visitor holdings survive
+  every rewrite, heal and restore, and only reset clears them. They belong to
+  the key's name, not the label. A visitor key left out of the schema is
+  hidden with its holdings kept, and declaring the name again as a visitor
+  counter brings them back. Hidden keys are listed with the current state, so
+  reuse a name rather than start a coins2.
 
 Rules:
 - The server inserts every current post at {{posts}}, newest first. Never
@@ -1372,6 +1446,51 @@ func pagePrompt(site Site) string {
 	return b.String()
 }
 
+// writeHoldings lists the declared visitor counters with what visitors hold,
+// then the keys that still hold something but are not declared now, so the
+// model reuses a name instead of starting over. It writes nothing on a board
+// without either.
+func writeHoldings(b *promptBuilder, site Site) {
+	schema := ParseStateSchema(site.StateSchema)
+	totals := make(map[string]HoldingTotal, len(site.Holdings))
+	for _, total := range site.Holdings {
+		totals[total.Key] = total
+	}
+	var declared, hidden []string
+	for key, def := range schema {
+		if def.Visitor() {
+			declared = append(declared, key)
+		}
+	}
+	for key := range totals {
+		if !schema[key].Visitor() {
+			hidden = append(hidden, key)
+		}
+	}
+	sort.Strings(declared)
+	sort.Strings(hidden)
+
+	held := func(key string) string {
+		total, ok := totals[key]
+		if !ok {
+			return "nobody holds any yet"
+		}
+		return fmt.Sprintf("%d held by %d visitors", total.Total, total.Holders)
+	}
+	if len(declared) > 0 {
+		b.WriteString("visitor keys:\n")
+		for _, key := range declared {
+			fmt.Fprintf(&b.Builder, "%s (%q): %s\n", key, schema[key].Label, held(key))
+		}
+	}
+	if len(hidden) > 0 {
+		b.WriteString("hidden visitor keys, holdings kept until declared again:\n")
+		for _, key := range hidden {
+			fmt.Fprintf(&b.Builder, "%s: %s\n", key, held(key))
+		}
+	}
+}
+
 // writePage writes the page sections of the prompt.
 func writePage(b *promptBuilder, site Site) {
 	b.section("stylesheet")
@@ -1396,8 +1515,14 @@ func writePage(b *promptBuilder, site Site) {
 		b.WriteString("schema: ")
 		b.WriteString(site.StateSchema)
 		b.WriteString("\n")
+		hasGlobal := false
+		for _, def := range ParseStateSchema(site.StateSchema) {
+			hasGlobal = hasGlobal || def.Global()
+		}
 		if len(site.State) == 0 {
-			b.WriteString("(no values yet)\n")
+			if hasGlobal {
+				b.WriteString("(no values yet)\n")
+			}
 		} else {
 			keys := make([]string, 0, len(site.State))
 			for key := range site.State {
@@ -1409,6 +1534,8 @@ func writePage(b *promptBuilder, site Site) {
 			}
 		}
 	}
+
+	writeHoldings(b, site)
 
 	b.WriteString("\n")
 	b.section("journal")

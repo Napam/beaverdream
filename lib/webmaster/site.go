@@ -32,6 +32,14 @@ type Site struct {
 	// JournalRulesUsed is the highest rules number stored under each key
 	// with rows, declared or not. Only the schema tool reads it.
 	JournalRulesUsed map[string]int
+	// Holdings totals every key visitors hold, declared now or not. Only the
+	// prompt reads it, to show the visitor counters and the hidden ones.
+	Holdings []HoldingTotal
+	// Mine and Tops seed the $mine and $tops signals on the first render.
+	// Mine is this visitor's own holdings; Tops holds raw JSON so the page
+	// package does not need the handler's row type.
+	Mine map[string]int64
+	Tops json.RawMessage
 	// JournalCursor is the newest journal row id when the page was rendered.
 	// The live stream pushes every row after it.
 	JournalCursor    int64
@@ -47,6 +55,14 @@ type Site struct {
 	// ThreeAddons is the path the import map gives "three/addons". Empty
 	// uses ThreeAddonsPath.
 	ThreeAddons string
+}
+
+// HoldingTotal is how much of one visitor counter everyone holds together,
+// and by how many visitors.
+type HoldingTotal struct {
+	Key     string
+	Total   int64
+	Holders int64
 }
 
 // Post is one message on the board.
@@ -238,18 +254,36 @@ type LiveCursor struct {
 	Journal int64 `json:"journal"`
 }
 
+// visitorSignals is the first $mine and $tops, never nil, so markup bound to
+// them has something to read before the stream connects.
+func visitorSignals(site Site) (map[string]int64, json.RawMessage) {
+	mine := site.Mine
+	if mine == nil {
+		mine = map[string]int64{}
+	}
+	tops := site.Tops
+	if len(tops) == 0 || !json.Valid(tops) {
+		tops = json.RawMessage(`{}`)
+	}
+	return mine, tops
+}
+
 // liveMount is the hidden element that opens the page's one live stream. Its
-// signals carry the cursor and the shared state, which model markup reads as
-// $shared.KEY. Only _bd goes to /live; the leading underscore keeps it out of
-// every @post the model writes.
+// signals carry the cursor, the shared state, which model markup reads as
+// $shared.KEY, and the visitor's holdings and the top holders as $mine and
+// $tops. Only _bd goes to /live; the leading underscore keeps it out of every
+// @post the model writes.
 func liveMount(site Site, newestPost int64) string {
 	state := site.State
 	if state == nil {
 		state = map[string]json.RawMessage{}
 	}
+	mine, tops := visitorSignals(site)
 	signals, err := json.Marshal(struct {
 		BD     LiveCursor                 `json:"_bd"`
 		Shared map[string]json.RawMessage `json:"shared"`
+		Mine   map[string]int64           `json:"mine"`
+		Tops   json.RawMessage            `json:"tops"`
 	}{
 		BD: LiveCursor{
 			Version: site.Version,
@@ -257,9 +291,11 @@ func liveMount(site Site, newestPost int64) string {
 			Journal: site.JournalCursor,
 		},
 		Shared: state,
+		Mine:   mine,
+		Tops:   tops,
 	})
 	if err != nil {
-		signals = []byte(`{"_bd":{},"shared":{}}`)
+		signals = []byte(`{"_bd":{},"shared":{},"mine":{},"tops":{}}`)
 	}
 	// retry always: a clean close (a deploy) reconnects too. The jitter keeps
 	// every tab from reconnecting in the same instant.
@@ -403,10 +439,17 @@ const liveScript = `<script>
       html.setAttribute('data-post', String(newest))
       emit('beaverdream:post', { post: newest, mode: mode, ids: ids || [] })
     },
-    state: function (values) {
+    state: function (values, mine, tops) {
       var tag = document.getElementById('bd-state')
       if (tag) tag.textContent = JSON.stringify(values)
-      emit('beaverdream:state', { state: values })
+      var own = window.bd && window.bd.state
+      if (own && mine) own.mine = mine
+      if (own && tops) own.tops = tops
+      emit('beaverdream:state', {
+        state: values,
+        mine: own ? own.mine : mine || {},
+        tops: own ? own.tops : tops || {}
+      })
     }
   }
 
@@ -461,12 +504,15 @@ func journalConfig(site Site) []byte {
 	for key, state := range site.Journal {
 		keys[key] = journalKeyConfig{Match: state.Match, Rules: state.Rules, Max: state.Max}
 	}
+	mine, tops := visitorSignals(site)
 	data, err := json.Marshal(struct {
 		Visitor string                      `json:"visitor"`
 		Keys    map[string]journalKeyConfig `json:"keys"`
-	}{Visitor: site.Visitor, Keys: keys})
+		Mine    map[string]int64            `json:"mine"`
+		Tops    json.RawMessage             `json:"tops"`
+	}{Visitor: site.Visitor, Keys: keys, Mine: mine, Tops: tops})
 	if err != nil {
-		return []byte(`{"visitor":"","keys":{}}`)
+		return []byte(`{"visitor":"","keys":{},"mine":{},"tops":{}}`)
 	}
 	return data
 }

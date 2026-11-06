@@ -2,6 +2,7 @@ package webmaster
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -585,4 +586,156 @@ func TestDoneStoresNotes(t *testing.T) {
 	if !ed.done || ed.dirty {
 		t.Fatalf("done = %v, dirty = %v", ed.done, ed.dirty)
 	}
+}
+
+func TestSetStateSchemaTakesVisitorCountersAndRecipes(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_state_schema", args(t, map[string]any{"keys": []map[string]any{
+		// A recipe may come before the counters it names.
+		{
+			"name": "buy_rod",
+			"op":   "recipe",
+			"cost": map[string]int{"coins": 150},
+			"gain": map[string]int{"rod": 1},
+		},
+		{
+			"name":     "coins",
+			"op":       "counter",
+			"scope":    "visitor",
+			"label":    "<b>Gold</b>",
+			"per_hour": 1e9,
+		},
+		{"name": "rod", "op": "counter", "scope": "visitor", "max": 5},
+		{"name": "likes", "op": "counter", "max": 3},
+	}}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+	schema := ParseStateSchema(ed.site.StateSchema)
+	if coins := schema["coins"]; !coins.Visitor() || coins.HourCap() != MaxVisitorPerHour ||
+		coins.HoldingCap() != MaxVisitorHolding || coins.Label != "bGold/b" {
+		t.Errorf("coins = %+v, want a visitor counter clamped to the ceilings", coins)
+	}
+	if rod := schema["rod"]; rod.HoldingCap() != 5 {
+		t.Errorf("rod holds up to %d, want 5", rod.HoldingCap())
+	}
+	if likes := schema["likes"]; !likes.Global() || likes.Max != 0 {
+		t.Errorf("likes = %+v, want a plain shared counter", likes)
+	}
+	if recipe := schema["buy_rod"]; recipe.Global() || recipe.Visitor() ||
+		recipe.Cost["coins"] != 150 || recipe.Gain["rod"] != 1 {
+		t.Errorf("buy_rod = %+v", recipe)
+	}
+}
+
+func TestSetStateSchemaRejectsBadVisitorKeysAndRecipes(t *testing.T) {
+	coins := map[string]any{"name": "coins", "op": "counter", "scope": "visitor"}
+	gem := map[string]any{"name": "gem", "op": "counter", "scope": "visitor"}
+	likes := map[string]any{"name": "likes", "op": "counter"}
+	recipe := func(cost, gain map[string]int) map[string]any {
+		return map[string]any{"name": "deal", "op": "recipe", "cost": cost, "gain": gain}
+	}
+	cases := map[string][]map[string]any{
+		"visitor list":  {{"name": "wall", "op": "list", "scope": "visitor"}},
+		"unknown scope": {{"name": "coins", "op": "counter", "scope": "room"}},
+		"names a shared key": {
+			coins,
+			likes,
+			recipe(map[string]int{"likes": 1}, map[string]int{"coins": 1}),
+		},
+		"names nothing": {
+			coins,
+			recipe(map[string]int{"fish": 1}, map[string]int{"coins": 1}),
+		},
+		"empty gain": {coins, recipe(map[string]int{"coins": 1}, map[string]int{})},
+		"zero amount": {
+			coins,
+			gem,
+			recipe(map[string]int{"coins": 0}, map[string]int{"gem": 1}),
+		},
+		"too big": {
+			coins,
+			gem,
+			recipe(map[string]int{"coins": MaxVisitorAmount + 1}, map[string]int{"gem": 1}),
+		},
+		"same key both sides": {
+			coins,
+			gem,
+			recipe(map[string]int{"coins": 1, "gem": 1}, map[string]int{"coins": 2}),
+		},
+		"five entries on side": fiveCostRecipe(),
+	}
+	for name, keys := range cases {
+		ed := newEditor(Site{})
+		got := ed.run("set_state_schema", args(t, map[string]any{"keys": keys}))
+		if !strings.HasPrefix(got, "rejected:") {
+			t.Errorf("%s: got %q, want a rejection", name, got)
+		}
+		if ed.site.StateSchema != "" {
+			t.Errorf("%s: a rejected schema was stored", name)
+		}
+	}
+
+	var many []map[string]any
+	for i := range maxStateKeys + 1 {
+		many = append(many, map[string]any{"name": fmt.Sprintf("k%d", i), "op": "counter"})
+	}
+	ed := newEditor(Site{})
+	if got := ed.run(
+		"set_state_schema",
+		args(t, map[string]any{"keys": many}),
+	); !strings.HasPrefix(
+		got,
+		"rejected:",
+	) {
+		t.Errorf("%d keys: got %q, want a rejection", len(many), got)
+	}
+}
+
+func fiveCostRecipe() []map[string]any {
+	keys := []map[string]any{{"name": "out", "op": "counter", "scope": "visitor"}}
+	cost := map[string]int{}
+	for i := range 5 {
+		name := fmt.Sprintf("in%d", i)
+		keys = append(keys, map[string]any{"name": name, "op": "counter", "scope": "visitor"})
+		cost[name] = 1
+	}
+	return append(keys, map[string]any{
+		"name": "deal", "op": "recipe", "cost": cost, "gain": map[string]int{"out": 1},
+	})
+}
+
+// The state section shows what visitors hold of each declared visitor key,
+// and the keys that still hold something but are not declared now, even
+// when the current schema reuses the name for a shared counter.
+func TestPagePromptListsVisitorAndHiddenHoldings(t *testing.T) {
+	site := Site{
+		HTML:        PostsPlaceholder,
+		StateSchema: `{"coins":{"op":"counter","scope":"visitor","label":"Gold"},"rod":{"op":"counter","scope":"visitor"},"koi":{"op":"counter"}}`,
+		Holdings: []HoldingTotal{
+			{Key: "coins", Total: 1234, Holders: 5},
+			{Key: "koi", Total: 300, Holders: 2},
+			{Key: "pearl", Total: 7, Holders: 1},
+		},
+	}
+	lines := strings.Split(pagePrompt(site), "\n")
+	find := func(prefix string) string {
+		for _, line := range lines {
+			if strings.HasPrefix(line, prefix) {
+				return line
+			}
+		}
+		t.Fatalf("no line starts with %q in:\n%s", prefix, strings.Join(lines, "\n"))
+		return ""
+	}
+	if line := find("coins "); !strings.Contains(line, "1234") || !strings.Contains(line, "5") ||
+		!strings.Contains(line, "Gold") {
+		t.Errorf("coins line = %q, want its label, total and holders", line)
+	}
+	find("rod ")
+	hidden := find("koi:")
+	if !strings.Contains(hidden, "300") {
+		t.Errorf("koi line = %q, want its total", hidden)
+	}
+	find("pearl:")
 }

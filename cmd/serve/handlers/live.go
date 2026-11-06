@@ -31,6 +31,11 @@ type liveView struct {
 	cursor webmaster.LiveCursor
 	busy   bool
 	state  string
+	// visitor is the raw cookie id this stream's page belongs to, or empty.
+	// mine and tops are the last $mine and $tops pushed.
+	visitor string
+	mine    string
+	tops    string
 	// clears is the journal clear count this stream has told its page about.
 	clears int64
 }
@@ -59,7 +64,11 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
-	view := liveView{cursor: signals.BD, clears: h.journalClears.Load()}
+	view := liveView{
+		cursor:  signals.BD,
+		clears:  h.journalClears.Load(),
+		visitor: visitorCookie(r),
+	}
 	if err := h.syncLive(ctx, sse, &view, topicAll); err != nil {
 		return
 	}
@@ -235,8 +244,10 @@ func (h *Handlers) syncPosts(
 	))
 }
 
-// syncState pushes the shared values as the $shared signal, which model
-// markup binds to, and hands them to page scripts.
+// syncState pushes the shared values as the $shared signal, this visitor's
+// holdings as $mine and the top holders as $tops, which model markup binds
+// to, and hands all three to page scripts. Only the parts that changed are
+// patched.
 func (h *Handlers) syncState(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
@@ -252,21 +263,85 @@ func (h *Handlers) syncState(
 		h.logRead("Live stream could not load shared state", err)
 		return nil
 	}
-	values, err := json.Marshal(stateValues(parseStateSchema(site.StateSchema), rows))
+	schema := parseStateSchema(site.StateSchema)
+	values, err := json.Marshal(stateValues(schema, rows))
 	if err != nil {
 		h.logger.Error("Live stream could not encode shared state", slog.Any("error", err))
 		return nil
 	}
-	if string(values) == view.state {
+	// A failed holdings read keeps what the page shows; zeros would be a lie
+	// the next push might not correct.
+	mine, tops := []byte(view.mine), []byte(view.tops)
+	if held, err := visitorHoldings(ctx, h.queries, schema, view.visitor); err != nil {
+		h.logRead("Live stream could not load holdings", err)
+	} else if mine, err = json.Marshal(held); err != nil {
+		return fmt.Errorf("encode holdings: %w", err)
+	}
+	if top, err := h.topHoldings(ctx, schema); err != nil {
+		h.logRead("Live stream could not load the top holders", err)
+	} else if tops, err = json.Marshal(top); err != nil {
+		return fmt.Errorf("encode top holders: %w", err)
+	}
+
+	patch := map[string]json.RawMessage{}
+	for _, part := range []struct {
+		name      string
+		last, now string
+	}{
+		{"shared", view.state, string(values)},
+		{"mine", view.mine, string(mine)},
+		{"tops", view.tops, string(tops)},
+	} {
+		if part.now != "" && part.now != part.last {
+			patch[part.name] = mergePatch(part.last, []byte(part.now))
+		}
+	}
+	if len(patch) == 0 {
 		return nil
 	}
-	view.state = string(values)
-	if err := sse.PatchSignals(
-		[]byte(`{"shared":` + string(values) + `}`),
-	); err != nil {
+	view.state, view.mine, view.tops = string(values), string(mine), string(tops)
+	signals, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("encode state signals: %w", err)
+	}
+	if err := sse.PatchSignals(signals); err != nil {
 		return err
 	}
-	return sse.ExecuteScript("window.bdLive && bdLive.state(" + string(values) + ")")
+	return sse.ExecuteScript(fmt.Sprintf(
+		"window.bdLive && bdLive.state(%s, %s, %s)", values, orEmpty(mine), orEmpty(tops),
+	))
+}
+
+// mergePatch is next as a signal patch over last. Datastar merges a patch
+// into the signal, so a key that is gone must be sent as null to be removed.
+func mergePatch(last string, next []byte) json.RawMessage {
+	var before, after map[string]json.RawMessage
+	if json.Unmarshal([]byte(last), &before) != nil || len(before) == 0 ||
+		json.Unmarshal(next, &after) != nil {
+		return next
+	}
+	removed := false
+	for key := range before {
+		if _, ok := after[key]; !ok {
+			after[key] = json.RawMessage("null")
+			removed = true
+		}
+	}
+	if !removed {
+		return next
+	}
+	data, err := json.Marshal(after)
+	if err != nil {
+		return next
+	}
+	return data
+}
+
+func orEmpty(data []byte) []byte {
+	if len(data) == 0 {
+		return []byte("{}")
+	}
+	return data
 }
 
 // syncJournal pushes the rows written since the page's journal cursor. The

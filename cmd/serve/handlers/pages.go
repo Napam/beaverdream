@@ -52,7 +52,21 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 
 	docSite := h.siteWithState(r.Context(), site)
 	docSite.Name = identityFromRequest(r)
-	docSite.Visitor = publicVisitor(visitorFromRequest(w, r))
+	visitor := visitorFromRequest(w, r)
+	docSite.Visitor = publicVisitor(visitor)
+	// $mine and $tops are on the page from the start, so markup bound to
+	// them renders before the stream connects.
+	schema := parseStateSchema(site.StateSchema)
+	if mine, err := visitorHoldings(r.Context(), h.queries, schema, visitor); err != nil {
+		h.logRead("Could not load visitor holdings", err)
+	} else {
+		docSite.Mine = mine
+	}
+	if tops, err := h.topHoldings(r.Context(), schema); err != nil {
+		h.logRead("Could not load the top holders", err)
+	} else if data, err := json.Marshal(tops); err == nil {
+		docSite.Tops = data
+	}
 	docSite.Datastar = h.cfg.DatastarSrc
 	docSite.Three = h.cfg.ThreeSrc
 	docSite.ThreeAddons = h.cfg.ThreeAddonsSrc

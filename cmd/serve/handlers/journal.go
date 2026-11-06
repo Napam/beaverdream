@@ -97,6 +97,15 @@ func visitorFromRequest(w http.ResponseWriter, r *http.Request) string {
 	return id
 }
 
+// visitorCookie reads the browser's id without drawing a new one, for a
+// request that cannot set a cookie, such as the live stream.
+func visitorCookie(r *http.Request) string {
+	if cookie, err := r.Cookie(VisitorCookieName); err == nil && validVisitorID(cookie.Value) {
+		return cookie.Value
+	}
+	return ""
+}
+
 func newVisitorID() string {
 	buf := make([]byte, 8)
 	_, _ = rand.Read(buf)

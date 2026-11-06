@@ -3,13 +3,13 @@ package pages
 // journalPage is the data tab: the shared values, every journal key with its
 // stats, then the rows of the one picked.
 templ journalPage(view AdminView) {
-	@AdminJournal(view.States, view.Journal, view.Browse, view.Panel, view.CSRF)
+	@AdminJournal(view.States, view.Holdings, view.StateOps, view.Journal, view.Browse, view.Panel, view.CSRF)
 }
 
 // AdminJournal is the data tab's one patched element. The stream replaces it
 // as state and feeds change, and the selection comes from the URL, so a patch
 // keeps the picked key, match and page.
-templ AdminJournal(states []StateView, keys []JournalKeyView, browse *JournalBrowse, panel Panel, csrf string) {
+templ AdminJournal(states []StateView, holdings []HoldingView, ops []StateOpView, keys []JournalKeyView, browse *JournalBrowse, panel Panel, csrf string) {
 	<div id="admin-journal" class="flex flex-col gap-6">
 		<section class={ adminCard }>
 			<p class={ adminLabel }>shared state</p>
@@ -19,6 +19,16 @@ templ AdminJournal(states []StateView, keys []JournalKeyView, browse *JournalBro
 				<pre class={ adminPre + " mt-2 max-h-64" }>{ stateText(states) }</pre>
 			}
 		</section>
+		if len(holdings) > 0 {
+			<div class="grid gap-3 md:grid-cols-2">
+				for _, k := range holdings {
+					@holdingCard(k, panel, csrf)
+				}
+			</div>
+		}
+		if panel.Visitor != "" {
+			@stateOpsCard(panel, ops)
+		}
 		if len(keys) == 0 {
 			<section class={ adminCard }>
 				<p class={ adminLabel }>journal</p>
@@ -210,4 +220,89 @@ func browseLinkClass(picked bool) string {
 		return base + "bg-gray-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
 	}
 	return base + "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700"
+}
+
+// holdingCard is one visitor counter: what everyone holds, what was gained
+// in the last hour, and the biggest holders. A holder's id picks them, which
+// opens their op log and filters the feed to them.
+templ holdingCard(k HoldingView, panel Panel, csrf string) {
+	<section class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class="text-sm">
+				<span class="font-mono font-medium">{ k.Key }</span>
+				if k.Label != "" {
+					<span class="ml-1 text-gray-500 dark:text-neutral-500">{ k.Label }</span>
+				}
+				if !k.Declared {
+					<span class="ml-1 rounded-sm bg-amber-100 px-1.5 py-px text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">hidden</span>
+				}
+			</p>
+			<p class={ adminMuted }>visitor counter</p>
+		</div>
+		<div class="flex flex-wrap gap-1.5">
+			<span class={ adminChip }>{ i64(k.Total) } held</span>
+			<span class={ adminChip }>{ plural(int(k.Holders), "holder") }</span>
+			<span class={ adminChip }>{ i64(k.GainedHour) } gained in the last hour</span>
+		</div>
+		if len(k.Top) > 0 {
+			<ol class="flex flex-col gap-0.5 font-mono text-xs">
+				for _, top := range k.Top {
+					<li class="flex justify-between gap-3">
+						<a
+							href={ templ.SafeURL(holderPath(panel, top.Visitor)) }
+							data-on:click={ navTo(holderPath(panel, top.Visitor)) }
+							title="show this visitor's ops"
+							class="truncate text-sky-700 hover:underline dark:text-sky-400"
+						>{ top.Name } <span class="text-gray-400 dark:text-neutral-600">{ top.Visitor }</span></a>
+						<span>{ i64(top.Amount) }</span>
+					</li>
+				}
+			</ol>
+			<form
+				method="post"
+				action={ holdingsClearAction(k.Key, panel) }
+				onsubmit={ templ.JSUnsafeFuncCall("return " + holdingsClearConfirm(k.Key)) }
+				data-indicator:_clearing
+			>
+				@csrfInput(csrf)
+				<button
+					type="submit"
+					data-attr:disabled="$_clearing"
+					data-on:click={ "evt.preventDefault(); if (" + holdingsClearConfirm(k.Key) + ") @post('" + holdingsClearAction(k.Key, panel) + "', {contentType: 'form'})" }
+					class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
+				>clear</button>
+			</form>
+		} else {
+			<p class="text-xs text-gray-400 dark:text-neutral-600">nobody holds any yet</p>
+		}
+	</section>
+}
+
+// stateOpsCard is the picked visitor's recent state ops, newest first. The
+// rows of one trade share an op number.
+templ stateOpsCard(panel Panel, ops []StateOpView) {
+	<section class={ adminCard + " p-0" }>
+		<div class="flex items-baseline justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-neutral-800">
+			<p class={ adminLabel }>state ops of <span class="font-mono normal-case">{ panel.Visitor }</span></p>
+			<a
+				href={ templ.SafeURL(holderPath(panel, "")) }
+				data-on:click={ navTo(holderPath(panel, "")) }
+				class="text-xs text-sky-700 hover:underline dark:text-sky-400"
+			>close</a>
+		</div>
+		if len(ops) == 0 {
+			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">no ops in the last day</p>
+		} else {
+			<ol class="divide-y divide-gray-100 font-mono text-xs dark:divide-neutral-800">
+				for _, op := range ops {
+					<li class="flex flex-wrap gap-x-3 px-4 py-1.5">
+						<span class="text-gray-500 dark:text-neutral-500">{ clock(op.At) } UTC</span>
+						<span>#{ i64(op.OpID) } { op.Op } { op.Source }</span>
+						<span class={ deltaClass(op.Delta) }>{ op.Key } { signed(op.Delta) }</span>
+						<span class="text-gray-500 dark:text-neutral-500">{ op.Name }</span>
+					</li>
+				}
+			</ol>
+		}
+	</section>
 }

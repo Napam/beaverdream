@@ -49,6 +49,25 @@ type SiteVersion struct {
 	CreatedAt     string
 }
 
+type StateHolding struct {
+	Visitor string
+	Key     string
+	Amount  int64
+	Name    string
+}
+
+type StateOp struct {
+	ID        int64
+	OpID      int64
+	Visitor   string
+	Name      string
+	Op        string
+	Source    string
+	Key       string
+	Delta     int64
+	CreatedAt string
+}
+
 type Turn struct {
 	ID         int64
 	Kind       string

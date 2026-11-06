@@ -69,9 +69,15 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 			{`UPDATE site_versions SET turn_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 			{`DELETE FROM site_state`, nil},
 			{`DELETE FROM journal`, nil},
+			{`DELETE FROM state_holdings`, nil},
+			{`DELETE FROM state_ops`, nil},
 			// Rewind every id sequence. The room starts empty, so the first post
 			// is turn 1 again.
-			{`DELETE FROM sqlite_sequence WHERE name IN ('turns', 'journal')`, nil},
+			{
+				`DELETE FROM sqlite_sequence
+				 WHERE name IN ('turns', 'room_summaries', 'journal', 'state_ops')`,
+				nil,
+			},
 			// AUTOINCREMENT remembers the highest id ever used. Bring it back to
 			// the seed so the next version is seed+1 instead of one past the
 			// history that was just deleted.
@@ -94,6 +100,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 			return "", false
 		}
 
+		h.holdingsChanged()
 		h.resetLive(seedID.Int64)
 		h.logger.Info("Board reset", slog.Int64("seed_version", seedID.Int64))
 		return "board reset to the original version", true

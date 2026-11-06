@@ -42,12 +42,23 @@ var maxPageLen = env.GetEnvPositiveInt("MAX_PAGE_BYTES", 524_288)
 // PageBytes is the cap on css plus html together, in bytes.
 func PageBytes() int { return maxPageLen }
 
+// Visitor counters are whole numbers. One op moves at most MaxVisitorAmount,
+// one visitor gains at most MaxVisitorPerHour of a key in a rolling hour, and
+// holds at most MaxVisitorHolding, which stays inside a JS safe integer.
+const (
+	MaxVisitorAmount  = 1_000_000
+	MaxVisitorPerHour = 1_000_000
+	MaxVisitorHolding = 1_000_000_000_000
+)
+
 // MaxBodyLen caps a post body and an admin instruction in runes. The prompt's
 // form example and the seed form use the same number.
 const MaxBodyLen = 2000
 
 const (
-	maxStateKeys  = 8
+	maxStateKeys  = 24
+	maxStateLabel = 40
+	maxRecipeSide = 4
 	maxStateName  = 32
 	maxStateList  = 100
 	maxStateOpts  = 10
@@ -84,6 +95,8 @@ const (
 	// TurnJournal is the admin clearing one journal key. The page's data
 	// changed under the webmaster, so the room log says so.
 	TurnJournal = "journal"
+	// TurnState is the admin clearing what visitors hold of one key.
+	TurnState = "state"
 	// TurnAlert is a browser error the page reported about itself, so the
 	// webmaster can see that its own script broke.
 	TurnAlert = "alert"

@@ -163,6 +163,9 @@ func decide(prompt string, toolResultSeen bool) []toolCall {
 	if strings.Contains(prompt, "mockgame") {
 		return gameCalls()
 	}
+	if strings.Contains(prompt, "mockwallet") {
+		return walletCalls()
+	}
 	if edit, ok := pickEdit(prompt); ok {
 		return []toolCall{editCall(edit), doneCall("a small edit")}
 	}
@@ -280,6 +283,74 @@ const GameScript = `<style>
     }
   }
   feed.start(reduce, render)
+})()
+</script>`
+
+// walletCalls declares two visitor counters and a recipe and ships a page
+// that earns, spends and shows the top holders, so the dev board shows
+// visitor state end to end.
+func walletCalls() []toolCall {
+	schema := map[string]any{"keys": []map[string]any{
+		{"name": "coins", "op": "counter", "scope": "visitor", "label": "Gold", "per_hour": 3600},
+		{"name": "hat", "op": "counter", "scope": "visitor", "label": "Top hat", "max": 5},
+		{
+			"name": "buy_hat",
+			"op":   "recipe",
+			"cost": map[string]int{"coins": 10},
+			"gain": map[string]int{"hat": 1},
+		},
+	}}
+	page := `<h2 class="board-title">coin purse</h2>` + WalletScript + postForm + `{{posts}}`
+	site := map[string]string{
+		"css":  `:root{--bg:#fffaf0;--fg:#2b2118;--accent:#b8860b;--muted:#8a7a66;--panel:#fff3d6;--border:#e5d3a8}`,
+		"html": page,
+	}
+	return []toolCall{
+		{
+			ID:       "call_state",
+			Type:     "function",
+			Function: functionCall{Name: "set_state_schema", Arguments: mustJSON(schema)},
+		},
+		{
+			ID:       "call_site",
+			Type:     "function",
+			Function: functionCall{Name: "set_site", Arguments: mustJSON(site)},
+		},
+		doneCall("dig for gold and buy a top hat for 10."),
+	}
+}
+
+// WalletScript is the purse the mockwallet keyword ships: markup bound to
+// $mine, a Datastar add, a bd.state trade that says why it failed, and a top
+// list drawn as text.
+const WalletScript = `<div class="purse">
+<p><span data-text="$mine.coins"></span> gold, <span data-text="$mine.hat"></span> hats</p>
+<button type="button" data-on:click="@post('/x/state/coins?add=1')">dig</button>
+<button type="button" id="buy-hat">buy a hat (10 gold)</button>
+<span id="purse-note"></span>
+<ol id="purse-top"></ol>
+</div>
+<script>
+(function () {
+  var why = { short: 'not enough gold', full: 'your head is full', slow: 'one moment' }
+  document.getElementById('buy-hat').onclick = function () {
+    bd.state.trade('buy_hat').then(function (r) {
+      document.getElementById('purse-note').textContent = r.ok ? 'a fine hat.' : (why[r.reason] || r.reason)
+    })
+  }
+  function drawTop(tops) {
+    var list = document.getElementById('purse-top')
+    if (!list) return
+    list.textContent = ''
+    var rows = (tops && tops.coins) || []
+    for (var i = 0; i < rows.length; i++) {
+      var li = document.createElement('li')
+      li.textContent = rows[i].name + ': ' + rows[i].amount + (rows[i].id === bd.visitor ? ' (you)' : '')
+      list.appendChild(li)
+    }
+  }
+  drawTop(bd.state.tops)
+  document.addEventListener('beaverdream:state', function (e) { drawTop(e.detail.tops) })
 })()
 </script>`
 

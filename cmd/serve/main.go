@@ -289,6 +289,7 @@ func SetupAdminRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
 	router.Get("/admin/journal", h.AdminJournal)
 	router.Post("/admin/journal", h.AdminJournal)
 	router.Post("/admin/journal/{key}/clear", h.ClearJournal)
+	router.Post("/admin/state/{key}/clear", h.ClearHoldings)
 	router.Get("/admin/live", h.AdminLive)
 	router.Post("/admin/mutate", h.AdminMutate)
 	router.Post("/admin/retry/{id}", h.RetryTurn)

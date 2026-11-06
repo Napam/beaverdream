@@ -123,6 +123,10 @@ type Handlers struct {
 	// seen fewer tells its page to read its feeds again, because a clear can
 	// leave the newest row id where it was and the page would never notice.
 	journalClears atomic.Int64
+	// holdingsGen counts writes to state_holdings; holders caches the top
+	// lists for one generation.
+	holdingsGen atomic.Int64
+	holders     holdersCache
 
 	// The worker coalesces posts that arrive while a mutation is running, so
 	// a burst becomes one rewrite instead of a queue of them.
@@ -136,6 +140,8 @@ type Handlers struct {
 	lastError     string
 	lastRewriteAt map[string]time.Time
 	lastStateAt   map[string]time.Time
+	// stateCooldown is the gap between one browser's writes to one key.
+	stateCooldown time.Duration
 	journalBucket map[string]*journalBucket
 	// alertSeen collapses repeated browser errors into one event each.
 	alertSeen map[string]time.Time
@@ -175,6 +181,7 @@ func New(
 		hub:           newHub(),
 		lastRewriteAt: make(map[string]time.Time),
 		lastStateAt:   make(map[string]time.Time),
+		stateCooldown: stateCooldown,
 		journalBucket: make(map[string]*journalBucket),
 		alertSeen:     make(map[string]time.Time),
 		wake:          make(chan struct{}, 1),
@@ -492,6 +499,7 @@ func (h *Handlers) mutateHeld(
 
 	currentSite := h.siteWithState(ctx, current)
 	currentSite.JournalRulesUsed = h.journalRulesUsed(ctx)
+	currentSite.Holdings = h.holdingTotals(ctx)
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
 		currentSite.Plain = sameSiteContent(current, seed)
 	}
@@ -1310,14 +1318,15 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 }
 
 // setVersion records the current version. A new one is published, so open
-// pages restyle or reload.
+// pages restyle or reload. Its schema may declare other keys, so the state
+// signals are pushed again too: a stylesheet-only change does not reload.
 func (h *Handlers) setVersion(version int64) {
 	h.liveMu.Lock()
 	changed := h.version != version
 	h.version = version
 	h.liveMu.Unlock()
 	if changed {
-		h.hub.publish(topicSite)
+		h.hub.publish(topicSite | topicState)
 	}
 }
 
@@ -1405,6 +1414,9 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 const (
 	rewriteCooldown = time.Second
 	stateCooldown   = 250 * time.Millisecond
+	// stateSlotsSweep is how many cooldown entries are kept before the
+	// expired ones are swept.
+	stateSlotsSweep = 1024
 )
 
 // heal copies the seed version forward. It is a restore, not a model call.
@@ -1452,21 +1464,32 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// allowRewrite stops a script on the model's page from triggering a rewrite
-// from every open tab in a loop. The post is still stored; only the costly
-// model call is skipped.
-func (h *Handlers) allowStateWrite(name, key string) bool {
+// allowStateWrite throttles one browser's writes to one key, so a looping
+// script is stopped before it touches the database.
+func (h *Handlers) allowStateWrite(visitor, key string) bool {
 	now := time.Now()
-	slot := name + "\x00" + key
+	slot := visitor + "\x00" + key
 	h.liveMu.Lock()
 	defer h.liveMu.Unlock()
-	if last, ok := h.lastStateAt[slot]; ok && now.Sub(last) < stateCooldown {
+	if last, ok := h.lastStateAt[slot]; ok && now.Sub(last) < h.stateCooldown {
 		return false
+	}
+	// An entry past its cooldown decides nothing, so a long-running board
+	// sweeps them out instead of keeping every browser it ever saw.
+	if len(h.lastStateAt) >= stateSlotsSweep {
+		for old, at := range h.lastStateAt {
+			if now.Sub(at) >= h.stateCooldown {
+				delete(h.lastStateAt, old)
+			}
+		}
 	}
 	h.lastStateAt[slot] = now
 	return true
 }
 
+// allowRewrite stops a script on the model's page from triggering a rewrite
+// from every open tab in a loop. The post is still stored; only the costly
+// model call is skipped.
 func (h *Handlers) allowRewrite(name string) bool {
 	now := time.Now()
 	h.liveMu.Lock()

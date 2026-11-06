@@ -513,8 +513,65 @@ const JournalRuntime = `<script>
     preloads[key] = { read: p, missed: false }
   })
 
+  // bd.state is the visitor-state half: counts this visitor owns. Calls run
+  // one at a time, so a trade and a spend never race on the numbers the page
+  // shows; the server is atomic either way. Every call resolves, with
+  // { ok: true, mine } or { ok: false, reason }. A refusal is a game outcome,
+  // not a bug in the page, so none of them reaches the error beacon.
+  //
+  // The answer's mine goes to the caller only. $mine and bd.state.mine come
+  // from the stream, which always pushes the newest count: an answer can land
+  // after a push from another tab and would put an older count back.
+  //
+  // A call that hangs is aborted and resolves slow, so it cannot hold the
+  // queue for the life of the tab.
+  var queue = Promise.resolve()
+  var stateTimeout = 10000
+  function stateCall(path) {
+    function run() {
+      var abort = typeof AbortController === 'function' ? new AbortController() : null
+      var timer = abort ? setTimeout(function () { abort.abort() }, stateTimeout) : null
+      return fetch(path, {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: abort ? abort.signal : undefined
+      }).then(function (r) {
+        return r.json().catch(function () { return {} }).then(function (d) {
+          if (r.ok && d && d.ok) return { ok: true, mine: d.mine || {} }
+          return { ok: false, reason: (d && d.reason) || 'bad' }
+        })
+      }).then(null, function () {
+        return { ok: false, reason: 'slow' }
+      }).then(function (result) {
+        if (timer) clearTimeout(timer)
+        return result
+      })
+    }
+    var p = queue.then(run, run)
+    queue = p
+    return p
+  }
+  function amount(n) {
+    return n === undefined ? 1 : Math.floor(Number(n))
+  }
+  var state = {
+    mine: conf.mine || {},
+    tops: conf.tops || {},
+    add: function (key, n) {
+      return stateCall('/x/state/' + encodeURIComponent(key) + '?add=' + amount(n))
+    },
+    spend: function (key, n) {
+      return stateCall('/x/state/' + encodeURIComponent(key) + '?spend=' + amount(n))
+    },
+    trade: function (recipe) {
+      return stateCall('/x/state/' + encodeURIComponent(recipe))
+    }
+  }
+
   window.bd = {
     visitor: visitor,
+    state: state,
     journal: function (key) {
       if (!Object.prototype.hasOwnProperty.call(keys, key)) {
         throw new Error('undeclared journal key: ' + key)

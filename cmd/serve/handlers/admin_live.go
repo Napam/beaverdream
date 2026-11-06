@@ -328,6 +328,11 @@ func (h *Handlers) patchAdminJournal(
 		ctx,
 		sse,
 		"admin-journal",
-		pages.AdminJournal(h.adminStates(ctx, site), keys, browse, panel, csrf),
+		pages.AdminJournal(
+			h.adminStates(ctx, site),
+			h.adminHoldings(ctx, site),
+			h.adminStateOps(ctx, panel),
+			keys, browse, panel, csrf,
+		),
 	)
 }

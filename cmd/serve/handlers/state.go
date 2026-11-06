@@ -22,16 +22,12 @@ type stateEntry struct {
 }
 
 func parseStateSchema(raw string) map[string]webmaster.StateKey {
-	schema := make(map[string]webmaster.StateKey)
-	if strings.TrimSpace(raw) == "" {
-		return schema
-	}
-	_ = json.Unmarshal([]byte(raw), &schema)
-	return schema
+	return webmaster.ParseStateSchema(raw)
 }
 
-// State returns the declared schema and the current values. Open pages get
-// the values pushed as the $shared signal; this is the same read on demand.
+// State returns the declared schema and the current global values. Open pages
+// get the values pushed as the $shared signal; this is the same read on
+// demand. Visitor holdings are not in it: each page gets its own as $mine.
 func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
@@ -48,15 +44,22 @@ func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	global := make(map[string]webmaster.StateKey, len(schema))
+	for key, def := range schema {
+		if def.Global() {
+			global[key] = def
+		}
+	}
 	_ = json.NewEncoder(w).Encode(struct {
 		Schema map[string]webmaster.StateKey `json:"schema"`
 		State  map[string]json.RawMessage    `json:"state"`
-	}{Schema: schema, State: stateValues(schema, rows)})
+	}{Schema: global, State: stateValues(schema, rows)})
 }
 
-// stateValues fills every declared key with a value of the shape its op
-// expects. A stored value with the wrong shape is replaced by the default, so
-// a schema change cannot serve a string where the page expects a list.
+// stateValues fills every declared global key with a value of the shape its
+// op expects. A stored value with the wrong shape is replaced by the default,
+// so a schema change cannot serve a string where the page expects a list.
+// Visitor counters and recipes are not shared values and are skipped.
 func stateValues(
 	schema map[string]webmaster.StateKey,
 	rows []sqlc.SiteState,
@@ -68,6 +71,9 @@ func stateValues(
 
 	values := make(map[string]json.RawMessage, len(schema))
 	for key, def := range schema {
+		if !def.Global() {
+			continue
+		}
 		raw := stored[key]
 		if !stateValueMatches(def, raw) {
 			raw = stateDefault(def)
@@ -109,10 +115,11 @@ func stateValueMatches(def webmaster.StateKey, raw string) bool {
 	}
 }
 
-// SetState applies one visitor action to a declared key. The value comes from
-// the query string or a form field. A Datastar action gets 204, because every
-// open page gets the new value from its live stream. A plain form is sent back
-// to the board; a fetch gets JSON.
+// SetState applies one visitor action to a declared key or recipe. A global
+// key takes its op; a visitor counter takes add=N or spend=N; a recipe
+// trades. The value comes from the query string or a form field. A Datastar
+// action gets 204, because every open page gets the new value from its live
+// stream. A plain form is sent back to the board; a fetch gets JSON.
 func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	author := identityFromRequest(r)
 	if author == "" {
@@ -137,15 +144,47 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	schema := parseStateSchema(site.StateSchema)
 	def, ok := schema[key]
 	if !ok {
-		writeStateError(w, http.StatusNotFound, "unknown state key")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(
+			w,
+			map[string]any{"ok": false, "reason": refusedGone, "error": "unknown state key"},
+		)
 		return
 	}
-	if !h.allowStateWrite(author, key) {
-		if wantsHTML(r) {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
+	// The cooldown keys on the browser, not the display name, so two people
+	// who picked the same name do not throttle each other. A request without
+	// the visitor cookie falls back to the name; a fresh id per request would
+	// skip the cooldown. Visitor ops need the cookie, since it owns the
+	// counts, and every page the board serves sets it.
+	visitor := visitorCookie(r)
+	slot := visitor
+	if visitor == "" {
+		if !def.Global() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(
+				w,
+				map[string]any{"ok": false, "reason": refusedBad, "error": "no visitor id"},
+			)
 			return
 		}
-		writeStateError(w, http.StatusTooManyRequests, "slow down")
+		slot = "name:" + author
+	}
+	if !h.allowStateWrite(slot, key) {
+		if def.Global() {
+			if wantsHTML(r) {
+				http.Redirect(w, r, "/", http.StatusSeeOther)
+				return
+			}
+			writeStateError(w, http.StatusTooManyRequests, "slow down")
+			return
+		}
+		h.answerVisitorOp(w, r, nil, refusedSlow)
+		return
+	}
+	if !def.Global() {
+		h.visitorOp(w, r, key, def, schema, visitor, author)
 		return
 	}
 
@@ -223,7 +262,7 @@ func applyState(
 			Value:  value,
 			At:     now.UTC().Format(time.RFC3339),
 		})
-		limit := def.Max
+		limit := int(def.Max)
 		if limit <= 0 {
 			limit = 20
 		}
@@ -274,6 +313,10 @@ func wantsHTML(r *http.Request) bool {
 	}
 	return r.FormValue("redirect") != "" ||
 		strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func writeStateError(w http.ResponseWriter, status int, message string) {

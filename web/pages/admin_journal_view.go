@@ -128,3 +128,37 @@ func clearAction(key string, p Panel) string {
 func payloadText(raw string) string {
 	return strings.TrimSpace(raw)
 }
+
+// holderPath keeps the page's feed selection and picks a visitor, or drops
+// the pick when visitor is empty.
+func holderPath(p Panel, visitor string) string {
+	p.Page = PageJournal
+	p.Visitor = visitor
+	p.Before = 0
+	return p.Path()
+}
+
+func holdingsClearConfirm(key string) string {
+	return "confirm('Delete what every visitor holds of " + key +
+		"? Everyone starts at 0. This cannot be undone.')"
+}
+
+// holdingsClearAction is where a visitor counter's clear form posts. The key
+// is a lowercase name, so it is safe in a path and a script string.
+func holdingsClearAction(key string, p Panel) string {
+	return "/admin/state/" + key + "/clear" + p.query()
+}
+
+func signed(n int64) string {
+	if n > 0 {
+		return "+" + i64(n)
+	}
+	return i64(n)
+}
+
+func deltaClass(n int64) string {
+	if n < 0 {
+		return "text-red-700 dark:text-red-400"
+	}
+	return "text-emerald-700 dark:text-emerald-400"
+}

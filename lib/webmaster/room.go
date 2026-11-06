@@ -85,7 +85,7 @@ func renderTurn(turn Turn) string {
 	case TurnWebmaster:
 		return renderWebmasterTurn(turn)
 
-	case TurnHeal, TurnUndo, TurnRestore, TurnJournal:
+	case TurnHeal, TurnUndo, TurnRestore, TurnJournal, TurnState:
 		return fmt.Sprintf("#%d server: %s", turn.ID, turn.Body)
 
 	case TurnAlert:

@@ -820,8 +820,10 @@ multiplayer by default: one shared world, where every visitor sees the others
 act, through shared state or a journal. "make pacman" means one board everyone
 plays on. Build it for a single player only when the post asks for that. A
 color, a restyle, a text change or a purely visual idea needs none of this.
-For a world someone moves through, call load_skill with controls first, in a
-response of its own.
+Before you build a game or change how it plays, load the skills it needs,
+all in one response of its own: controls for a world someone moves through,
+feel for any game with actions, space when things break, block or hide, and
+entities for several kinds of characters or enemies.
 
 The page is two fields you own: css, the stylesheet, and html, everything
 inside body. The html has one rule: it holds the literal placeholder {{posts}}
@@ -874,9 +876,9 @@ field once with set_site instead. If a call is rejected, its
 result says why, and the turn stays open so you can fix it in the next
 response; call done again after the fix.
 
-load_skill is the exception to the edit round. Call it alone in a response of
-its own, then make your edits in the next response, once you have the
-reference to build from.
+load_skill is the exception to the edit round. Call it, once for each skill
+you need, in a response of its own, then make your edits in the next
+response, once you have the references to build from.
 
 Keeping the page as it is counts as a turn. This is the normal answer to
 ordinary talk. Call done without edits and say why; that sentence goes in the
@@ -1319,7 +1321,8 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString("\n")
 		b.section("controls")
 		b.WriteString("This page already moves with keys. Before you change how it moves,\n")
-		b.WriteString("call load_skill with controls.\n")
+		b.WriteString("call load_skill with controls. Load feel for hits and effects, space\n")
+		b.WriteString("for walls and damage, entities for kinds of characters.\n")
 	}
 
 	b.close()

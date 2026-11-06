@@ -89,3 +89,41 @@ func TestLoadSkillSchemaListsTheSkills(t *testing.T) {
 	}
 	t.Fatal("toolParams has no load_skill")
 }
+
+// Every skill with code ships one script block that its own test runs, and a
+// body that names itself, so a load result reads as what was asked for.
+func TestEverySkillHasATestedCore(t *testing.T) {
+	for _, s := range skills {
+		if !strings.HasPrefix(s.body, strings.ToUpper(s.name)+" REFERENCE:") {
+			t.Errorf("%s body starts %.40q, want its name as the header", s.name, s.body)
+		}
+		if strings.Count(s.body, "<script>") != 1 || strings.Count(s.body, "</script>") != 1 {
+			t.Errorf("%s body should hold exactly one script block", s.name)
+		}
+	}
+}
+
+// Several skills load in one round, each with its own body.
+func TestMutateLoadsSeveralSkillsInOneRound(t *testing.T) {
+	res := mutateWith(t, Site{HTML: "<main>{{posts}}</main>"}, [][]fakeToolCall{
+		{
+			{name: "load_skill", args: `{"name":"controls"}`},
+			{name: "load_skill", args: `{"name":"feel"}`},
+			{name: "load_skill", args: `{"name":"entities"}`},
+		},
+		{{name: "done", args: `{"reason":"read the references first"}`}},
+	})
+	if !res.Done || res.DoneRound != 2 {
+		t.Fatalf("done = %v in round %d, want done in round 2", res.Done, res.DoneRound)
+	}
+	calls := res.Messages[2].ToolCalls
+	want := []string{controlsReference, feelReference, entitiesReference}
+	if len(calls) != len(want) {
+		t.Fatalf("round 1 calls = %d, want %d", len(calls), len(want))
+	}
+	for i, call := range calls {
+		if call.Result != want[i] {
+			t.Errorf("load %d returned %.40q", i, call.Result)
+		}
+	}
+}

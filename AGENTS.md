@@ -73,9 +73,9 @@ prefer simple, readable code over production hardening.
   `CompactAfterTurns` turns, so its start never slides before compaction.
 - The user prompt is ordered for the prompt cache: compacted history, room
   log, then the notes, the page and the new post, which change every turn.
-  A page that already moves something with keys gets a one-line hint after the
-  new post, so it never shifts the cached prefix. The hint names the controls
-  skill; the model decides whether to load it.
+  A page that already moves something with keys gets a short hint after the
+  new post, so it never shifts the cached prefix. The hint names the game
+  skills; the model decides which to load.
   The system prompt is one static string and includes `BaseCSS` and a sample
   post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo and restore
@@ -316,7 +316,10 @@ prefer simple, readable code over production hardening.
   `skills.go`. A body is only ever a tool result: never in the room log, the
   page or the system prompt. A turn loads each skill once; a second load points
   back at the first result. A skill load is not an edit and does not end the
-  turn, so the system prompt has the model send it alone, then edit.
+  turn, so the system prompt has the model send its loads in one response of
+  their own, then edit. The skills are `controls`, `feel`, `space` and
+  `entities`; each teaches general technique, never one board's game. Each
+  holds one script block that its `*_test.go` runs; change both together.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.

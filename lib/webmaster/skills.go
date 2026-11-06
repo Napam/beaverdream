@@ -17,6 +17,21 @@ var skills = []skill{
 		summary: "how a world someone moves through should feel: keys, cameras, genres, and a tested platformer core",
 		body:    controlsReference,
 	},
+	{
+		name:    "feel",
+		summary: "make actions feel physical: shake, hit stop, particles, squash, generated sound and rumble from one impact call",
+		body:    feelReference,
+	},
+	{
+		name:    "space",
+		summary: "a grid world that can be broken or dug: collision, ray casts, line of sight, area damage and a spatial hash",
+		body:    spaceReference,
+	},
+	{
+		name:    "entities",
+		summary: "several kinds of characters or enemies from tables: moves per kind, charge, cooldowns, transforms, shots, spawning",
+		body:    entitiesReference,
+	},
 }
 
 // skillBody returns the body of the named skill.

@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // charactersReference is the characters skill: three.js figures from body
 // plans, animated from how they move, plus the same motion for 2D. The model

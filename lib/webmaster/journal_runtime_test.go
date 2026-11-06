@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // exampleMotion is the motion half of the journal example in journalPrompt
@@ -546,7 +548,7 @@ type runtimeResult struct {
 
 func runRuntime(t *testing.T, scenario string) runtimeResult {
 	t.Helper()
-	out := runJS(t, JournalRuntime, runtimeHarness, scenario)
+	out := jsrun.Run(t, JournalRuntime, runtimeHarness, scenario)
 	var got runtimeResult
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)

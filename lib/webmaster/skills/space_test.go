@@ -1,9 +1,11 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // spaceHarness runs the core from spaceReference with frames driven by hand and
@@ -95,7 +97,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestSpaceReferenceCore(t *testing.T) {
-	out := runJS(t, spaceReference, spaceHarness, "")
+	out := jsrun.Run(t, spaceReference, spaceHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals                        []string

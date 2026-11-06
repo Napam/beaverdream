@@ -1,9 +1,11 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // randomHarness runs the core from randomReference and reports what the
@@ -149,7 +151,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestRandomReferenceCore(t *testing.T) {
-	out := runJS(t, randomReference, randomHarness, "")
+	out := jsrun.Run(t, randomReference, randomHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals  []string

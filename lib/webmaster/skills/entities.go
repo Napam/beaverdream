@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // entitiesReference is the entities skill: kinds and moves from tables, with
 // charge, cooldowns, transforms, pooled shots, spawning and a fixed step. The

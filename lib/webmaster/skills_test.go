@@ -3,12 +3,14 @@ package webmaster
 import (
 	"strings"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/skills"
 )
 
 func TestLoadSkillReturnsTheBodyOnce(t *testing.T) {
 	ed := newEditor(Site{HTML: "<main>{{posts}}</main>"})
 
-	if got := ed.run("load_skill", `{"name":"controls"}`); got != controlsReference {
+	if got := ed.run("load_skill", `{"name":"controls"}`); got != body(t, "controls") {
 		t.Fatalf("first load returned %.60q, want the controls body", got)
 	}
 	got := ed.run("load_skill", `{"name":"controls"}`)
@@ -54,7 +56,7 @@ func TestMutateLoadsASkillBeforeDone(t *testing.T) {
 	if len(first.ToolCalls) != 1 || first.ToolCalls[0].Name != "load_skill" {
 		t.Fatalf("round 1 calls = %+v, want load_skill", first.ToolCalls)
 	}
-	if first.ToolCalls[0].Result != controlsReference {
+	if first.ToolCalls[0].Result != body(t, "controls") {
 		t.Error("the skill round did not return the controls body")
 	}
 	if res.Changed {
@@ -69,7 +71,7 @@ func TestLoadSkillSchemaListsTheSkills(t *testing.T) {
 		}
 		props := tool.OfFunction.Function.Parameters["properties"].(map[string]any)
 		name := props["name"].(map[string]any)
-		if got := name["enum"].([]string); len(got) != len(skills) {
+		if got := name["enum"].([]string); len(got) != len(skills.All) {
 			t.Errorf("enum = %v, want the registry names", got)
 		}
 		return
@@ -91,7 +93,7 @@ func TestMutateLoadsSeveralSkillsInOneRound(t *testing.T) {
 		t.Fatalf("done = %v in round %d, want done in round 2", res.Done, res.DoneRound)
 	}
 	calls := res.Messages[2].ToolCalls
-	want := []string{controlsReference, feelReference, entitiesReference}
+	want := []string{body(t, "controls"), body(t, "feel"), body(t, "entities")}
 	if len(calls) != len(want) {
 		t.Fatalf("round 1 calls = %d, want %d", len(calls), len(want))
 	}
@@ -100,4 +102,13 @@ func TestMutateLoadsSeveralSkillsInOneRound(t *testing.T) {
 			t.Errorf("load %d returned %.40q", i, call.Result)
 		}
 	}
+}
+
+func body(t *testing.T, name string) string {
+	t.Helper()
+	b, ok := skills.Body(name)
+	if !ok {
+		t.Fatalf("no skill %q", name)
+	}
+	return b
 }

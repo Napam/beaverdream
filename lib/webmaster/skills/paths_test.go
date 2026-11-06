@@ -1,9 +1,11 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // pathsHarness runs the core from pathsReference on hand-built maps and
@@ -193,7 +195,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestPathsReferenceCore(t *testing.T) {
-	out := runJS(t, pathsReference, pathsHarness, "")
+	out := jsrun.Run(t, pathsReference, pathsHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals    []string

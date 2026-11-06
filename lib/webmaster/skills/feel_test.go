@@ -1,8 +1,10 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // feelHarness runs the core from feelReference with frames driven by hand and
@@ -161,7 +163,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestFeelReferenceCore(t *testing.T) {
-	out := runJS(t, feelReference, feelHarness, "")
+	out := jsrun.Run(t, feelReference, feelHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals                              []string

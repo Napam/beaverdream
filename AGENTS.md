@@ -41,7 +41,8 @@ prefer simple, readable code over production hardening.
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
   (the loop, prompts, tool schemas), `stream.go` (one streamed round and its
-  drafts).
+  drafts). `lib/webmaster/skills` holds the skills and their registry;
+  `lib/webmaster/internal/jsrun` runs JavaScript from tests in node or bun.
 - `cmd/serve/handlers` owns HTTP: `live.go` (the stream and its projection),
   `hub.go` (topics and subscribers), `pages.go` (board, post, version),
   `versions.go` (version writes, carry forward), `admin.go` (auth, pages,
@@ -322,11 +323,11 @@ prefer simple, readable code over production hardening.
   pending, and the timeout starts after the lock. Reset therefore cannot run a
   batch of posts it just deleted. Tests wait for the version or run to land.
 - Skills are how-tos the model reads with `load_skill(name)`, registered in
-  `skills.go`. A body is only ever a tool result: never in the room log, the
-  page or the system prompt. A turn loads each skill once; a second load points
-  back at the first result. A skill load is not an edit and does not end the
-  turn, so the system prompt has the model send its loads in one response of
-  their own, then edit. The skills are `controls`, `feel`, `space`,
+  `skills/skills.go`. A body is only ever a tool result: never in the room
+  log, the page or the system prompt. A turn loads each skill once; a second
+  load points back at the first result. A skill load is not an edit and does
+  not end the turn, so the system prompt has the model send its loads in one
+  response of their own, then edit. The skills are `controls`, `feel`, `space`,
   `entities`, `paths`, `random`, `canvas` and `characters`; each teaches
   general technique, never one board's game. Each holds one script block
   that its `*_test.go` runs; change both together.

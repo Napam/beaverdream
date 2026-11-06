@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Napam/beaverdream/lib/webmaster/skills"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -736,14 +737,14 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			Description: openai.String(
 				"Read a how-to for one kind of build before you make it. Its result is " +
 					"the reference to build from; the page is not changed by this call. " +
-					"Skills: " + skillSummaries() + ".",
+					"Skills: " + skills.Summaries() + ".",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
 				"properties": map[string]any{
 					"name": map[string]any{
 						"type": "string",
-						"enum": skillNames(),
+						"enum": skills.Names(),
 					},
 				},
 				"required": []string{"name"},

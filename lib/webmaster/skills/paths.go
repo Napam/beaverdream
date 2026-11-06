@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // pathsReference is the paths skill: A* and a flow field over a grid of open
 // cells, path following and spreading apart. The model reads it with

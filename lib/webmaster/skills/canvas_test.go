@@ -1,9 +1,11 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // canvasHarness runs the core from canvasReference against a fake 2D
@@ -176,7 +178,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestCanvasReferenceCore(t *testing.T) {
-	out := runJS(t, canvasReference, canvasHarness, "")
+	out := jsrun.Run(t, canvasReference, canvasHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals  []string

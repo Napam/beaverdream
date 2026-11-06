@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/Napam/beaverdream/lib/webmaster/skills"
 )
 
 // StateKey is one model-declared shared value. Op decides how a visitor may
@@ -191,11 +193,11 @@ func (e *editor) apply(name, arguments string) string {
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
 			return e.argumentsRejected(arguments, err)
 		}
-		body, ok := skillBody(in.Name)
+		body, ok := skills.Body(in.Name)
 		if !ok {
 			return fmt.Sprintf(
 				"rejected: no skill %q; the skills are %s",
-				in.Name, strings.Join(skillNames(), ", "),
+				in.Name, strings.Join(skills.Names(), ", "),
 			)
 		}
 		if e.loaded[in.Name] {

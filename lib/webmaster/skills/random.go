@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // randomReference is the random skill: a seeded generator, seeded noise and
 // generators for mazes, dungeons, caves and scattered points. The model reads

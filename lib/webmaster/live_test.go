@@ -1,14 +1,11 @@
 package webmaster
 
 import (
-	"context"
 	"encoding/json"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // liveHarness runs the real live script, then plays one call the live stream
@@ -164,61 +161,12 @@ type liveResult struct {
 
 func runLiveScript(t *testing.T, scenario string) liveResult {
 	t.Helper()
-	out := runJS(t, liveScript, liveHarness, scenario)
+	out := jsrun.Run(t, liveScript, liveHarness, scenario)
 	var got liveResult
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
 	}
 	return got
-}
-
-// runJS runs a harness against the script inside src. It uses node or bun,
-// whichever is installed, and fails rather than skipping when neither is, so a
-// green suite means the client code ran.
-func runJS(t *testing.T, src, harness, scenario string) []byte {
-	t.Helper()
-	runtime, err := jsRuntime()
-	if err != nil {
-		t.Skip("neither node nor bun is installed")
-	}
-
-	start := strings.Index(src, "<script>")
-	end := strings.LastIndex(src, "</script>")
-	if start < 0 || end < start {
-		t.Fatal("the script has no script block")
-	}
-	script := src[start+len("<script>") : end]
-
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "script.js")
-	harnessPath := filepath.Join(dir, "harness.js")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
-		t.Fatalf("write script: %v", err)
-	}
-	if err := os.WriteFile(harnessPath, []byte(harness), 0o600); err != nil {
-		t.Fatalf("write harness: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, runtime, harnessPath, scriptPath, scenario).
-		CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s: %v\n%s", filepath.Base(runtime), err, out)
-	}
-	return out
-}
-
-func jsRuntime() (string, error) {
-	var lastErr error
-	for _, name := range []string{"node", "bun"} {
-		path, err := exec.LookPath(name)
-		if err == nil {
-			return path, nil
-		}
-		lastErr = err
-	}
-	return "", lastErr
 }
 
 func eventNamed(events []liveEvent, name string) (liveEvent, bool) {

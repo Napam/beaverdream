@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // spaceReference is the space skill: a grid world that rays, collision,
 // damage and drawing all read, plus a spatial hash. The model reads it with

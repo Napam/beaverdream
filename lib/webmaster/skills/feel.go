@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // feelReference is the feel skill: shake, hit stop, particles, squash, sound
 // and rumble from one impact call. The model reads it with load_skill. The

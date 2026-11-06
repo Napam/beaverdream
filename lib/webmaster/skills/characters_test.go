@@ -1,10 +1,12 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // charactersHarness runs the core from charactersReference with the vendored
@@ -355,11 +357,11 @@ console.log(JSON.stringify(out))
 `
 
 func TestCharactersReferenceCore(t *testing.T) {
-	three, err := filepath.Abs("../../web/vendor/three-v0.187.0.module.min.js")
+	three, err := filepath.Abs("../../../web/vendor/three-v0.187.0.module.min.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := runJS(t, charactersReference, charactersHarness, three)
+	out := jsrun.Run(t, charactersReference, charactersHarness, three)
 	t.Logf("%s", out)
 	var got struct {
 		Globals []string

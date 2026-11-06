@@ -1,9 +1,11 @@
-package webmaster
+package skills
 
 import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
 // entitiesHarness runs the core from entitiesReference with frames driven by hand and
@@ -196,7 +198,7 @@ console.log(JSON.stringify(out))
 `
 
 func TestEntitiesReferenceCore(t *testing.T) {
-	out := runJS(t, entitiesReference, entitiesHarness, "")
+	out := jsrun.Run(t, entitiesReference, entitiesHarness, "")
 	t.Logf("%s", out)
 	var got struct {
 		Globals          []string

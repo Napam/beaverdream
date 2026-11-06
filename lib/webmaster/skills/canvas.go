@@ -1,4 +1,4 @@
-package webmaster
+package skills
 
 // canvasReference is the canvas skill: sharp 2D drawing with a camera, a
 // cached tile layer, autotiling, sprites from text, parallax, y sorting and

@@ -912,6 +912,25 @@ multiplayer by default: one shared world, where every visitor sees the others
 act, through shared state or a journal. "make pacman" means one board everyone
 plays on. Build it for a single player only when the post asks for that. A
 color, a restyle, a text change or a purely visual idea needs none of this.
+
+The same goes for every feature added later: assume it is shared live. One
+poster asks, but everyone on the page gets it, and each visitor sees what
+happens to every character, not just their own. Before you add an ability, a
+look, an effect or a change to the world, ask what the other visitors see,
+and build that in the same turn:
+- What a player is (character, suit, form, what they hold): send it with their
+  motion, so the others draw them that way.
+- What a player does (a shot, a throw, a transform, an effect): one journal
+  row when it happens, and every other page plays the same thing on that
+  player.
+- What it does to others: damage, knockback and pickups reach the other
+  players, not just the poster's screen.
+- What changes the world (time of day, broken walls, an opened door): shared
+  state or a journal every page folds, never a variable in one tab.
+Features that stay in one browser are fine where they make sense: the camera,
+settings, menus, a visitor's own interface, or anything the post asks to keep
+to one person. Sharing is the default; when unsure, share it.
+
 Before you build a game or change how it plays, load the skills it needs,
 all in one response of its own: controls for a world someone moves through,
 feel for any game with actions, space when things break, block or hide,
@@ -1270,7 +1289,7 @@ seats.start(function (rows) {
   return s
 }, function (s) { score = s; showScore(s) })     // rematch only when s.winner
 
-var me = { x: 50, y: 50 }        // fixed spawn, never random
+var me = { x: 50, y: 50, look: 'hero' }  // fixed spawn, never random
 var pos = {}, ready = false
 function inBounds(x, y) {
   return isFinite(x) && isFinite(y) && x >= 0 && y >= 0 && x <= 100 && y <= 100
@@ -1280,7 +1299,8 @@ moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
-    if (inBounds(x, y)) p[r.visitor] = { x: x, y: y }  // the referee: in bounds only
+    if (!inBounds(x, y)) continue                    // the referee: in bounds only
+    p[r.visitor] = { x: x, y: y, look: String(r.payload.look || '') }  // draw them as they are
   }
   return p
 }, function (p) {
@@ -1296,15 +1316,31 @@ moves.start(function (rows) {
 
 setInterval(function () {
   if (!ready) return
-  moves.append({ x: me.x, y: me.y })
+  moves.append({ x: me.x, y: me.y, look: me.look })
   bd.save('spot', me)
 }, 60)
+
+var acts = bd.journal("acts")     // what players do: shots, transforms, max 50
+var seen = -1
+acts.start(function (rows) { return rows }, function (rows) {
+  var last = rows.length ? rows[rows.length - 1].id : 0
+  for (var i = 0; i < rows.length && seen >= 0; i++) {
+    var r = rows[i]                              // each act of another player, once
+    if (r.id > seen && r.visitor !== bd.visitor) play(r.visitor, r.payload || {})
+  }
+  seen = Math.max(seen, last)                    // first render: the past already happened
+})
+function act(what) { play(bd.visitor, what); acts.append(what) }  // act({ fire: 1, x: me.x, y: me.y })
+
 function frame() { draw(pos); requestAnimationFrame(frame) }
 requestAnimationFrame(frame)
 function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winner
 </script>
 
-  draw and showScore stand for your canvas and markup. me is the viewer's own
+  draw and showScore stand for your canvas and markup. play(visitor, what) is
+  your effect code: one function that shows an act on any player, so the
+  poster and everyone else see the same shot or transform. look is how that
+  player is drawn (a character, a suit, a form). me is the viewer's own
   position: it starts at the spawn, and the first render moves it to their
   newest row, or to the spot this browser saved when the feed has no row of
   theirs left.

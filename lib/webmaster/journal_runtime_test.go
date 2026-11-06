@@ -12,7 +12,7 @@ import (
 // (mutate.go). exampleRun in the harness runs these lines. The drift test in
 // journal_test.go checks that the prompt contains this block whole, so change
 // both together.
-const exampleMotion = `var me = { x: 50, y: 50 }        // fixed spawn, never random
+const exampleMotion = `var me = { x: 50, y: 50, look: 'hero' }  // fixed spawn, never random
 var pos = {}, ready = false
 function inBounds(x, y) {
   return isFinite(x) && isFinite(y) && x >= 0 && y >= 0 && x <= 100 && y <= 100
@@ -22,7 +22,8 @@ moves.start(function (rows) {
   var p = {}
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
-    if (inBounds(x, y)) p[r.visitor] = { x: x, y: y }  // the referee: in bounds only
+    if (!inBounds(x, y)) continue                    // the referee: in bounds only
+    p[r.visitor] = { x: x, y: y, look: String(r.payload.look || '') }  // draw them as they are
   }
   return p
 }, function (p) {
@@ -38,7 +39,7 @@ moves.start(function (rows) {
 
 setInterval(function () {
   if (!ready) return
-  moves.append({ x: me.x, y: me.y })
+  moves.append({ x: me.x, y: me.y, look: me.look })
   bd.save('spot', me)
 }, 60)
 `
@@ -1189,6 +1190,24 @@ func TestJournalExampleFallsBackToSpawn(t *testing.T) {
 	}
 	if own != nil {
 		t.Errorf("the feed has a row for the viewer %+v, want none", own)
+	}
+}
+
+// Every motion row carries how the player looks, so the other pages draw them
+// as they chose to be and not as a default figure.
+func TestJournalExampleSendsTheLook(t *testing.T) {
+	got := runRuntime(t, "exampleFallback")
+	if len(got.Sent) != 1 {
+		t.Fatalf("sent %d rows, want one", len(got.Sent))
+	}
+	var payload struct {
+		Look string `json:"look"`
+	}
+	if err := json.Unmarshal(got.Sent[0].Payload, &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Look == "" {
+		t.Errorf("payload %s carries no look", got.Sent[0].Payload)
 	}
 }
 

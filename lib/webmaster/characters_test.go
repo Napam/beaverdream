@@ -225,6 +225,23 @@ function blend(fps) {
   out.blend = [b.worst < 0.65 * a.worst, a.worst < 0.3, finite(r), Math.abs(r.motion.speed) < 1]
 }
 
+// shapes and parts: a swapped part keeps its size and place, the figure
+// keeps its height and feet, and every plan names its parts.
+{
+  const size = (m) => { m.updateWorldMatrix(true, false); return bounds(m).getSize(new THREE.Vector3()) }
+  const a = kit.rig({ plan: 'biped', extras: [] }), b = kit.rig({ plan: 'biped', extras: [], shapes: { head: 'box', torso: 'box', foot: 'ball', nope: 'box', hand: 'star' } })
+  a.pose(DT); b.pose(DT)
+  const sa = size(a.parts.head[0]), sb = size(b.parts.head[0]), ta = size(a.parts.torso[0]), tb = size(b.parts.torso[0])
+  const same = (p, q) => Math.abs(p.x - q.x) < 1e-3 && Math.abs(p.y - q.y) < 1e-3 && Math.abs(p.z - q.z) < 1e-3
+  const boxed = b.parts.head[0].geometry !== a.parts.head[0].geometry && b.parts.hand[0].geometry === a.parts.hand[0].geometry
+  const ha = bounds(a.root), hb = bounds(b.root)
+  const c = kit.rig({ plan: 'quadruped', extras: ['tail'] })
+  c.pose(DT)
+  const named = kit.plans.every((plan) => { const r = kit.rig({ plan }); return r.parts.torso && r.parts.torso.length > 0 })
+  out.shapes = [same(sa, sb), same(ta, tb), boxed, Math.abs(ha.max.y - hb.max.y) < 0.02, Math.abs(hb.min.y) < 0.01,
+    named, c.parts.tail.length === 3]
+}
+
 // look: the same seed gives the same look, colors come from the palette,
 // extras from the list, and seeds differ.
 {
@@ -356,6 +373,7 @@ func TestCharactersReferenceCore(t *testing.T) {
 		Lean    []bool
 		Jump    []bool
 		Blend   []bool
+		Shapes  []bool
 		Look    []bool
 		Act     []bool
 		Vehicle []any
@@ -420,6 +438,11 @@ func TestCharactersReferenceCore(t *testing.T) {
 		"look [same palette-spread in-palette in-list varied]",
 		got.Look,
 		"[true true true true true]",
+	)
+	check(
+		"shapes [head-size torso-size swapped-only-known height feet all-named tail-parts]",
+		got.Shapes,
+		"[true true true true true true true]",
 	)
 	check("act [mid gone empty-ok]", got.Act, "[true true true]")
 	check("vehicle [wheels-roll nose-up legs eyes]", got.Vehicle, "[true true 0 0]")

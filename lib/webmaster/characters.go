@@ -9,9 +9,10 @@ package webmaster
 // numbers; change both together.
 const charactersReference = `CHARACTERS REFERENCE:
 Use this for any character someone plays or meets: players, enemies,
-animals, pets, monsters, robots, vehicles. A capsule with a ball on top is
-not a character. A figure with a face, limbs and motion is. This core is
-tested. Copy it whole, in the module script or a plain script before it.
+animals, pets, monsters, robots, vehicles. The kit is a helper: it gives a
+body a skeleton, a walk, a run, a jump and a starting shape. The design is
+yours. This core is tested. Copy it whole, in the module script or a plain
+script before it.
 
 <script>
 function characterKit(THREE) {
@@ -202,7 +203,10 @@ function characterKit(THREE) {
   // radius as a share of height), colors { main, second, skin, eye,
   // outline, horn }, extras (cape, hat, ears, horns, tail, wings), shade
   // (toon, smooth, flat), outline, face, legs (a bug's count, 0 for a
-  // hovering flyer), length (quadruped, vehicle). Put rig.root in the scene,
+  // hovering flyer), length (quadruped, vehicle), shapes ({ part: 'box',
+  // 'ball', 'cyl' or 'cone' }). Parts: torso, head, neck, snout, upperArm,
+  // forearm, hand, thigh, shin, foot, wing, tail, wheel, cabin, hat, ears,
+  // horns, cape. Put rig.root in the scene,
   // set its position (the feet) and rotation.y (the controls skill's yaw:
   // forward is -sin yaw, -cos yaw), then call rig.pose(dt) every frame.
   function rig(spec) {
@@ -219,13 +223,15 @@ function characterKit(THREE) {
     root.add(turned)
     var body = pivot(turned), chest = pivot(body)
     var R = { root: root, joints: { body: body, chest: chest }, legs: [], arms: [], wings: [],
-      tail: [], wheels: [], eyes: [], base: 0, travel: 0 }, legDesc = []
+      tail: [], wheels: [], eyes: [], parts: {}, base: 0, travel: 0 }, legDesc = []
 
     function pivot(parent, x, y, z) { var g = new THREE.Group(); g.position.set(x || 0, y || 0, z || 0); parent.add(g); return g }
-    function part(parent, kind, a, b2, c, color, x, y, z, two) {
+    // part makes one named mesh; r.parts[name] lists every mesh of that name.
+    function part(name, parent, kind, a, b2, c, color, x, y, z, two) {
       var g = shape(kind, a, b2, c), mesh = new THREE.Mesh(g, material(color, s.shade, two))
       mesh.position.set(x || 0, y || 0, z || 0)
       parent.add(mesh)
+      ;(R.parts[name] = R.parts[name] || []).push(mesh)
       if (s.outline && kind !== 'plane') {
         var size = g.boundingBox.getSize(new THREE.Vector3()), t = 2 * H * 0.016
         var line = new THREE.Mesh(g, material(C.outline, 'outline'))
@@ -234,39 +240,39 @@ function characterKit(THREE) {
       }
       return mesh
     }
-    function bone(parent, from, to, r, color) {  // a capsule from one point to another
+    function bone(name, parent, from, to, r, color) {  // a capsule from one point to another
       var dir = new THREE.Vector3(to[0] - from[0], to[1] - from[1], to[2] - from[2]), len = dir.length()
-      var mesh = part(parent, 'cap', r, Math.max(0.001, len), 0, color,
+      var mesh = part(name, parent, 'cap', r, Math.max(0.001, len), 0, color,
         (from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2)
       mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize())
       return mesh
     }
     function leg(x, z, L, r, o) {
       var hip = pivot(body, x, 0, z), sp = pivot(hip), thigh = pivot(sp), l = L / 2
-      part(thigh, 'cap', r, l, 0, o.color, 0, -l / 2, 0)
+      part('thigh', thigh, 'cap', r, l, 0, o.color, 0, -l / 2, 0)
       var knee = pivot(thigh, 0, -l, 0)
-      part(knee, 'cap', r * 0.9, Math.max(0.001, l - 1.8 * r), 0, o.color, 0, -l / 2, 0)
+      part('shin', knee, 'cap', r * 0.9, Math.max(0.001, l - 1.8 * r), 0, o.color, 0, -l / 2, 0)
       // The ankle stays level and one radius above the ground; the sole is
       // straight under it.
       var ankle = pivot(knee, 0, -l, 0)
-      if (o.foot) part(ankle, 'box', r * 2.2, r * 1.6, r * 3.4, o.foot, 0, -r * 0.2, r * 0.8)
-      else part(ankle, 'ball', r, 0, 0, o.color, 0, 0, 0)
+      if (o.foot) part('foot', ankle, 'box', r * 2.2, r * 1.6, r * 3.4, o.foot, 0, -r * 0.2, r * 0.8)
+      else part('foot', ankle, 'ball', r, 0, 0, o.color, 0, 0, 0)
       R.legs.push({ hip: hip, splay: sp, thigh: thigh, knee: knee, ankle: ankle, sole: pivot(ankle, 0, -r, 0), side: o.side })
       legDesc.push({ L: L, phase: o.phase || 0, bend: o.bend || 1, splay: o.splay || 0, rest: o.rest })
     }
     function arm(x, y, len, r, side) {
       var sh = pivot(chest, x, y, 0), l = len / 2
-      part(sh, 'cap', r, l, 0, C.main, 0, -l / 2, 0)
+      part('upperArm', sh, 'cap', r, l, 0, C.main, 0, -l / 2, 0)
       var el = pivot(sh, 0, -l, 0)
-      part(el, 'cap', r * 0.9, l, 0, C.main, 0, -l / 2, 0)
+      part('forearm', el, 'cap', r * 0.9, l, 0, C.main, 0, -l / 2, 0)
       var hand = pivot(el, 0, -l - r * 0.3, 0)
-      part(hand, 'ball', r * 1.45, 0, 0, C.skin, 0, 0, 0)
+      part('hand', hand, 'ball', r * 1.45, 0, 0, C.skin, 0, 0, 0)
       R.arms.push({ shoulder: sh, elbow: el, hand: hand, side: side })
     }
     function head(parent, x, y, z, hr, center, color) {
       var hd = pivot(parent, x, y, z)
       R.joints.head = hd; R.headR = hr; R.headC = center
-      if (color) part(hd, 'ball', hr, 0, 0, color, center[0], center[1], center[2])
+      if (color) part('head', hd, 'ball', hr, 0, 0, color, center[0], center[1], center[2])
       if (s.face !== false) [-1, 1].forEach(function (side) {  // white backs, so eyes read on any color
         var e = new THREE.Mesh(shape('ball', hr * 0.19), material('#ffffff', 'flat'))
         e.position.set(center[0] + side * hr * 0.36, center[1] + hr * 0.12, center[2] + hr * 0.9)
@@ -282,7 +288,7 @@ function characterKit(THREE) {
       [-1, 1].forEach(function (side) {
         var p = pivot(parent, side * x, y, z)
         p.rotation.order = 'YXZ'
-        part(p, 'ball', span / 2, 0, 0, C.second, side * span / 2, 0, 0).scale.set(1, 0.1, chord / span)
+        part('wing', p, 'ball', span / 2, 0, 0, C.second, side * span / 2, 0, 0).scale.set(1, 0.1, chord / span)
         R.wings.push({ pivot: p, side: side })
       })
     }
@@ -293,7 +299,7 @@ function characterKit(THREE) {
       var th = Math.max(H * 0.15, H - 0.97 * L - lr - 2 * hr - 0.02 * H), ar = lr * 0.85
       R.base = 0.97 * L + lr
       ;[1, -1].forEach(function (side) { leg(side * tw * 0.27, 0, L, lr, { side: side, phase: side > 0 ? 0 : 0.5, color: C.second, foot: C.main }) })
-      part(chest, 'cap', tw / 2, Math.max(0.001, th - tw), 0, C.main, 0, th / 2, 0).scale.z = 0.72
+      part('torso', chest, 'cap', tw / 2, Math.max(0.001, th - tw), 0, C.main, 0, th / 2, 0).scale.z = 0.72
       head(chest, 0, th + 0.02 * H, 0, hr, [0, hr, 0], C.skin)
       ;[1, -1].forEach(function (side) { arm(side * (tw / 2 + ar * 0.6), th - ar * 1.2, H * 0.25, ar, side) })
       R.back = { parent: chest, at: [0, th - ar, -tw * 0.36], w: tw * 1.05, len: H * 0.48 }
@@ -305,11 +311,11 @@ function characterKit(THREE) {
       ;[[1, 1, 0], [-1, 1, 0.5], [1, -1, 0.5], [-1, -1, 0]].forEach(function (q) {
         leg(q[0] * rb * 0.62, q[1] * len * 0.34, qL, qr, { side: q[0], phase: q[2], bend: q[1], rest: 0.95, color: C.main, foot: C.second })
       })
-      part(chest, 'cap', rb, Math.max(0.001, len - 2 * rb), 0, C.main, 0, by, 0).rotation.x = Math.PI / 2
+      part('torso', chest, 'cap', rb, Math.max(0.001, len - 2 * rb), 0, C.main, 0, by, 0).rotation.x = Math.PI / 2
       var hy = H - R.base - 1.3 * qh, hz = len / 2 + qh * 0.3
-      bone(chest, [0, by, len / 2 - rb * 0.6], [0, hy, hz], rb * 0.5, C.main)
+      bone('neck', chest, [0, by, len / 2 - rb * 0.6], [0, hy, hz], rb * 0.5, C.main)
       var qhd = head(chest, 0, hy, hz, qh, [0, qh * 0.3, qh * 0.35], C.main)
-      part(qhd, 'ball', qh * 0.5, 0, 0, C.skin, 0, qh * 0.05, qh * 1.15)
+      part('snout', qhd, 'ball', qh * 0.5, 0, 0, C.skin, 0, qh * 0.05, qh * 1.15)
       R.back = { parent: chest, at: [0, by + rb, len * 0.2], w: rb * 1.6, len: len * 0.45 }
       R.tailAt = { parent: chest, at: [0, by + rb * 0.3, -len / 2], len: len * 0.55, r: rb * 0.28 }
     } else if (plan === 'bug') {
@@ -319,7 +325,7 @@ function characterKit(THREE) {
         leg(side * brb * 0.55, brb * 1.1 * (0.6 - 1.2 * i / (n - 1)), bL, br,
           { side: side, phase: ((i + (side > 0 ? 0 : 1)) % 2) * 0.5, splay: 0.95, rest: 0.7, color: C.second })
       })
-      part(chest, 'ball', brb, 0, 0, C.main, 0, brb * 0.35, 0).scale.set(1, 0.75, 1.35)
+      part('torso', chest, 'ball', brb, 0, 0, C.main, 0, brb * 0.35, 0).scale.set(1, 0.75, 1.35)
       var bh = H * 0.2
       head(chest, 0, brb * 0.4, brb * 1.3, bh, [0, 0, bh * 0.5], C.second)
       R.back = { parent: chest, at: [0, brb, 0], w: brb * 1.4, len: brb * 1.5 }
@@ -331,28 +337,28 @@ function characterKit(THREE) {
         R.base = 0.9 * fL + flr
         ;[1, -1].forEach(function (side) { leg(side * fr * 0.4, 0, fL, flr, { side: side, phase: side > 0 ? 0 : 0.5, rest: 0.9, color: C.second, foot: C.second }) })
       }
-      part(chest, 'ball', fr, 0, 0, C.main, 0, fr * 0.9, 0).scale.z = 1.15
+      part('torso', chest, 'ball', fr, 0, 0, C.main, 0, fr * 0.9, 0).scale.z = 1.15
       head(chest, 0, fr * 1.55, fr * 0.45, fh, [0, fh * 0.5, 0], C.main)
       wings(chest, fr * 0.85, fr * 1.1, 0, H * 0.8, H * 0.3)
       R.back = { parent: chest, at: [0, fr * 1.6, -fr * 0.8], w: fr * 1.4, len: H * 0.4 }
       R.tailAt = { parent: chest, at: [0, fr * 0.8, -fr * 1.05], len: H * 0.35, r: fr * 0.2 }
     } else if (plan === 'blob') {
       var or = H / 2
-      R.blob = part(chest, 'ball', or, 0, 0, C.main, 0, or, 0)
+      R.blob = part('torso', chest, 'ball', or, 0, 0, C.main, 0, or, 0)
       head(chest, 0, or, 0, or, [0, 0, 0])
       R.back = { parent: chest, at: [0, or * 1.6, -or * 0.6], w: or, len: or }
       R.tailAt = { parent: chest, at: [0, or * 0.4, -or * 0.95], len: or, r: or * 0.15 }
     } else if (plan === 'vehicle') {
       var vl = s.length || H * 2.2, wr = H * 0.22, vw = vl * 0.5
       R.base = wr; R.vehicle = true
-      part(chest, 'box', vw, H * 0.36, vl, C.main, 0, H * 0.16, 0)
+      part('torso', chest, 'box', vw, H * 0.36, vl, C.main, 0, H * 0.16, 0)
       if (s.face == null) s.face = false
       var cab = head(chest, 0, H * 0.49, -vl * 0.08, H * 0.18, [0, 0, vl * 0.24 - H * 0.18])
-      part(cab, 'box', vw * 0.82, H * 0.3, vl * 0.48, C.second, 0, 0, 0)
+      part('cabin', cab, 'box', vw * 0.82, H * 0.3, vl * 0.48, C.second, 0, 0, 0)
       ;[1, -1].forEach(function (side) {
         [0.32, -0.32].forEach(function (zf) {
           var p = pivot(body, side * vw / 2, 0, zf * vl)
-          part(p, 'cyl', wr, vw * 0.2, 0, C.outline, 0, 0, 0).rotation.z = Math.PI / 2
+          part('wheel', p, 'cyl', wr, vw * 0.2, 0, C.outline, 0, 0, 0).rotation.z = Math.PI / 2
           R.wheels.push({ pivot: p, r: wr })
         })
       })
@@ -360,17 +366,17 @@ function characterKit(THREE) {
 
     var hd = R.joints.head, hr2 = R.headR, hc = R.headC || [0, 0, 0]
     function has(name) { return extras.indexOf(name) >= 0 }
-    if (hd && has('hat')) part(hd, 'cone', hr2 * 0.85, hr2 * 1.3, 0, C.second, hc[0], hc[1] + hr2 * 1.35, hc[2])
+    if (hd && has('hat')) part('hat', hd, 'cone', hr2 * 0.85, hr2 * 1.3, 0, C.second, hc[0], hc[1] + hr2 * 1.35, hc[2])
     if (hd && has('ears')) [-1, 1].forEach(function (side) {
-      part(hd, 'cone', hr2 * 0.28, hr2 * 0.6, 0, C.main, hc[0] + side * hr2 * 0.55, hc[1] + hr2 * 0.95, hc[2]).rotation.z = -side * 0.4
+      part('ears', hd, 'cone', hr2 * 0.28, hr2 * 0.6, 0, C.main, hc[0] + side * hr2 * 0.55, hc[1] + hr2 * 0.95, hc[2]).rotation.z = -side * 0.4
     })
     if (hd && has('horns')) [-1, 1].forEach(function (side) {
-      var horn = part(hd, 'cone', hr2 * 0.14, hr2 * 0.7, 0, C.horn, hc[0] + side * hr2 * 0.45, hc[1] + hr2 * 1.0, hc[2] + hr2 * 0.15)
+      var horn = part('horns', hd, 'cone', hr2 * 0.14, hr2 * 0.7, 0, C.horn, hc[0] + side * hr2 * 0.45, hc[1] + hr2 * 1.0, hc[2] + hr2 * 0.15)
       horn.rotation.set(-0.3, 0, -side * 0.45)
     })
     if (R.back && has('cape')) {
       var cp = pivot(R.back.parent, R.back.at[0], R.back.at[1], R.back.at[2])
-      part(cp, 'plane', R.back.w, R.back.len, 0, C.second, 0, -R.back.len / 2, 0, true)
+      part('cape', cp, 'plane', R.back.w, R.back.len, 0, C.second, 0, -R.back.len / 2, 0, true)
       R.joints.cape = cp
     }
     if (R.back && has('wings') && plan !== 'flyer') wings(R.back.parent, R.back.w * 0.3, R.back.at[1], R.back.at[2], H * 0.45, H * 0.18)
@@ -378,7 +384,7 @@ function characterKit(THREE) {
       var tp = R.tailAt.parent, seg = R.tailAt.len / 3, at = R.tailAt.at
       for (var j = 0; j < 3; j++) {
         var tj = pivot(tp, at[0], at[1], at[2])
-        bone(tj, [0, 0, 0], [0, seg * 0.3, -seg], R.tailAt.r * (1 - j * 0.25), C.main)
+        bone('tail', tj, [0, 0, 0], [0, seg * 0.3, -seg], R.tailAt.r * (1 - j * 0.25), C.main)
         R.tail.push(tj); tp = tj; at = [0, seg * 0.3, -seg]
       }
     }
@@ -389,6 +395,17 @@ function characterKit(THREE) {
     })
     R.wings.forEach(function (w) { R.joints[w.side > 0 ? 'wingL' : 'wingR'] = w.pivot })
     if (R.tail.length) R.joints.tail = R.tail[0]
+    // shapes swaps a part's shape for another of the same size and place.
+    for (var pn in s.shapes || {}) {
+      var kind = s.shapes[pn]
+      if (['box', 'ball', 'cyl', 'cone'].indexOf(kind) < 0) continue
+      ;(R.parts[pn] || []).forEach(function (mesh) {
+        var size = mesh.geometry.boundingBox.getSize(new THREE.Vector3())
+        var g = kind === 'box' ? shape('box', 1, 1, 1) : shape(kind, 0.5, 1)
+        mesh.geometry = g; mesh.scale.multiply(size)
+        mesh.children.forEach(function (c) { if (c.material.side === THREE.BackSide) c.geometry = g })
+      })
+    }
 
     var M = R.motion = motion({ legs: legDesc, arms: R.arms.length, H: H, seed: rng(JSON.stringify(spec) + ':' + made++)(),
       lean: plan === 'biped' || plan === 'vehicle' ? 1 : plan === 'blob' ? 0 : 0.35, glance: !R.vehicle })
@@ -482,19 +499,49 @@ function characterKit(THREE) {
 }
 </script>
 
-THE RULE: a character is shape plus motion. Every one the player sees gets
-a face, limbs or wheels, and a pose(dt) call every frame. More glow does not
-fix a dull figure; shape and motion do.
+DESIGN FIRST: before any code, decide who each character is in this
+board's world and what makes them recognizable at a glance: a silhouette,
+one or two signature details, colors that fit. Superheroes look like
+superheroes (a costume, a mask, an emblem, a cape or none), animals look
+like those animals (ears, snout, tail, the right build), robots look built.
+The defaults are a starting point, not a style. Two boards should never get
+the same figure, and a good character is fun to look at.
 
 - Setup: const kit = characterKit(THREE). One rig per character:
-  kit.rig({ plan: 'biped', height: 1.8, ...kit.look(id, { palette: PAL,
-  extras: ['cape', 'hat', 'horns'] }) }). scene.add(r.root).
-- Plans: biped (people, heroes, robots, zombies), quadruped (dogs, horses,
-  cats, dinosaurs; length for a long body), bug (spiders and crabs with legs
-  8, ants with 6), flyer (birds, bats, bees; legs 0 for ghosts, drones and
-  fairies that hover), blob (slimes, jellies, a face on a ball), vehicle
-  (cars, karts, tanks; the head joint is the cabin and turns with aim). Pick
-  the plan, then change height, build, head, colors and extras.
+  const r = kit.rig({ plan, height, build, head, colors, extras, shapes }),
+  then scene.add(r.root).
+- Plans are bodies, not looks: biped (two legs and arms), quadruped (four
+  legs; length for a long body), bug (many splayed legs: 8, 6), flyer
+  (wings; legs 0 to hover), blob (a ball with a face), vehicle (wheels; the
+  head joint is the cabin and turns with aim). Pick the body that moves
+  right, then make it look like the character.
+- Make it yours, from cheap to rich:
+  - height, build (0 slim .. 1 chunky), head (0.1 .. 0.25 of height),
+    colors { main, second, skin, eye, outline, horn }, extras (cape, hat,
+    ears, horns, tail, wings).
+  - shapes swaps a part's shape at the same size: { head: 'box', torso:
+    'box' } for a robot, { head: 'cone' } for a wizard's helmet, { foot:
+    'ball' } for paws.
+  - r.parts[name] lists that part's meshes (torso, head, neck, snout,
+    upperArm, forearm, hand, thigh, shin, foot, wing, tail, wheel, cabin,
+    hat, ears, horns, cape). Hide one (m.visible = false), scale it, or
+    recolor it with a new material.
+  - Add your own meshes to r.joints (head, chest, body, handL, handR, armL,
+    armR, legL, legR, wingL, wingR, tail, cape): a mask, an emblem on the
+    chest, a sword, a mane, antennae, a shell, a jetpack. They move with the
+    joint. r.legs[i].sole is where each foot touches.
+  Example, a hero: kit.rig({ plan: 'biped', build: 0.8, colors: { main:
+  '#1d4fd8', second: '#d62828', skin: '#e9b98f' }, extras: ['cape'] }), a
+  flat star on r.joints.chest at the front (+z, chest height), a dark band
+  over the eyes on r.joints.head.
+- Style follows the page: toon with outlines is the default. Flat with
+  outline: false reads as low-poly, smooth as soft. Use the same style for
+  every character on a board, and add your own meshes in that style.
+- Variety: kit.look(seed, { palette, extras }) gives each visitor or entity
+  its own colors and extras from your lists; same seed, same look on every
+  screen. Pick the palette and extras to fit the theme. Several kinds of
+  enemy: each its own plan, shapes, size and details, never one shape in
+  different colors.
 - Every frame, after moving: r.root.position is the feet, r.root.rotation.y
   the yaw (set it; never lookAt), then r.pose(dt). Others need nothing: pose
   reads how the root moved, so a remote player eased toward its rows walks,
@@ -502,32 +549,26 @@ fix a dull figure; shape and motion do.
   y 0; pass { floor } for another ground height, or { grounded } when you
   know (your own player on a roof or a platform). The head follows { aim:
   { yaw, pitch } }, relative to the body: yaw = camera yaw - root yaw.
-- Your own stuff: add meshes to r.joints.handR, handL, head, chest or body
-  (a sword, a helmet, a backpack, a logo). They move with the joint.
-  r.legs[i].sole is where each foot touches.
-- Materials are shared by every rig with the same color. To flash one
-  character, set its meshes' material to a clone, or show a child mesh.
+- Materials are shared by every rig with the same color. To flash or recolor
+  one character, give its meshes a clone, or show a child mesh.
 - Moves: r.act(joint, seconds, fn) for a punch, a wave, a spin or a nod:
-  r.act('armR', 0.3, k => [-2.2 * Math.sin(Math.PI * k), 0, 0]). Game
-  actions belong to the page; the rig only shows them.
-- Variety: kit.look(seed) from the visitor id or the entity's kind, so
-  everyone gets their own colors and extras with no design per character.
-  Same seed, same look on every screen.
-- Proportions: big heads (head 0.15 to 0.2) and big hands and feet read best
-  at game distance. The player stays the brightest thing on screen.
-- Shade: toon is the default and needs light: a HemisphereLight plus a
-  DirectionalLight. Use emissive for one small accent at most (eyes, an
-  emblem). Leave outline on.
-- Several kinds of enemy: one plan each with its own colors, size and extras,
-  never one shape in different colors.
-- 2D: kit.motion({ legs: [{ L: 16, phase: 0 }, { L: 16, phase: 0.5 }], arms:
+  r.act('armR', 0.3, k => [-2.2 * Math.sin(Math.PI * k), 0, 0]). Give each
+  character moves that fit it. Game actions belong to the page; the rig only
+  shows them.
+- Readability: big heads and big hands and feet read best at game
+  distance. The player stays the brightest thing on screen. Toon needs
+  light: a HemisphereLight plus a DirectionalLight. Use emissive for small
+  accents only.
+- 2D or a drawn style (pixel art, paper, sprites): skip rig and draw the
+  characters your way, with motion for the movement.
+  kit.motion({ legs: [{ L: 16, phase: 0 }, { L: 16, phase: 0.5 }], arms:
   2, H: 48 }) gives the same gait with no three.js; m.update(dt, { speed:
   vx * facing, vy: -vy, grounded }) each frame. Hip at x, ground - (m.hip +
   m.bodyY); ctx.scale(facing, 1); per leg ctx.rotate(-leg.thigh), draw the
   thigh down L/2, translate there, ctx.rotate(leg.knee), draw the shin. Arms
   hang from shoulders you place: ctx.rotate(-arm.swing), the upper arm,
-  translate, ctx.rotate(-arm.elbow), the forearm. Body squash with m.squash, tilt with
-  m.lean, blink with m.blink.
+  translate, ctx.rotate(-arm.elbow), the forearm. Body squash with
+  m.squash, tilt with m.lean, blink with m.blink.
 - Many of one thing (a crowd, 200 birds): a rig each costs about 30 meshes.
   Past 40 characters, use simple shapes far away and rigs near the camera.
 `

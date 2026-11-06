@@ -826,9 +826,10 @@ feel for any game with actions, space when things break, block or hide,
 entities for several kinds of characters or enemies, paths when anything
 must find its way around walls, random for anything generated: levels,
 mazes, terrain, decks, daily puzzles, canvas for anything drawn on a 2D
-canvas, and characters for anyone a visitor plays or meets. A character
-needs a face, limbs and motion; a capsule with a ball on top is not one,
-and more glow does not make it one.
+canvas, and characters for anyone a visitor plays or meets. It gives a
+body motion and a starting shape; design each character to fit the board,
+so heroes look like heroes and animals like animals. A capsule with a ball
+on top is not a character, and more glow does not make it one.
 
 For 3D, use three.js 0.187, served by this page: import * as THREE from
 'three' in a module script. These extras come from 'three/addons' and

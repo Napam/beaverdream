@@ -16,7 +16,11 @@ SELECT
   COALESCE(
     CAST(
       SUM(
-        MIN(length(t.body), 280) + length(t.said) + length(t.changes) + 16
+        -- The room log clips posts to 280 runes and keeps replies whole.
+        CASE
+          WHEN t.kind = 'reply' THEN length(t.body)
+          ELSE MIN(length(t.body), 280)
+        END + length(t.said) + length(t.changes) + 16
       ) AS INTEGER
     ),
     0

@@ -23,6 +23,7 @@ type Post struct {
 	Author    string
 	Body      string
 	CreatedAt string
+	Kind      string
 }
 
 type RoomSummary struct {

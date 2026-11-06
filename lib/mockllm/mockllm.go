@@ -143,6 +143,15 @@ func usage(req chatRequest, replyBytes int) map[string]any {
 // exercise the multi-round loop. An edit keyword sends the edit and done in
 // one response.
 func decide(prompt string, toolResultSeen bool) []toolCall {
+	// mockreply keeps the page and answers on the board.
+	if strings.Contains(prompt, "mockreply") {
+		call := doneCall("answered a question")
+		call.Function.Arguments = mustJSON(map[string]string{
+			"reason": "answered a question",
+			"reply":  "beavers build dams to make ponds <deep> enough to stay safe.",
+		})
+		return []toolCall{call}
+	}
 	if strings.Contains(prompt, "mocknoop") || toolResultSeen {
 		return []toolCall{doneCall("nothing needed changing")}
 	}

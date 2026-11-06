@@ -64,7 +64,8 @@ RETURNING
   id,
   author,
   body,
-  created_at
+  created_at,
+  kind
 `
 
 type CreatePostParams struct {
@@ -77,6 +78,7 @@ type CreatePostRow struct {
 	Author    string
 	Body      string
 	CreatedAt string
+	Kind      string
 }
 
 func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (CreatePostRow, error) {
@@ -87,8 +89,27 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (CreateP
 		&i.Author,
 		&i.Body,
 		&i.CreatedAt,
+		&i.Kind,
 	)
 	return i, err
+}
+
+const createReply = `-- name: CreateReply :one
+INSERT INTO
+  turns (kind, author, body)
+VALUES
+  ('reply', 'webmaster', ?)
+RETURNING
+  id
+`
+
+// The webmaster's answer on the board, written in its turn's finish
+// transaction so it takes the newest id.
+func (q *Queries) CreateReply(ctx context.Context, body string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, createReply, body)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const createTurn = `-- name: CreateTurn :one
@@ -207,7 +228,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) error {
 
 const getPost = `-- name: GetPost :one
 SELECT
-  id, author, body, created_at
+  id, author, body, created_at, kind
 FROM
   posts
 WHERE
@@ -222,6 +243,7 @@ func (q *Queries) GetPost(ctx context.Context, id int64) (Post, error) {
 		&i.Author,
 		&i.Body,
 		&i.CreatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
@@ -312,7 +334,7 @@ func (q *Queries) LatestPostID(ctx context.Context) (int64, error) {
 
 const listPosts = `-- name: ListPosts :many
 SELECT
-  id, author, body, created_at
+  id, author, body, created_at, kind
 FROM
   posts
 ORDER BY
@@ -333,6 +355,7 @@ func (q *Queries) ListPosts(ctx context.Context) ([]Post, error) {
 			&i.Author,
 			&i.Body,
 			&i.CreatedAt,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -349,7 +372,7 @@ func (q *Queries) ListPosts(ctx context.Context) ([]Post, error) {
 
 const listPostsAfter = `-- name: ListPostsAfter :many
 SELECT
-  id, author, body, created_at
+  id, author, body, created_at, kind
 FROM
   posts
 WHERE
@@ -381,6 +404,7 @@ func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) 
 			&i.Author,
 			&i.Body,
 			&i.CreatedAt,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -397,11 +421,12 @@ func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) 
 
 const listPostsForTurn = `-- name: ListPostsForTurn :many
 SELECT
-  p.id, p.author, p.body, p.created_at
+  p.id, p.author, p.body, p.created_at, p.kind
 FROM
   posts p
 WHERE
-  p.id < ?1
+  p.kind = 'post'
+  AND p.id < ?1
   AND p.id > COALESCE(
     (
       SELECT
@@ -420,6 +445,7 @@ ORDER BY
 
 // The posts a webmaster turn answered: the ones between it and the webmaster
 // turn before it, which is the range the worker coalesced into that turn.
+// Replies are the webmaster's own words, never a trigger.
 func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, error) {
 	rows, err := q.db.QueryContext(ctx, listPostsForTurn, turnID)
 	if err != nil {
@@ -434,6 +460,7 @@ func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, e
 			&i.Author,
 			&i.Body,
 			&i.CreatedAt,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}
@@ -450,7 +477,7 @@ func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, e
 
 const listRecentPosts = `-- name: ListRecentPosts :many
 SELECT
-  id, author, body, created_at
+  id, author, body, created_at, kind
 FROM
   posts
 ORDER BY
@@ -473,6 +500,7 @@ func (q *Queries) ListRecentPosts(ctx context.Context, limit int64) ([]Post, err
 			&i.Author,
 			&i.Body,
 			&i.CreatedAt,
+			&i.Kind,
 		); err != nil {
 			return nil, err
 		}

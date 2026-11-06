@@ -29,8 +29,9 @@ prefer simple, readable code over production hardening.
 
 - `turns` is the room: one ordered row for every post, every webmaster turn and
   every server event (heal, undo, restore). `id` is the conversation
-  order. The `posts` view exposes only `kind = 'post'`; the board reads posts
-  through it, so model text (said, notes, changes) cannot reach the page by
+  order. The `posts` view exposes `kind = 'post'` and `kind = 'reply'` (the
+  webmaster's board answers) with their `kind`; the board reads posts through
+  it, so other model text (said, notes, changes) cannot reach the page by
   accident. `site_versions` is the render, append-only; the current site is
   `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
   holds the compacted history: the newest row is one message standing in for
@@ -62,8 +63,20 @@ prefer simple, readable code over production hardening.
   next log. When the turn finishes, the version (if any) and the finished turn
   are written in one transaction. A crash leaves a running turn; `New` marks it
   as an error so it is never read back.
+- The webmaster answers on the board through `done`'s optional `reply`
+  (`maxReplyLen`). `reason` stays the short log line, stored as `said`, and
+  visitors never see it. A turn that did not fail and has a reply inserts one
+  `kind = 'reply'`, author `webmaster` row as the last write of its finish
+  transaction, so the reply takes the newest id and the stream's post cursor
+  cannot have passed it, then publishes `topicPosts`. A `silent` turn posts
+  the reply of a deferred `done`; error and stopped turns post nothing.
+  `SummaryStats` counts a reply whole, as the log shows it. A reply is never
+  a trigger: `ListPostsForTurn` reads `kind = 'post'` only. A later `done`
+  without a reply keeps the one already given, so a deferred `done` does not
+  lose it.
 - The room log is words and field names only: `#id author: body`, one line per
-  webmaster turn with its `said` and `changes`, and one line per server event.
+  webmaster turn with its `said` and `changes`, one `#id you replied: "..."`
+  line per reply, kept whole, and one line per server event.
   Never put markup, notes, tool calls or a render in it. The current page is
   already in the prompt, and replaying historical tool calls would mutate the
   world again. The trigger posts are skipped in the log because NEW POST shows
@@ -107,8 +120,10 @@ prefer simple, readable code over production hardening.
   `SiteDoc` still appends the posts if a stored page lacks it. Never let posts
   be stored inside model-controlled HTML.
 - Posts stay server markup; the model places them, it does not render them.
-  Each `article.post` carries escaped `data-id`, `data-author` and
-  `data-when` for page scripts, and the prompt tells the model to position
+  Each `article.post` carries escaped `data-id`, `data-kind`, `data-author`
+  and `data-when` for page scripts. A reply gets `data-kind="reply"` and the
+  class `post-webmaster` from its kind, never from its author name, since a
+  visitor may call themselves webmaster. The prompt tells the model to position
   the articles inside `#bd-posts` (it has `display:contents`), never move
   them out or rebuild them, and never put visitor text through `innerHTML`.
   Do not add a parallel post data API: it would be a second source of truth
@@ -406,6 +421,7 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   paths. `mockskill` loads the controls skill in its first round.
   `mockwallet` declares two visitor counters and a recipe and ships a purse
   page that earns, trades and lists the top holders.
+  `mockreply` keeps the page and posts a reply on the board.
   `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.

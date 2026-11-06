@@ -1000,7 +1000,7 @@ templ turnHeader(d TurnDetail, csrf string) {
 		} else {
 			<div class="grid gap-3 md:grid-cols-3">
 				@labelled(triggerLabel(d.Row), d.Row.Trigger)
-				@labelled("reply", d.Row.Run.Said)
+				@labelled("reason", d.Row.Run.Said)
 				@labelled("changes", d.Row.Run.Changes)
 			</div>
 		}

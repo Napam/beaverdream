@@ -71,6 +71,10 @@ type Post struct {
 	Author string
 	Body   string
 	When   string
+	// Kind is TurnPost for a visitor post and TurnReply for the webmaster's
+	// answer. Only Kind marks a reply: a visitor can call themselves
+	// webmaster.
+	Kind string
 }
 
 // BaseCSS is prepended to every render. It holds only what the code-owned
@@ -98,6 +102,8 @@ body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.
 .post-body{white-space:pre-wrap;margin-top:.3em;overflow-wrap:anywhere}
 .post-body .quote{color:#789922}
 .post-body .post-ref{color:var(--accent);text-decoration:underline}
+.post-webmaster{border-left:3px solid var(--accent)}
+.post-webmaster .post-author{color:var(--accent)}
 .empty{color:var(--muted);font-style:italic}
 .beaver-id{margin:1.25em;font-size:.75em;color:var(--muted);text-align:right}
 .beaver-id a{color:var(--muted)}
@@ -135,16 +141,22 @@ func RenderPosts(posts []Post) string {
 		if author == "" {
 			author = "anon"
 		}
+		class, kind := "post", TurnPost
+		if p.Kind == TurnReply {
+			class, kind = "post post-webmaster", TurnReply
+		}
 		fmt.Fprintf(
 			&b,
-			`<article class="post" id="p%d" data-id="%d" data-author="%s" data-when="%s">`+
+			`<article class="%s" id="p%d" data-id="%d" data-kind="%s" data-author="%s" data-when="%s">`+
 				`<div class="post-head">`+
 				`<span class="post-author">%s</span>`+
 				`<time class="post-when">%s</time>`+
 				`<span class="post-no">No.%d</span></div>`+
 				`<div class="post-body">%s</div></article>`,
+			class,
 			p.ID,
 			p.ID,
+			kind,
 			html.EscapeString(author),
 			html.EscapeString(p.When),
 			html.EscapeString(author),

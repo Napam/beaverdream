@@ -7,7 +7,18 @@ RETURNING
   id,
   author,
   body,
-  created_at;
+  created_at,
+  kind;
+
+-- name: CreateReply :one
+-- The webmaster's answer on the board, written in its turn's finish
+-- transaction so it takes the newest id.
+INSERT INTO
+  turns (kind, author, body)
+VALUES
+  ('reply', 'webmaster', ?)
+RETURNING
+  id;
 
 -- name: ListPosts :many
 SELECT
@@ -44,12 +55,14 @@ LIMIT
 -- name: ListPostsForTurn :many
 -- The posts a webmaster turn answered: the ones between it and the webmaster
 -- turn before it, which is the range the worker coalesced into that turn.
+-- Replies are the webmaster's own words, never a trigger.
 SELECT
   p.*
 FROM
   posts p
 WHERE
-  p.id < sqlc.arg(turn_id)
+  p.kind = 'post'
+  AND p.id < sqlc.arg(turn_id)
   AND p.id > COALESCE(
     (
       SELECT

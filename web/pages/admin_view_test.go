@@ -201,8 +201,8 @@ func TestTriggerAndStatusLabels(t *testing.T) {
 		t.Errorf("changed = %q, want changed", got)
 	}
 	row.Run.Said = "hello"
-	if title := turnTitle(row); !strings.Contains(title, "reply: hello") {
-		t.Errorf("title = %q, want the reply", title)
+	if title := turnTitle(row); !strings.Contains(title, "hello") {
+		t.Errorf("title = %q, want the reason", title)
 	}
 }
 

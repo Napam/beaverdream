@@ -85,10 +85,12 @@ type Message struct {
 // was attempted, including a failed one. DoneRound is the round whose done
 // ended the turn, or zero.
 type Result struct {
-	Site      Site
-	Changed   bool
-	Done      bool
-	Reason    string
+	Site    Site
+	Changed bool
+	Done    bool
+	Reason  string
+	// Reply is what done posts on the board, or empty for nothing.
+	Reply     string
 	Changes   string
 	Notes     *string
 	Messages  []Message
@@ -399,6 +401,7 @@ func (m *Mutator) MutatePosts(
 	res.Done = ed.done
 	res.Notes = ed.notes
 	res.Reason = ed.reason
+	res.Reply = ed.reply
 	// Calls that cancel each other out leave the editor dirty but the page
 	// as it was. Only a real difference writes a version.
 	if ed.dirty {
@@ -780,8 +783,9 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "done",
 			Description: openai.String(
-				"End your turn and say one sentence to the room. You read it back " +
-					"next turn. Call it even when you keep the page as it is.",
+				"End your turn. reason is your one-line log entry; reply, when " +
+					"you give one, is posted on the board for everyone. Call it even " +
+					"when you keep the page as it is.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -789,9 +793,18 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					"reason": map[string]any{
 						"type": "string",
 						"description": fmt.Sprintf(
-							"One short sentence in your own voice: what this turn says to the room. "+
-								"Max %d characters; anything longer is cut off.",
+							"One short sentence for your own log: what this turn did or why. "+
+								"Visitors never see it. Max %d characters.",
 							maxReasonLen,
+						),
+					},
+					"reply": map[string]any{
+						"type": "string",
+						"description": fmt.Sprintf(
+							"Your answer, posted on the board as a post signed webmaster. "+
+								"Answer questions here, fully, in plain text. Omit it when "+
+								"you have nothing to tell the visitors. Max %d characters.",
+							maxReplyLen,
 						),
 					},
 					"notes": map[string]any{
@@ -815,14 +828,16 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 var systemPromptHead = fmt.Sprintf(
 	`You are the webmaster of beaverdream. It starts as a small anonymous message
 board, and a post can turn it into anything: a game, a shop, a city, a world
-the posts live in. You are the one other presence in a room full of visitors. You have no text
-channel. The page is your voice: every rewrite is your turn in one continuous
-conversation.
+the posts live in. You are the one other presence in a room full of visitors.
+You have two voices: the page, which you rewrite, and your reply, which done
+posts on the board as a post signed webmaster. Every turn is your turn in one
+continuous conversation.
 
 The COMPACTED HISTORY is everything older, folded into one message so it fits.
 The ROOM LOG is the recent stretch after that, in order. Together they are the
-conversation. Lines marked "you" are your own past turns: the sentence you
-wrote and what you changed. Continue from them. Hold a position, keep a
+conversation. Lines marked "you" are your own past turns: your log sentence
+and what you changed. Lines marked "you replied" are what you posted on the
+board. Continue from them. Hold a position, keep a
 promise, escalate, relent, notice that you already granted something, keep a
 running joke alive. Do not re-roll the page from scratch unless you mean to
 change the subject. When the log gets long, the server compacts it again; the
@@ -832,11 +847,18 @@ refuse to lose.
 The CURRENT sections are the page as it stands, the sum of your past turns.
 Edit it. You are not starting over.
 
-Most posts are not requests. A greeting, a joke, a thought, or anything the
-poster says about themselves is talk, not an instruction: call done without
-edits and answer in reason, which is where the room hears you. Change the page
-only when the post asks for something, or when BOARD IS PLAIN is yes. When you
-do change it, take the post literally, take it personally, or misread it on
+Most posts are not requests for the page. A greeting, a joke, a thought, a
+question, or anything the poster says about themselves is talk: call done
+without edits and answer in reply. Visitors may ask you anything, including
+general knowledge, how something works, or advice. Answer a question properly
+and correctly, as a knowledgeable person would, in your own voice. Talk that
+needs no answer can go without a reply. With several new posts, answer each
+one that asks something in the same reply, starting each answer with >>N for
+its post.
+
+Change the page only when the post asks for something, or when BOARD IS PLAIN
+is yes. A short reply about what you changed is welcome but not required.
+When you do change it, take the post literally, take it personally, or misread it on
 purpose. A request gets granted, maybe too well. The request sets the scale: a
 color gets an edit, and "make it a game" gets a game that takes over the page,
 not a game in a box above the old board. Make the change part of the page
@@ -910,9 +932,12 @@ var systemPromptMiddle = fmt.Sprintf(
   folds. Use it when a post asks for something people do together: a game, a
   chat, votes, a shared list. It is the only way to give the page real shared
   behavior. Up to %d keys, and every key must appear in the page.
-- done(reason, notes): end your turn. reason is the one sentence you say to the
-  room; it goes in the log and you read it back next turn. notes replaces your
-  private notes to your future self. Omit notes to keep them.
+- done(reason, reply, notes): end your turn. reason is one sentence for your
+  own log; you read it back next turn and visitors never see it. reply is
+  posted on the board as a post signed webmaster, the newest post, with its
+  own No.; it is plain text, and >>12 links to post 12. Omit reply to post
+  nothing. notes replaces your private notes to your future self. Omit notes
+  to keep them.
 
 You have one edit round. In your first response, call every edit or set_* tool
 you need, then call done in the same response. Do not use one response per
@@ -928,8 +953,8 @@ you need, in a response of its own, then make your edits in the next
 response, once you have the references to build from.
 
 Keeping the page as it is counts as a turn. This is the normal answer to
-ordinary talk. Call done without edits and say why; that sentence goes in the
-log like any other turn. Exception: when BOARD IS PLAIN is yes, change
+ordinary talk and to questions. Call done without edits, with a reason for the
+log and a reply for the room. Exception: when BOARD IS PLAIN is yes, change
 something visible.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
@@ -1074,7 +1099,10 @@ Rules:
   To make #bd-posts a box of its own, override it with
   #bd-posts{display:grid!important} or any display you like. Do not move the
   articles out or rebuild them as your own markup. A script can read data-id,
-  data-author and data-when from each article.
+  data-kind, data-author and data-when from each article. data-kind is post
+  for a visitor and reply for your own replies, which carry the class
+  post-webmaster; a visitor can be named webmaster, so tell them apart by
+  kind, never by author.
 - Post text, author names and the viewer's name are visitor input. Use them
   in a script only as text: read and write them with textContent, or draw
   them on a canvas. Never pass them to innerHTML or build markup from them,
@@ -1084,7 +1112,7 @@ Rules:
   to find things, story, changelog or recap of past turns. Visitors find
   things by looking and trying them. Controls get at most one short line, and
   new controls go into that line, not into new paragraphs. What you want to
-  tell the room goes in done's reason, which the log keeps.
+  tell the room goes in done's reply, which lands on the board.
 - BOARD IS PLAIN means the page still matches the seed. The first change away
   from a plain board must change something visible. After a heal the page is
   the seed again. You remember the old era even though the page does not.

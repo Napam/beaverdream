@@ -33,6 +33,28 @@ func TestRenderLogShowsTheWebmastersOwnTurns(t *testing.T) {
 	}
 }
 
+// A reply is read back once, whole, on its own line after the turn, even
+// when it is longer than a post line is clipped to.
+func TestRenderLogShowsRepliesWhole(t *testing.T) {
+	long := strings.Repeat("dams hold water. ", 30)
+	log := []Turn{
+		{ID: 1, Kind: TurnPost, Author: "dave", Body: "why dams?"},
+		{ID: 2, Kind: TurnWebmaster, Said: "answered dave", Status: "kept"},
+		{ID: 3, Kind: TurnReply, Author: "webmaster", Body: long},
+	}
+	got := RenderLog(log, nil)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[2], "#3 ") {
+		t.Fatalf("want the reply as the third line:\n%s", got)
+	}
+	if !strings.Contains(lines[2], strings.TrimSpace(long)) {
+		t.Errorf("reply was clipped:\n%s", lines[2])
+	}
+	if strings.Count(got, "dams hold water") != 30 {
+		t.Errorf("reply appears more than once:\n%s", got)
+	}
+}
+
 func TestRenderLogSkipsTheTriggerPosts(t *testing.T) {
 	log := []Turn{
 		{ID: 1, Kind: TurnPost, Author: "dave", Body: "old"},

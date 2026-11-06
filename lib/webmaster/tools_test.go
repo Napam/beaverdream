@@ -418,6 +418,24 @@ func TestDoneStopsAndKeepsReason(t *testing.T) {
 	}
 }
 
+// A deferred done can be called again without its reply; the reply given
+// first still goes on the board. A long reply is cut to the cap.
+func TestDoneKeepsTheFirstReply(t *testing.T) {
+	ed := newEditor(Site{})
+	ed.run("done", args(t, map[string]string{"reason": "a", "reply": " the answer "}))
+	ed.run("done", args(t, map[string]string{"reason": "b"}))
+	if ed.reply != "the answer" {
+		t.Fatalf("reply = %q", ed.reply)
+	}
+	ed.run(
+		"done",
+		args(t, map[string]string{"reason": "c", "reply": strings.Repeat("x", maxReplyLen+50)}),
+	)
+	if n := len([]rune(ed.reply)); n != maxReplyLen {
+		t.Fatalf("reply runes = %d, want %d", n, maxReplyLen)
+	}
+}
+
 func TestSiteDocSubstitutesPosts(t *testing.T) {
 	doc := SiteDoc(
 		Site{Version: 3, HTML: "<h1>hi</h1><main>" + PostsPlaceholder + "</main>"},
@@ -475,9 +493,29 @@ func TestRenderPostsAddsBoardConventions(t *testing.T) {
 // spans. The author is visitor input, so the attribute is escaped too.
 func TestRenderPostsCarriesDataAttributes(t *testing.T) {
 	got := RenderPosts([]Post{{ID: 3, Author: `d"><b>`, When: "Nov 4 21:00", Body: "hi"}})
-	want := `<article class="post" id="p3" data-id="3" data-author="d&#34;&gt;&lt;b&gt;" data-when="Nov 4 21:00">`
+	want := `<article class="post" id="p3" data-id="3" data-kind="post" data-author="d&#34;&gt;&lt;b&gt;" data-when="Nov 4 21:00">`
 	if !strings.HasPrefix(got, want) {
 		t.Errorf("got %s, want it to start with %s", got, want)
+	}
+}
+
+// A reply is marked by its kind and escaped like any post. A visitor who
+// names themselves webmaster gets no mark.
+func TestRenderPostsMarksRepliesByKind(t *testing.T) {
+	got := RenderPosts([]Post{
+		{ID: 2, Kind: TurnReply, Author: "webmaster", Body: "a <b>bold</b> claim"},
+		{ID: 1, Kind: TurnPost, Author: "webmaster", Body: "fake"},
+	})
+	reply, visitor, _ := strings.Cut(got, `<article class="post" id="p1"`)
+	if !strings.Contains(reply, `class="post post-webmaster"`) ||
+		!strings.Contains(reply, `data-kind="reply"`) {
+		t.Errorf("reply is not marked: %s", reply)
+	}
+	if strings.Contains(reply, "<b>") {
+		t.Errorf("reply body was not escaped: %s", reply)
+	}
+	if visitor == "" || strings.Contains(visitor, "post-webmaster") {
+		t.Errorf("a visitor named webmaster was marked: %s", got)
 	}
 }
 

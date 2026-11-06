@@ -65,7 +65,10 @@ const (
 	maxStateValue = 200
 	// maxReasonLen is the longest done reason kept. The done tool says so, so
 	// the model fits its sentence instead of being cut off.
-	maxReasonLen   = 200
+	maxReasonLen = 200
+	// maxReplyLen is the longest board reply kept. A real answer to a
+	// question needs a paragraph or two; a post may be MaxBodyLen.
+	maxReplyLen    = 1500
 	minStateOpts   = 2
 	defaultListMax = 20
 	maxNotesLen    = 1000
@@ -89,9 +92,12 @@ const (
 const (
 	TurnPost      = "post"
 	TurnWebmaster = "webmaster"
-	TurnHeal      = "heal"
-	TurnUndo      = "undo"
-	TurnRestore   = "restore"
+	// TurnReply is the webmaster's answer on the board, written by the
+	// finish transaction of the turn that said it.
+	TurnReply   = "reply"
+	TurnHeal    = "heal"
+	TurnUndo    = "undo"
+	TurnRestore = "restore"
 	// TurnJournal is the admin clearing one journal key. The page's data
 	// changed under the webmaster, so the room log says so.
 	TurnJournal = "journal"

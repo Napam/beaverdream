@@ -84,6 +84,7 @@ type stateKeyInput struct {
 type editor struct {
 	site   Site
 	reason string
+	reply  string
 	notes  *string
 	done   bool
 	dirty  bool
@@ -265,6 +266,7 @@ func (e *editor) apply(name, arguments string) string {
 	case "done":
 		var in struct {
 			Reason string  `json:"reason"`
+			Reply  string  `json:"reply"`
 			Notes  *string `json:"notes"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
@@ -272,6 +274,11 @@ func (e *editor) apply(name, arguments string) string {
 		}
 		e.done = true
 		e.reason = truncateRunes(strings.TrimSpace(in.Reason), maxReasonLen)
+		// A deferred done may be called again after a fix without repeating
+		// its reply, so an empty reply keeps the one already given.
+		if reply := strings.TrimSpace(in.Reply); reply != "" {
+			e.reply = truncateRunes(reply, maxReplyLen)
+		}
 		if in.Notes != nil {
 			notes := truncateRunes(strings.TrimSpace(*in.Notes), maxNotesLen)
 			e.notes = &notes

@@ -12,8 +12,8 @@ type Turn struct {
 	Kind   string
 	Author string
 	Body   string
-	// Said is the done reason, the webmaster's one sentence. The admin panel
-	// shows it as the reply.
+	// Said is the done reason, the webmaster's one log sentence. What it
+	// posts on the board is a separate TurnReply row, with the text in Body.
 	Said      string
 	Changes   string
 	Status    string
@@ -84,6 +84,10 @@ func renderTurn(turn Turn) string {
 
 	case TurnWebmaster:
 		return renderWebmasterTurn(turn)
+
+	case TurnReply:
+		// Kept whole: a follow-up question needs the full answer it follows.
+		return fmt.Sprintf("#%d you replied: %q", turn.ID, clip(turn.Body, maxReplyLen))
 
 	case TurnHeal, TurnUndo, TurnRestore, TurnJournal, TurnState:
 		return fmt.Sprintf("#%d server: %s", turn.ID, turn.Body)

@@ -290,6 +290,7 @@ func postFromRow(row sqlc.Post) webmaster.Post {
 		Author: row.Author,
 		Body:   row.Body,
 		When:   formatWhen(row.CreatedAt),
+		Kind:   row.Kind,
 	}
 }
 
@@ -578,6 +579,15 @@ func (h *Handlers) mutateHeld(
 	)
 	defer cancel()
 
+	// A reply goes on the board from any turn that did not fail. A silent turn
+	// can carry one: its done was deferred and never called again, and the
+	// reply it gave is still what the visitors asked for. It is written last
+	// in the transaction, so it takes the newest id and reaches every open
+	// page past posts that arrived while the turn ran.
+	reply := ""
+	if status != "error" {
+		reply = res.Reply
+	}
 	var versionID sql.NullInt64
 	txErr := h.inTx(finishCtx, func(q *sqlc.Queries) error {
 		if res.Changed {
@@ -594,7 +604,7 @@ func (h *Handlers) mutateHeld(
 			}
 			versionID = sql.NullInt64{Int64: version.ID, Valid: true}
 		}
-		return q.FinishTurn(finishCtx, sqlc.FinishTurnParams{
+		if err := q.FinishTurn(finishCtx, sqlc.FinishTurnParams{
 			Said:       res.Reason,
 			Changes:    res.Changes,
 			Notes:      notes,
@@ -603,7 +613,14 @@ func (h *Handlers) mutateHeld(
 			Messages:   messagesJSON,
 			DurationMs: elapsed,
 			ID:         turn.ID,
-		})
+		}); err != nil {
+			return err
+		}
+		if reply == "" {
+			return nil
+		}
+		_, err := q.CreateReply(finishCtx, reply)
+		return err
 	})
 	var postToVersion time.Duration
 	if txErr != nil {
@@ -614,6 +631,9 @@ func (h *Handlers) mutateHeld(
 		// The conversation is stored now, so the inspector can drop the live
 		// rounds before compaction runs.
 		h.finishRunningTurn()
+		if reply != "" {
+			h.hub.publish(topicPosts)
+		}
 		if versionID.Valid {
 			h.setVersion(versionID.Int64)
 			if oldest, ok := oldestPostTime(triggerPosts); ok {
@@ -661,6 +681,7 @@ func (h *Handlers) mutateHeld(
 		slog.Int64("version_id", versionID.Int64),
 		slog.Int64("duration_ms", elapsed),
 		slog.String("said", res.Reason),
+		slog.Int("reply_runes", utf8.RuneCountInString(reply)),
 		slog.String("changes", res.Changes),
 	}
 	attrs = append(attrs, roundAttrs(res)...)

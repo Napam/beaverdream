@@ -857,8 +857,8 @@ func turnTitle(row TurnRow) string {
 		row.Run.ID, statusLabel(row.Run.Status), millis(row.Run.DurationMs),
 		short(row.PromptTokens), short(row.CachedTokens), short(row.CompletionTokens),
 		row.Rounds)
-	if reply := strings.TrimSpace(row.Run.Said); reply != "" {
-		title += "\nreply: " + reply
+	if reason := strings.TrimSpace(row.Run.Said); reason != "" {
+		title += "\nreason: " + reason
 	}
 	if failure := turnError(row); failure != "" {
 		if row.Trigger != "" {

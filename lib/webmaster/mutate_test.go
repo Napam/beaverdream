@@ -691,16 +691,6 @@ func TestMutateReportsModelFailure(t *testing.T) {
 	}
 }
 
-// The prompt points the model at the browser for per-visitor jokes.
-func TestTheSystemPromptTellsTheModelHowToPersonalize(t *testing.T) {
-	if !strings.Contains(systemPrompt(), "dataset.name") {
-		t.Error("the prompt does not tell the model how to personalize in the browser")
-	}
-	if strings.Contains(systemPrompt(), "set_user_override") {
-		t.Error("the prompt still describes a per-visitor tool")
-	}
-}
-
 // The model styles posts it never writes. Every class the post renderer emits
 // must be named in the static prompt, with the base rules it overrides.
 func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
@@ -723,18 +713,8 @@ func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{
-		strings.TrimSpace(BaseCSS),
-		"white-space:pre-wrap",
-		"span.quote",
-		"a.post-ref",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt lacks %q", want)
-		}
-	}
-	if !strings.HasSuffix(prompt, "Do not write commentary outside tool calls.") {
-		t.Error("the closing instruction is not last")
+	if !strings.Contains(prompt, strings.TrimSpace(BaseCSS)) {
+		t.Error("the prompt lacks BaseCSS")
 	}
 }
 

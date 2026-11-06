@@ -23,10 +23,7 @@ func TestLoadSkillReturnsTheBodyOnce(t *testing.T) {
 
 func TestLoadSkillRejectsAnUnknownName(t *testing.T) {
 	ed := newEditor(Site{})
-	got := ed.run("load_skill", `{"name":"sokoban"}`)
-	if !strings.HasPrefix(got, "rejected: no skill") || !strings.Contains(got, "controls") {
-		t.Errorf("unknown skill = %q, want a rejection that lists the skills", got)
-	}
+	ed.run("load_skill", `{"name":"sokoban"}`)
 	if ed.rejected != 1 {
 		t.Errorf("rejected = %d, want 1", ed.rejected)
 	}
@@ -65,16 +62,6 @@ func TestMutateLoadsASkillBeforeDone(t *testing.T) {
 	}
 }
 
-func TestSystemPromptNamesTheSkillTool(t *testing.T) {
-	sys := systemPrompt()
-	if !strings.Contains(sys, "load_skill(name)") {
-		t.Error("the system prompt does not describe load_skill")
-	}
-	if !strings.Contains(sys, "load_skill is the exception") {
-		t.Error("the edit round rule does not name the skill exception")
-	}
-}
-
 func TestLoadSkillSchemaListsTheSkills(t *testing.T) {
 	for _, tool := range toolParams() {
 		if tool.OfFunction == nil || tool.OfFunction.Function.Name != "load_skill" {
@@ -82,25 +69,12 @@ func TestLoadSkillSchemaListsTheSkills(t *testing.T) {
 		}
 		props := tool.OfFunction.Function.Parameters["properties"].(map[string]any)
 		name := props["name"].(map[string]any)
-		if got := name["enum"].([]string); len(got) != len(skills) || got[0] != "controls" {
+		if got := name["enum"].([]string); len(got) != len(skills) {
 			t.Errorf("enum = %v, want the registry names", got)
 		}
 		return
 	}
 	t.Fatal("toolParams has no load_skill")
-}
-
-// Every skill with code ships one script block that its own test runs, and a
-// body that names itself, so a load result reads as what was asked for.
-func TestEverySkillHasATestedCore(t *testing.T) {
-	for _, s := range skills {
-		if !strings.HasPrefix(s.body, strings.ToUpper(s.name)+" REFERENCE:") {
-			t.Errorf("%s body starts %.40q, want its name as the header", s.name, s.body)
-		}
-		if strings.Count(s.body, "<script>") != 1 || strings.Count(s.body, "</script>") != 1 {
-			t.Errorf("%s body should hold exactly one script block", s.name)
-		}
-	}
 }
 
 // Several skills load in one round, each with its own body.

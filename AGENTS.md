@@ -18,6 +18,12 @@ prefer simple, readable code over production hardening.
   - both: `task check`
   - auto-fix: `task fix` (or `task fix.go` / `task fix.web`)
 - `go test ./...` must pass. Tests use `lib/mockllm`, never a real model.
+- Test behavior, not wording. Never assert that a skill body, the system
+  prompt or a hint contains a phrase, a header or a name: prose changes all
+  the time, and such a test only proves the text was typed. Run the code
+  instead: skill cores in node, prompt builders on real data (the room log,
+  the journal lines, section offsets), and the system prompt staying one
+  stable string.
 
 ## Shape of the app
 

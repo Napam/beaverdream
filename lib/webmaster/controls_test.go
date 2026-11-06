@@ -33,9 +33,6 @@ func TestUserPromptHintsAMovingPage(t *testing.T) {
 	plain, plainSections := userPromptSections(
 		Site{CSS: "body{}", HTML: "{{posts}}"}, room, post,
 	)
-	if strings.Contains(plain, "load_skill") || strings.Contains(plain, "CONTROLS REFERENCE") {
-		t.Error("a still page got the movement hint or the reference")
-	}
 	if last := plainSections[len(plainSections)-1]; last.Name != "new post" {
 		t.Errorf("last section is %q, want new post", last.Name)
 	}
@@ -51,9 +48,6 @@ func TestUserPromptHintsAMovingPage(t *testing.T) {
 	last := sections[len(sections)-1]
 	if last.Name != "controls" || last.End != len(moving) {
 		t.Fatalf("last section is %+v, want the hint ending the prompt", last)
-	}
-	if !strings.Contains(moving[last.Start:], "call load_skill with controls.") {
-		t.Errorf("hint section is %q", moving[last.Start:])
 	}
 	cut := strings.Index(plain, "CURRENT STYLESHEET")
 	if moving[:cut] != plain[:cut] {

@@ -57,21 +57,9 @@ func TestParseJournalSchemaNormalizesStoredKeys(t *testing.T) {
 	}
 }
 
-// The prompt quotes the journal's limits, and each number is built from the
-// constant the server uses, so the prose cannot drift.
-func TestJournalPromptQuotesTheConstants(t *testing.T) {
-	prompt := systemPrompt()
-	for _, want := range []string{
-		fmt.Sprintf("most %d bytes", maxJournalPayload),
-		fmt.Sprintf("about %d a second", JournalRate),
-		fmt.Sprintf("of %d.", JournalBurst),
-		fmt.Sprintf("%d rows covers the last few", defaultJournalMax),
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt is missing %q", want)
-		}
-	}
-	if strings.Contains(prompt, "%!") {
+// The system prompt is built with Sprintf from the server's constants.
+func TestSystemPromptFormats(t *testing.T) {
+	if strings.Contains(systemPrompt(), "%!") {
 		t.Error("prompt has a formatting error")
 	}
 }

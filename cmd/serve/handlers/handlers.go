@@ -15,20 +15,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/lib/env"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/Napam/beaverdream/web/pages"
 )
 
 const (
-	maxBodyLen = 2000
 	// roomLimit is the smallest number of turns the model reads back. The
 	// query limit is the larger of this and the turn backstop, so the log
 	// never drops its oldest line before compaction folds it in. A sliding
 	// start would lose those turns and the cached prompt prefix every turn.
 	roomLimit = 2000
-	// defaultCompactAfterTokens is the estimated transcript budget before
-	// compaction. Estimated at four runes per token.
-	defaultCompactAfterTokens = 128_000
 	// defaultCompactAfterTurns is the backstop for many very short turns.
 	defaultCompactAfterTurns = 10_000
 	// compactMaxTurns caps one summarizer input, so a large backlog is folded
@@ -39,14 +36,16 @@ const (
 	// summarizeTimeout is separate from the mutation budget so a slow summary
 	// cannot starve the rewrite that follows it.
 	summarizeTimeout = 5 * time.Minute
-	// mutationTimeout bounds one model call sequence. It is a backstop: a
-	// quiet stream is cut by the idle limits long before. A whole legal page
-	// is about 17 minutes of generation, and a few rounds follow it.
-	mutationTimeout = time.Hour
 	// draftEvery bounds how often a streaming round repaints the admin panel.
 	// A fast model sends dozens of chunks a second; the panel needs a few.
 	draftEvery = 100 * time.Millisecond
 )
+
+// mutationTimeout bounds one model call sequence. It is a backstop: a quiet
+// stream is cut by the idle limits long before. A whole legal page is about
+// 17 minutes of generation, and a few rounds follow it. TURN_TIMEOUT
+// overrides it for a provider that is slower still.
+var mutationTimeout = env.GetEnvPositiveDuration("TURN_TIMEOUT", time.Hour)
 
 // Config holds the environment knobs the handlers enforce.
 type Config struct {
@@ -63,8 +62,8 @@ type Config struct {
 	AdminURL string
 	// Port is the board's port, used for the link back from the admin pages.
 	Port string
-	// CompactAfterTokens is the estimated transcript size that triggers
-	// compaction. Zero uses the default (128k).
+	// CompactAfterTokens is the estimated whole-prompt size that triggers
+	// compaction. Zero uses webmaster.CompactAfterTokens.
 	CompactAfterTokens int
 	// CompactAfterTurns is the turn-count backstop for very short turns.
 	// Zero uses the default.
@@ -186,10 +185,18 @@ func New(
 		h.cfg.AdminPort = "6932"
 	}
 	if h.compactAfterTokens <= 0 {
-		h.compactAfterTokens = defaultCompactAfterTokens
+		h.compactAfterTokens = webmaster.CompactAfterTokens
 	}
 	if h.compactAfterTurns <= 0 {
 		h.compactAfterTurns = defaultCompactAfterTurns
+	}
+	// Compaction treats the budget as the whole prompt. A page cap that fills
+	// it switches compaction off once the page grows that large.
+	if pageTokens := webmaster.PageBytes() / 4; pageTokens >= h.compactAfterTokens {
+		logger.Warn("MAX_PAGE_BYTES fills the compaction budget; compaction will stop",
+			slog.Int("page_tokens", pageTokens),
+			slog.Int("budget_tokens", h.compactAfterTokens),
+		)
 	}
 	if site, err := queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID

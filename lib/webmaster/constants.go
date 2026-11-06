@@ -1,15 +1,21 @@
 package webmaster
 
-import "time"
+import (
+	"time"
+
+	"github.com/Napam/beaverdream/lib/env"
+)
 
 // Model loop: how much one completion may write, and how the loop answers a
 // provider that misbehaves.
 
 // maxOutputTokens caps a single completion. Reasoning models count their
 // thinking against this cap, so a small one can leave no room for the tool
-// call and the turn ends silent with finish_reason "length". A page or a
-// stylesheet needs much less, and an unused cap costs nothing.
-const maxOutputTokens = 131072
+// call and the turn ends silent with finish_reason "length". The page can be
+// larger than one completion, so edits, not set_site, are how a big page
+// grows. An unused cap costs nothing. Providers differ, so LLM_MAX_OUTPUT_TOKENS
+// overrides it.
+var maxOutputTokens = env.GetEnvPositiveInt("LLM_MAX_OUTPUT_TOKENS", 250_000)
 
 // maxBrokenArgumentRounds stops a provider that answers round after round
 // with tool calls whose arguments are not JSON. Such a round is not a wrong
@@ -27,12 +33,20 @@ const defaultStallPause = 2 * time.Second
 
 // Page and state limits.
 
-// The size caps exist to stop a runaway write, not to keep the page small. A
-// page with a game in it passes 20k bytes, so the cap leaves room for the
-// page to keep growing before a whole rewrite is refused.
+// The size cap exists to stop a runaway write, not to keep the page small. It
+// covers css and html together: the model owns both fields and the prompt
+// carries both, so one budget is simpler than two that can drift.
+// MAX_PAGE_BYTES overrides it; keep it under four times CompactAfterTokens.
+var maxPageLen = env.GetEnvPositiveInt("MAX_PAGE_BYTES", 524_288)
+
+// PageBytes is the cap on css plus html together, in bytes.
+func PageBytes() int { return maxPageLen }
+
+// MaxBodyLen caps a post body and an admin instruction in runes. The prompt's
+// form example and the seed form use the same number.
+const MaxBodyLen = 2000
+
 const (
-	maxCSSLen     = 64000
-	maxHTMLLen    = 192000
 	maxStateKeys  = 8
 	maxStateName  = 32
 	maxStateList  = 100
@@ -75,22 +89,29 @@ const (
 	TurnAlert = "alert"
 )
 
-// roomLogBudget bounds the room log in runes. It matches the 128k-token
-// compaction threshold at four runes per token. The oldest lines are dropped
-// first: the newest conversation is what the next turn has to continue.
-const roomLogBudget = 512_000
+// CompactAfterTokens is the default prompt budget, in estimated tokens at four
+// runes per token. It covers the whole prompt, transcript plus page, so the
+// server compacts the history once the two together reach it. It depends on
+// the model's context window, so COMPACT_AT_PROMPT_TOKENS overrides it.
+var CompactAfterTokens = env.GetEnvPositiveInt("COMPACT_AT_PROMPT_TOKENS", 200_000)
 
-// The summarizer's caps. A summary folds up to a chunk of 1000 turns, and one
-// compaction can follow a transcript of 128k tokens. 6000 characters (about
-// 1500 tokens) is room for the promises, grudges and running jokes of that
-// much conversation, and still small next to the page and the log that follow
-// it. The cap applies to the text stored per row, and each chained summary
-// starts from the previous one, so the memory never grows past it: older
-// detail fades by design. summaryMaxTokens leaves headroom over the character
-// cap.
+// roomLogBudget is the backstop above the compaction threshold, in runes. It
+// is the whole budget at four runes per token, so the log never drops a turn
+// before compaction folds it in. The oldest lines are dropped first: the
+// newest conversation is what the next turn has to continue.
+var roomLogBudget = 4 * CompactAfterTokens
+
+// The summarizer's caps. A summary folds one chunk of turns, and one
+// compaction can follow a transcript as large as the prompt budget.
+// summaryMaxLen is 6000 characters (about 1500 tokens), room for the
+// promises, grudges and running jokes of that much conversation, and still
+// small next to the page and the log that follow it. The cap applies to the
+// text stored per row, and each chained summary starts from the previous one,
+// so the memory never grows past it: older detail fades by design.
+// summaryMaxTokens leaves headroom over the character cap.
 const (
-	summaryMaxTokens = 2000
 	summaryMaxLen    = 6000
+	summaryMaxTokens = summaryMaxLen / 3
 )
 
 // MaxIdentityLen caps a display name in runes.

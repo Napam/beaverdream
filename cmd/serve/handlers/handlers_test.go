@@ -1491,7 +1491,9 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	const posts = 2000
+	// About 296 runes per turn after the 280-rune clip. The default prompt
+	// budget is 200k tokens, so 3000 posts clear it.
+	const posts = 3000
 	for i := 1; i <= posts; i++ {
 		if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
 			Author: "dave",

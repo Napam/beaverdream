@@ -1,7 +1,9 @@
 # Configuration
 
-Every setting is an environment variable. The defaults below come from
-`lib/env/env.go`. The Taskfile sets a few more for `task` runs.
+Every setting is an environment variable. Server settings come from
+`lib/env/env.go`; the few model limits under [Limits](#limits) are read at
+startup by `lib/webmaster` and `cmd/serve/handlers`. `.env.example` lists every
+one with its default. The Taskfile sets a few more for `task` runs.
 
 ## Where values come from
 
@@ -65,10 +67,34 @@ DB_MIGRATE_ON_START=true ./bin/app
   `medium`, `high`, `xhigh` and `max`. Leave it empty for a model that rejects
   the field.
 
-## Mutation budget
+## Turn budget
 
-- `MUTATION_ROUNDS` (default `3`): tool rounds one turn may use. Zero or a
-  negative value falls back to 3.
+- `TURN_MAX_ROUNDS` (default `25`): tool rounds one turn may use. Zero or a
+  negative value falls back to 25.
+- `TURN_TIMEOUT` (default `1h`): backstop for one whole turn.
+
+## Limits
+
+These depend on the model and provider, so they are env vars. Each is read once
+at startup. Every other cap is a constant in `lib/webmaster/constants.go` or
+`cmd/serve/handlers`, because changing it changes the game or the code, not the
+deployment.
+
+- `LLM_MAX_OUTPUT_TOKENS` (default `262144`): one completion. It bounds a whole
+  `set_site`; a larger page grows through edits.
+- `COMPACT_AT_PROMPT_TOKENS` (default `200000`): the prompt budget, transcript
+  plus page, in estimated tokens at four runes each. Past it the history is
+  compacted. The room log backstop is four times this, in runes.
+- `MAX_PAGE_BYTES` (default `524288`): css and html together, in bytes. Keep
+  `MAX_PAGE_BYTES/4` below `COMPACT_AT_PROMPT_TOKENS`, or a full page fills the
+  budget and compaction stops. The server logs a warning at startup if it does.
+- `LLM_IDLE_TIMEOUT` (default: 3m before the first event and while thinking, 2m
+  once a tool call starts): how long a stream may go quiet before the round is
+  retried. Setting it uses one value for every phase. Zero turns the check off.
+
+A full 512 KiB page is about 131k tokens at the four-runes-per-token estimate.
+Check that the model's context holds `COMPACT_AT_PROMPT_TOKENS` plus the system
+prompt and `LLM_MAX_OUTPUT_TOKENS`.
 
 ## Admin
 

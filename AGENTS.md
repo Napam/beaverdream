@@ -59,9 +59,10 @@ prefer simple, readable code over production hardening.
   already in the prompt, and replaying historical tool calls would mutate the
   world again. The trigger posts are skipped in the log because NEW POST shows
   them whole.
-- Compaction is one-way. When the uncompacted history reaches 128k estimated
-  tokens (four runes per token) or a 10k-turn backstop, the server replaces it
-  with one summary message and starts a fresh log after that point. The
+- Compaction is one-way. When the whole prompt reaches the configured budget
+  (200k estimated tokens by default, four runes per token) or a 10k-turn
+  backstop, the server replaces the uncompacted history with one summary
+  message and starts a fresh log after that point. The
   thresholds are `Config.CompactAfterTokens` and `Config.CompactAfterTurns`;
   tests set them low. The summary chains from the previous one, so old detail
   fades by design. Never summarize a running or failed turn, never put markup

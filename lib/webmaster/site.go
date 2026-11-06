@@ -8,6 +8,7 @@ import (
 	"html"
 	"math/rand/v2"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -420,7 +421,7 @@ func IdentityDoc(name string) string {
 		`<h1>beaverdream</h1><p class="tagline">a small message board</p>` +
 		`<form class="postbox" method="post" action="/identity">` +
 		`<p class="postbox-title">your display name</p>` +
-		`<input name="name" maxlength="32" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="display name"` + value + `>` +
+		`<input name="name" maxlength="` + strconv.Itoa(MaxIdentityLen) + `" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="display name"` + value + `>` +
 		`<div class="postbox-actions"><span>shown next to every post you write</span>` +
 		`<button type="submit">save name</button></div>` +
 		`</form>` +

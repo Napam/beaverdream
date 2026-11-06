@@ -29,13 +29,13 @@ waiting, but the quality may drop.
 
 ## Rounds per turn
 
-`MUTATION_ROUNDS` caps the tool rounds one turn may use. The default is `3`. A
+`TURN_MAX_ROUNDS` caps the tool rounds one turn may use. The default is `25`. A
 turn ends when the model calls `done`, or when it runs out of rounds.
 
 ## Cost
 
 Every model round is a paid request. A post can take several rounds, up to
-`MUTATION_ROUNDS`. Compaction makes one more call when the room log gets long.
+`TURN_MAX_ROUNDS`. Compaction makes one more call when the room log gets long.
 Friends can post all evening, so set a spend cap with your provider before you
 start. Check the provider's dashboard while you play.
 

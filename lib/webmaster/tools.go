@@ -103,6 +103,9 @@ func (e *editor) apply(name, arguments string) string {
 				return "rejected: " + err.Error() + "; nothing was applied"
 			}
 		}
+		if err := checkPageSize(css, page); err != nil {
+			return "rejected: " + err.Error() + "; nothing was applied"
+		}
 		changed := css != e.site.CSS || page != e.site.HTML
 		e.site.CSS, e.site.HTML = css, page
 		if !changed {
@@ -261,6 +264,13 @@ func (e *editor) edit(target, old, replacement string) string {
 	} else {
 		next, err = cleanHTML(next)
 	}
+	if err == nil {
+		if target == targetCSS {
+			err = checkPageSize(next, e.site.HTML)
+		} else {
+			err = checkPageSize(e.site.CSS, next)
+		}
+	}
 	if err != nil {
 		return "rejected: " + err.Error() + "; the edit was not applied"
 	}
@@ -358,9 +368,6 @@ func punctuationPattern(old string) string {
 // stream only patches the first.
 func cleanHTML(html string) (string, error) {
 	html = strings.TrimSpace(html)
-	if len(html) > maxHTMLLen {
-		return "", fmt.Errorf("html is longer than %d bytes", maxHTMLLen)
-	}
 	switch strings.Count(html, PostsPlaceholder) {
 	case 0:
 		return "", fmt.Errorf("html must contain %s, where the posts go", PostsPlaceholder)
@@ -458,11 +465,20 @@ func CleanStateValue(value string) string {
 }
 
 func cleanCSS(css string) (string, error) {
-	css = strings.TrimSpace(css)
-	if len(css) > maxCSSLen {
-		return "", fmt.Errorf("stylesheet is longer than %d bytes", maxCSSLen)
+	return strings.TrimSpace(css), nil
+}
+
+// checkPageSize enforces the one cap that covers both fields. The error names
+// the overage so the model knows how much to remove instead of guessing.
+func checkPageSize(css, html string) error {
+	total := len(css) + len(html)
+	if total <= maxPageLen {
+		return nil
 	}
-	return css, nil
+	return fmt.Errorf(
+		"page is %d bytes, over the %d cap; remove at least %d bytes",
+		total, maxPageLen, total-maxPageLen,
+	)
 }
 
 func truncateRunes(s string, limit int) string {

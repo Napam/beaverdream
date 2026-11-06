@@ -413,7 +413,7 @@ templ adminInstruct(csrf string) {
 				name="instruction"
 				rows="3"
 				required
-				maxlength="2000"
+				maxlength={ strconv.Itoa(webmaster.MaxBodyLen) }
 				placeholder="make it look like a 1998 guestbook"
 				data-on:keydown="if (evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) { evt.preventDefault(); evt.target.form.requestSubmit() }"
 				class={ adminInput }

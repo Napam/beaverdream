@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/Napam/beaverdream/lib/env"
 )
 
 // errStalled is the cause a round's context carries when its stream went
@@ -24,11 +26,17 @@ type IdleLimits struct {
 	Call time.Duration
 }
 
-// DefaultIdleLimits are the limits a Mutator starts with.
-var DefaultIdleLimits = IdleLimits{
-	First: 3 * time.Minute,
-	Think: 3 * time.Minute,
-	Call:  2 * time.Minute,
+// DefaultIdleLimits are the limits a Mutator starts with. LLM_IDLE_TIMEOUT sets
+// all three phases to one value, for a provider that is slower than these; a
+// zero turns the checks off.
+var DefaultIdleLimits = idleLimitsFromEnv()
+
+func idleLimitsFromEnv() IdleLimits {
+	limit := env.GetEnvDuration("LLM_IDLE_TIMEOUT", -1)
+	if limit < 0 {
+		return IdleLimits{First: 3 * time.Minute, Think: 3 * time.Minute, Call: 2 * time.Minute}
+	}
+	return IdleLimits{First: limit, Think: limit, Call: limit}
 }
 
 // RoundTrace is what one round's stream looked like from the client, kept so a

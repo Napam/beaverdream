@@ -177,7 +177,7 @@ tasks:
         -e OPENAI_API_KEY \
         -e OPENAI_REASONING_EFFORT \
         -e OPENCODE_SESSION_ID \
-        -e MUTATION_ROUNDS \
+        -e TURN_MAX_ROUNDS \
         -e ADMIN_PASSWORD \
         -e ADMIN_URL \
         -p $PORT:$PORT \

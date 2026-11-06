@@ -90,7 +90,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		h.postDone(w, r)
 		return
 	}
-	body = truncate(body, maxBodyLen)
+	body = truncate(body, webmaster.MaxBodyLen)
 
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
 		Author: author,

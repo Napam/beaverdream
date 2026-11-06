@@ -41,11 +41,11 @@ type Mutator struct {
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
-// take; values below one fall back to three. effort may be empty, or one of
+// take; values below one fall back to 25. effort may be empty, or one of
 // minimal, low, medium, high, xhigh.
 func New(client openai.Client, model string, maxRounds int, effort string) *Mutator {
 	if maxRounds <= 0 {
-		maxRounds = 3
+		maxRounds = 25
 	}
 	return &Mutator{
 		client:    client,
@@ -204,7 +204,7 @@ func (m *Mutator) MutatePosts(
 			StreamOptions: openai.ChatCompletionStreamOptionsParam{
 				IncludeUsage: openai.Bool(true),
 			},
-			MaxTokens:       openai.Int(maxOutputTokens),
+			MaxTokens:       openai.Int(int64(maxOutputTokens)),
 			Temperature:     openai.Float(0.8),
 			ReasoningEffort: m.effort,
 		}, attempt)
@@ -768,9 +768,12 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					},
 					"notes": map[string]any{
 						"type": "string",
-						"description": "Private notes to your future self: positions, promises, " +
-							"grudges, running jokes. Replaces your notes. Omit to keep them. " +
-							"Max 1000 characters.",
+						"description": fmt.Sprintf(
+							"Private notes to your future self: positions, promises, "+
+								"grudges, running jokes. Replaces your notes. Omit to keep them. "+
+								"Max %d characters.",
+							maxNotesLen,
+						),
 					},
 				},
 				"required": []string{"reason"},
@@ -781,7 +784,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 
 // The system prompt is assembled from static pieces, so it is one stable
 // string with a stable prompt cache prefix.
-const systemPromptHead = `You are the webmaster of beaverdream. It starts as a small anonymous message
+var systemPromptHead = fmt.Sprintf(
+	`You are the webmaster of beaverdream. It starts as a small anonymous message
 board, and a post can turn it into anything: a game, a shop, a city, a world
 the posts live in. You are the one other presence in a room full of visitors. You have no text
 channel. The page is your voice: every rewrite is your turn in one continuous
@@ -825,6 +829,10 @@ exactly once, where the server puts the real posts. Any write that drops it
 or repeats it, even in a comment or a script string, is rejected. Everything
 else is yours, including the layout.
 
+The two fields share one size cap: css plus html may be at most %d bytes.
+An edit that pushes the page over is rejected and says how many bytes to
+remove.
+
 Tools:
 - edit(target, old, new): change part of the page. target is css or html.
   old is text copied exactly from that CURRENT section and must appear there
@@ -837,7 +845,9 @@ Tools:
   you send change.
 - load_skill(name): read a how-to before you build one kind of thing, such as a
   world someone moves through. Its result is the reference you build from.
-`
+`,
+	maxPageLen,
+)
 
 var systemPromptMiddle = fmt.Sprintf(
 	`- To restyle a little, append rules: later rules win over earlier ones, so
@@ -846,7 +856,7 @@ var systemPromptMiddle = fmt.Sprintf(
   that asks for a different page is worth the time.
 - set_state_schema(keys): declare shared values the page can read and write.
   Ops are counter, list (keep the newest max entries) and choice (tally one of
-  the options). Up to 8 keys. Declare only what the page actually uses.
+  the options). Up to %d keys. Declare only what the page actually uses.
 - set_journal_schema(keys): declare append-only feeds the page writes and
   folds. Use it when a post asks for something people do together: a game, a
   chat, votes, a shared list. It is the only way to give the page real shared
@@ -883,7 +893,7 @@ from this markup, because the server only listens on these names:
 
 <form class="postbox" method="post" action="/posts" data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()">
   <p class="postbox-title">post a message</p>
-  <textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>
+  <textarea name="body" required maxlength="%d" rows="3" placeholder="say something" aria-label="message"></textarea>
   <div class="postbox-actions"><span>posting as {{name}}</span>
   <button type="submit">post</button></div>
 </form>
@@ -987,7 +997,9 @@ Rules:
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo or restore without asking you.
 `,
+	maxStateKeys,
 	maxJournalKeys,
+	MaxBodyLen,
 )
 
 // journalPrompt explains the one shared store the page can write to. It spells

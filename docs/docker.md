@@ -51,7 +51,7 @@ contain `.env`.
 
 The task passes these from your `.env` (or your shell) into the container:
 `OPENAI_BASE_URL`, `OPENAI_MODEL`, `OPENAI_API_KEY`, `OPENAI_REASONING_EFFORT`,
-`OPENCODE_SESSION_ID`, `MUTATION_ROUNDS`, and `ADMIN_PASSWORD`.
+`OPENCODE_SESSION_ID`, `TURN_MAX_ROUNDS`, and `ADMIN_PASSWORD`.
 
 With no `OPENAI_BASE_URL` set, the container uses the mock model on your host:
 `http://host.docker.internal:6701/v1`. Start it first in another terminal with

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Env = struct {
@@ -74,7 +75,7 @@ func init() {
 		AdminPassword:         os.Getenv("ADMIN_PASSWORD"),
 		AdminURL:              strings.TrimRight(os.Getenv("ADMIN_URL"), "/"),
 		AdminPort:             adminPort(GetEnv("PORT", "6930")),
-		MutationRounds:        GetEnvInt("MUTATION_ROUNDS", 3),
+		MutationRounds:        GetEnvInt("TURN_MAX_ROUNDS", 25),
 		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),
 	}
@@ -113,6 +114,36 @@ func GetEnv(name string, fallback string) string {
 func GetEnvInt(name string, fallback int) int {
 	val, err := strconv.Atoi(os.Getenv(name))
 	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+// GetEnvPositiveInt is GetEnvInt for a value that must be greater than zero. A
+// missing, unparseable, zero or negative value uses fallback.
+func GetEnvPositiveInt(name string, fallback int) int {
+	val, err := strconv.Atoi(os.Getenv(name))
+	if err != nil || val <= 0 {
+		return fallback
+	}
+	return val
+}
+
+// GetEnvDuration reads a Go duration such as "2s" or "1h". A missing or
+// unparseable value uses fallback. Zero is allowed.
+func GetEnvDuration(name string, fallback time.Duration) time.Duration {
+	val, err := time.ParseDuration(os.Getenv(name))
+	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+// GetEnvPositiveDuration is GetEnvDuration for a timeout that must be greater
+// than zero. A zero or negative value uses fallback.
+func GetEnvPositiveDuration(name string, fallback time.Duration) time.Duration {
+	val, err := time.ParseDuration(os.Getenv(name))
+	if err != nil || val <= 0 {
 		return fallback
 	}
 	return val

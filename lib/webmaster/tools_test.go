@@ -30,13 +30,42 @@ func TestSetSiteKeepsScriptsAndHandlers(t *testing.T) {
 	}
 }
 
-func TestSetSiteEnforcesLength(t *testing.T) {
+func TestSetSiteEnforcesThePageCap(t *testing.T) {
 	ed := newEditor(Site{})
 	got := ed.run("set_site", args(t, map[string]string{
-		"html": PostsPlaceholder + strings.Repeat("x", maxHTMLLen),
+		"html": PostsPlaceholder + strings.Repeat("x", maxPageLen),
 	}))
-	if !strings.HasPrefix(got, "rejected:") {
-		t.Fatalf("got %q, want a rejection", got)
+	if !strings.HasPrefix(got, "rejected: page is ") || !strings.Contains(got, "remove at least") {
+		t.Fatalf("got %q, want a page-size rejection with the overage", got)
+	}
+	if ed.dirty {
+		t.Fatal("a rejected set_site marked the site dirty")
+	}
+}
+
+// The old per-html cap was 192000 bytes. The page cap is larger and covers
+// both fields, so a page that would not fit before now passes.
+func TestSetSiteAcceptsAPageOverTheOldCap(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_site", args(t, map[string]string{
+		"html": PostsPlaceholder + strings.Repeat("x", 200_000),
+	}))
+	if got != "ok" {
+		t.Fatalf("got %q, want ok", got)
+	}
+}
+
+func TestPageCapCountsCSSAndHTMLTogether(t *testing.T) {
+	ed := newEditor(Site{})
+	got := ed.run("set_site", args(t, map[string]string{
+		"css":  strings.Repeat("c", maxPageLen-100),
+		"html": PostsPlaceholder + strings.Repeat("h", 200),
+	}))
+	if !strings.HasPrefix(got, "rejected: page is ") {
+		t.Fatalf("got %q, want a page-size rejection", got)
+	}
+	if ed.site.CSS != "" || ed.site.HTML != "" {
+		t.Fatalf("a rejected page changed the site: %+v", ed.site)
 	}
 }
 
@@ -226,17 +255,16 @@ func TestEditCannotRemoveThePlaceholder(t *testing.T) {
 	}
 }
 
-func TestEditEnforcesTheLimits(t *testing.T) {
-	ed := newEditor(Site{CSS: "body{}", HTML: PostsPlaceholder})
-	if got := ed.run("edit", args(t, map[string]string{
-		"target": "css", "old": "", "new": strings.Repeat("x", maxCSSLen),
-	})); !strings.HasPrefix(got, "rejected:") {
-		t.Errorf("oversized stylesheet: got %q", got)
-	}
-	if got := ed.run("edit", args(t, map[string]string{
-		"target": "html", "old": "", "new": strings.Repeat("x", maxHTMLLen),
-	})); !strings.HasPrefix(got, "rejected:") {
-		t.Errorf("oversized html: got %q", got)
+func TestEditEnforcesThePageCap(t *testing.T) {
+	ed := newEditor(Site{
+		CSS:  strings.Repeat("c", maxPageLen-10),
+		HTML: PostsPlaceholder,
+	})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "", "new": strings.Repeat("x", 20),
+	}))
+	if !strings.HasPrefix(got, "rejected: page is ") {
+		t.Fatalf("got %q, want a page-size rejection", got)
 	}
 	if ed.dirty {
 		t.Fatal("a rejected edit marked the site dirty")

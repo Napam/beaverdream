@@ -146,7 +146,7 @@ One correction to the review: it estimated about eight model calls per turn
 because broken-argument rounds are resampled. In the current loop a broken
 round consumes the round budget (`lib/webmaster/mutate.go:182`, `:319`), so the
 default is three calls, not eight. The five-broken-round cap only matters if
-`MUTATION_ROUNDS` is raised above five. Three calls at up to 131k output tokens
+`TURN_MAX_ROUNDS` is raised above five. Three calls at up to 131k output tokens
 each is still enough to make a budget necessary.
 
 ### Residual risk

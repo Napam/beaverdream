@@ -554,7 +554,7 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	instruction := truncate(strings.TrimSpace(r.FormValue("instruction")), maxBodyLen)
+	instruction := truncate(strings.TrimSpace(r.FormValue("instruction")), webmaster.MaxBodyLen)
 	if instruction == "" {
 		h.adminDone(w, r, overviewPanel, "nothing to send")
 		return

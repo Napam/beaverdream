@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -315,6 +316,14 @@ const sqlitePragmas = "_pragma=busy_timeout(5000)" +
 // openSQLite opens the database. The pragmas travel in the DSN so they apply
 // to every pooled connection, not just the first.
 func openSQLite(path string) (*sql.DB, error) {
+	// SQLite creates the file but not its folder, so a DB_PATH in a new
+	// folder works on the first start. A file: URI or :memory: is left alone.
+	file, _, _ := strings.Cut(path, "?")
+	if file != "" && !strings.HasPrefix(file, "file:") && !strings.HasPrefix(file, ":") {
+		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+			return nil, fmt.Errorf("create the database folder: %w", err)
+		}
+	}
 	separator := "?"
 	if strings.Contains(path, "?") {
 		separator = "&"

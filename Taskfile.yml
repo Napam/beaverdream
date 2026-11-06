@@ -44,6 +44,7 @@ tasks:
   db.migrate:
     desc: Run goose migrations against the local sqlite database
     cmds:
+      - mkdir -p "$(dirname "${DB_PATH:-./data/sqlite.db}")"
       - go tool goose sqlite3 -dir ./db/migrations "${DB_PATH:-./data/sqlite.db}" up
 
   dev.mock-llm:

@@ -223,6 +223,7 @@ func New(
 	mutator.OnRoundDone = h.logRoundDone
 	mutator.OnDraft = h.setDraft
 	mutator.OnMessage = h.addRunMessage
+	mutator.OnSay = h.say
 	h.workerWG.Add(1)
 	go func() {
 		defer h.workerWG.Done()
@@ -1271,6 +1272,17 @@ func (h *Handlers) addRunMessage(message webmaster.Message) {
 	}
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
+}
+
+// say posts the webmaster's say call on the board while its turn still runs,
+// so a visitor hears back before the work is done. It runs under h.mu, inside
+// the turn, so a reset cannot delete the room around it.
+func (h *Handlers) say(ctx context.Context, text string) error {
+	if _, err := h.queries.CreateReply(ctx, text); err != nil {
+		return fmt.Errorf("create reply: %w", err)
+	}
+	h.hub.publish(topicPosts)
+	return nil
 }
 
 // setDraft keeps the round being written and repaints the admin panel at

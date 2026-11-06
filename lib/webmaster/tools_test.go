@@ -2,6 +2,7 @@ package webmaster
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -433,6 +434,44 @@ func TestDoneKeepsTheFirstReply(t *testing.T) {
 	)
 	if n := len([]rune(ed.reply)); n != maxReplyLen {
 		t.Fatalf("reply runes = %d, want %d", n, maxReplyLen)
+	}
+}
+
+// say posts once per turn, trimmed and capped. An empty say or a failed post
+// is rejected, and a failed post leaves room for another try.
+func TestSayPostsOncePerTurn(t *testing.T) {
+	ed := newEditor(Site{})
+	var said []string
+	fail := true
+	ed.say = func(text string) error {
+		if fail {
+			return errors.New("db down")
+		}
+		said = append(said, text)
+		return nil
+	}
+	say := func(text string) string {
+		return ed.run("say", args(t, map[string]string{"text": text}))
+	}
+
+	if got := say("  "); !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("empty say = %q", got)
+	}
+	if got := say("sure"); !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("failed post = %q", got)
+	}
+	fail = false
+	if got := say(" " + strings.Repeat("x", maxSayLen+20)); strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("say = %q", got)
+	}
+	if got := say("again"); !strings.HasPrefix(got, "rejected:") {
+		t.Fatalf("second say = %q", got)
+	}
+	if len(said) != 1 || len([]rune(said[0])) != maxSayLen {
+		t.Fatalf("said = %q, want one line cut to %d runes", said, maxSayLen)
+	}
+	if ed.rejected != 3 || ed.done {
+		t.Fatalf("rejected = %d, done = %v", ed.rejected, ed.done)
 	}
 }
 

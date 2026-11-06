@@ -68,7 +68,10 @@ const (
 	maxReasonLen = 200
 	// maxReplyLen is the longest board reply kept. A real answer to a
 	// question needs a paragraph or two; a post may be MaxBodyLen.
-	maxReplyLen    = 1500
+	maxReplyLen = 1500
+	// maxSayLen is the longest say kept: a quick word before the work, not
+	// an answer.
+	maxSayLen      = 300
 	minStateOpts   = 2
 	defaultListMax = 20
 	maxNotesLen    = 1000

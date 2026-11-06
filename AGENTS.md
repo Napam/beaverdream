@@ -74,6 +74,12 @@ prefer simple, readable code over production hardening.
   a trigger: `ListPostsForTurn` reads `kind = 'post'` only. A later `done`
   without a reply keeps the one already given, so a deferred `done` does not
   lose it.
+- `say(text)` lets the webmaster speak before the work: it inserts a `reply`
+  row at once, through `Mutator.OnSay`, while the turn runs under `h.mu`, and
+  publishes `topicPosts`, the same path as a visitor post. One per turn,
+  capped at `maxSayLen`; the prompt has the model send it alone (with any
+  skill loads) before the edit round, then reply again through `done`. A say
+  stays on the board even if the turn later fails.
 - The room log is words and field names only: `#id author: body`, one line per
   webmaster turn with its `said` and `changes`, one `#id you replied: "..."`
   line per reply, kept whole, and one line per server event.
@@ -434,6 +440,7 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   `mockwallet` declares two visitor counters and a recipe and ships a purse
   page that earns, trades and lists the top holders.
   `mockreply` keeps the page and posts a reply on the board.
+  `mocksay` says a line first, then appends a CSS rule and replies again.
   `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`
   next to it is deferred. Each sends the edit and `done` in one response.

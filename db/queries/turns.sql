@@ -11,8 +11,8 @@ RETURNING
   kind;
 
 -- name: CreateReply :one
--- The webmaster's answer on the board, written in its turn's finish
--- transaction so it takes the newest id.
+-- The webmaster's words on the board: done's reply, written in its turn's
+-- finish transaction so it takes the newest id, or a say while the turn runs.
 INSERT INTO
   turns (kind, author, body)
 VALUES

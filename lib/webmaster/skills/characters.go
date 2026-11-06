@@ -530,6 +530,11 @@ the same figure, and a good character is fun to look at.
     armR, legL, legR, wingL, wingR, tail, cape): a mask, an emblem on the
     chest, a sword, a mane, antennae, a shell, a jetpack. They move with the
     joint. r.legs[i].sole is where each foot touches.
+- Points on the body: pose sets angles, not world matrices. After r.pose,
+  call r.root.updateMatrixWorld(), then read the point, every frame, never
+  cached: r.joints.handR.localToWorld(v.set(0, 0, 0.1)) for a point in front
+  of the palm. That is where shots, sparks, trails and anything thrown or attached
+  start, so they leave the hand as it moves.
   Example, a hero: kit.rig({ plan: 'biped', build: 0.8, colors: { main:
   '#1d4fd8', second: '#d62828', skin: '#e9b98f' }, extras: ['cape'] }), a
   flat star on r.joints.chest at the front (+z, chest height), a dark band

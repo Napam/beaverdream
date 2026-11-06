@@ -152,6 +152,27 @@ func decide(prompt string, toolResultSeen bool) []toolCall {
 		})
 		return []toolCall{call}
 	}
+	// mocksay answers first, then appends one CSS rule and replies again.
+	if strings.Contains(prompt, "mocksay") {
+		if !toolResultSeen {
+			return []toolCall{{
+				ID:   "call_say",
+				Type: "function",
+				Function: functionCall{
+					Name:      "say",
+					Arguments: mustJSON(map[string]string{"text": "sure, one sec"}),
+				},
+			}}
+		}
+		done := doneCall("said it first, then edited")
+		done.Function.Arguments = mustJSON(map[string]string{
+			"reason": "said it first, then edited",
+			"reply":  "there you go",
+		})
+		return []toolCall{editCall(map[string]string{
+			"target": "css", "old": "", "new": "h1{color:#c00}",
+		}), done}
+	}
 	if strings.Contains(prompt, "mocknoop") || toolResultSeen {
 		return []toolCall{doneCall("nothing needed changing")}
 	}

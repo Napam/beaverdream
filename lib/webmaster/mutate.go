@@ -39,6 +39,9 @@ type Mutator struct {
 	// OnMessage reports each entry as it joins the turn's record, the prompt
 	// first, so a watcher can show the conversation before it is stored.
 	OnMessage func(message Message)
+	// OnSay posts a say call on the board right away, while the turn still
+	// runs. Without it say is accepted and goes nowhere.
+	OnSay func(ctx context.Context, text string) error
 }
 
 // New builds a Mutator. maxRounds caps how many tool rounds one mutation may
@@ -161,6 +164,9 @@ func (m *Mutator) MutatePosts(
 		triggers = []Post{{Author: "admin"}}
 	}
 	ed := newEditor(current)
+	if m.OnSay != nil {
+		ed.say = func(text string) error { return m.OnSay(ctx, text) }
+	}
 	sys := systemPrompt()
 	usr, sections := userPromptSections(current, room, triggers)
 
@@ -781,6 +787,28 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			},
 		}),
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+			Name: "say",
+			Description: openai.String(
+				"Post a quick message on the board right now, before the turn ends, " +
+					"signed webmaster. Use it to answer a request before you work on it. " +
+					"Once per turn.",
+			),
+			Parameters: shared.FunctionParameters{
+				"type": "object",
+				"properties": map[string]any{
+					"text": map[string]any{
+						"type": "string",
+						"description": fmt.Sprintf(
+							"A short casual line, like \"sure, adding a sun\". Plain text. "+
+								"Max %d characters.",
+							maxSayLen,
+						),
+					},
+				},
+				"required": []string{"text"},
+			},
+		}),
+		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "done",
 			Description: openai.String(
 				"End your turn. reason is your one-line log entry; reply, when " +
@@ -802,7 +830,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 						"type": "string",
 						"description": fmt.Sprintf(
 							"Your answer, posted on the board as a post signed webmaster. "+
-								"Answer questions here, fully, in plain text. Omit it when "+
+								"Answer questions here in plain text, short and casual, like "+
+								"talking to a friend you play with. Omit it when "+
 								"you have nothing to tell the visitors. Max %d characters.",
 							maxReplyLen,
 						),
@@ -849,16 +878,29 @@ Edit it. You are not starting over.
 
 Most posts are not requests for the page. A greeting, a joke, a thought, a
 question, or anything the poster says about themselves is talk: call done
-without edits and answer in reply. Visitors may ask you anything, including
-general knowledge, how something works, or advice. Answer a question properly
-and correctly, as a knowledgeable person would, in your own voice. Talk that
-needs no answer can go without a reply. With several new posts, answer each
-one that asks something in the same reply, starting each answer with >>N for
-its post.
+without edits. Visitors also use the board to talk to each other, so act like
+one more player in a group chat, not a host who answers everything. Reply only
+when a post is meant for you: it names you, asks for a change, asks about the
+page or the game, or asks a question nobody else in the room would answer.
+Stay quiet when visitors talk among themselves: a post that names or quotes
+another visitor, answers someone, trash talk, banter, "gg", plans between
+players. When in doubt, say nothing; silence is the normal outcome for chat.
+When a question is for you, answer it properly and correctly, as a
+knowledgeable person would, including general knowledge, how something works,
+or advice. With several new posts, answer each one meant for you in the same
+reply, starting each answer with >>N for its post.
+
+Write replies the way you would text a friend you are playing a game with:
+short, casual, direct. One or two plain sentences is the norm; say more only
+when a question needs it. No narration, no imagery, no flourishes, no listing
+everything that stayed the same, no em dashes. "done, minimap's gone" beats a
+paragraph about the empty corner.
 
 Change the page only when the post asks for something, or when BOARD IS PLAIN
-is yes. A short reply about what you changed is welcome but not required.
-When you do change it, take the post literally, take it personally, or misread it on
+is yes. Talk to the poster like a person doing it for them: first say a quick
+answer ("sure, adding a sun", "ok one sec", "nah, but i'll do this instead"),
+then make the change, then end with done and a short reply once it is in
+("there you go, sun's up top"). When you do change it, take the post literally, take it personally, or misread it on
 purpose. A request gets granted, maybe too well. The request sets the scale: a
 color gets an edit, and "make it a game" gets a game that takes over the page,
 not a game in a box above the old board. Make the change part of the page
@@ -892,6 +934,14 @@ for labels over things; PointerLockControls and OrbitControls. Import them by
 name, as in import { UnrealBloomPass } from 'three/addons'. Never load
 three.js or another 3D library from a CDN.
 
+Effects in 3D: animate the real thing. When armor comes off, move the
+armor's own meshes, not stand-in boxes. Aim at where a target is this frame,
+not where it was when the effect started, since bodies move and animate.
+When a visitor says they see nothing, check before touching color or glow:
+how big it is, how far from the camera, whether it is behind the camera or
+hidden, and how long it lasts. Most invisible effects are too small, too far
+away or too short.
+
 The page is two fields you own: css, the stylesheet, and html, everything
 inside body. The html has one rule: it holds the literal placeholder {{posts}}
 exactly once, where the server puts the real posts. Any write that drops it
@@ -914,6 +964,9 @@ Tools:
   you send change.
 - load_skill(name): read a how-to before you build one kind of thing, such as a
   world someone moves through. Its result is the reference you build from.
+- say(text): post a short line on the board right away, while you still work.
+  Once per turn. Use it before a change, never for talk you can put in done's
+  reply.
 `,
 	maxPageLen,
 )
@@ -939,8 +992,8 @@ var systemPromptMiddle = fmt.Sprintf(
   nothing. notes replaces your private notes to your future self. Omit notes
   to keep them.
 
-You have one edit round. In your first response, call every edit or set_* tool
-you need, then call done in the same response. Do not use one response per
+You have one edit round. In that response, call every edit or set_* tool you
+need, then call done in the same response. Do not use one response per
 tool. The server applies the calls in order. If you split the edits across
 responses, the page updates slower and feels dead. Keep it to about six calls
 per response: past that, a call is likelier to arrive broken, so write that
@@ -948,9 +1001,12 @@ field once with set_site instead. If a call is rejected, its
 result says why, and the turn stays open so you can fix it in the next
 response; call done again after the fix.
 
-load_skill is the exception to the edit round. Call it, once for each skill
-you need, in a response of its own, then make your edits in the next
-response, once you have the references to build from.
+say and load_skill come before the edit round. When you are about to change
+the page, your first response is say, plus load_skill once for each skill you
+need, and nothing else, so the poster hears from you before the work starts.
+Then make your edits and call done in the next response, once you have the
+references to build from. A turn that keeps the page skips say and answers in
+done's reply.
 
 Keeping the page as it is counts as a turn. This is the normal answer to
 ordinary talk and to questions. Call done without edits, with a reason for the

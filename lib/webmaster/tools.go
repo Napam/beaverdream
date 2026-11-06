@@ -97,6 +97,12 @@ type editor struct {
 	// loaded names the skills this turn already returned. Their bodies stay
 	// in the conversation, so a second load only points back at them.
 	loaded map[string]bool
+	// say posts a message on the board while the turn runs. Nil means
+	// nobody listens, and say only reports ok.
+	say func(text string) error
+	// spoke is set once say posted, because a turn says one thing up front
+	// and keeps the rest for done's reply.
+	spoke bool
 }
 
 func newEditor(site Site) *editor {
@@ -262,6 +268,28 @@ func (e *editor) apply(name, arguments string) string {
 		}
 		e.loaded[in.Name] = true
 		return body
+
+	case "say":
+		var in struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &in); err != nil {
+			return e.argumentsRejected(arguments, err)
+		}
+		text := truncateRunes(strings.TrimSpace(in.Text), maxSayLen)
+		if text == "" {
+			return "rejected: say needs text"
+		}
+		if e.spoke {
+			return "rejected: you already said something this turn; put the rest in done's reply"
+		}
+		if e.say != nil {
+			if err := e.say(text); err != nil {
+				return "rejected: could not post: " + err.Error()
+			}
+		}
+		e.spoke = true
+		return "ok: posted on the board"
 
 	case "done":
 		var in struct {

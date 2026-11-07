@@ -2,9 +2,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -17,13 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// VisitorCookieName is an opaque id the server draws once per browser. Display
-// names are not unique, so this is what can hold a seat in a game.
-const VisitorCookieName = "beaverdream_visitor"
-
 const (
-	visitorCookieAge = 365 * 24 * time.Hour
-	maxJournalBody   = 4096
+	maxJournalBody = 4096
 	// maxJournalRead matches the largest key the model can declare, so a
 	// first load gets the whole feed instead of its oldest page.
 	maxJournalRead    = 1000
@@ -75,69 +67,22 @@ func journalRowFrom(row sqlc.Journal) journalRow {
 	}
 }
 
-// visitorFromRequest returns the browser's opaque id, drawing one on the first
-// visit. The value is not a credential: it only separates one browser from
-// another.
-func visitorFromRequest(w http.ResponseWriter, r *http.Request) string {
-	if cookie, err := r.Cookie(VisitorCookieName); err == nil && validVisitorID(cookie.Value) {
-		return cookie.Value
-	}
-	id := newVisitorID()
-	if w != nil {
-		http.SetCookie(w, &http.Cookie{
-			Name:     VisitorCookieName,
-			Value:    id,
-			Path:     "/",
-			MaxAge:   int(visitorCookieAge.Seconds()),
-			Expires:  time.Now().Add(visitorCookieAge),
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-	}
-	return id
-}
-
-// visitorCookie reads the browser's id without drawing a new one, for a
-// request that cannot set a cookie, such as the live stream.
-func visitorCookie(r *http.Request) string {
-	if cookie, err := r.Cookie(VisitorCookieName); err == nil && validVisitorID(cookie.Value) {
-		return cookie.Value
-	}
-	return ""
-}
-
-func newVisitorID() string {
-	buf := make([]byte, 8)
-	_, _ = rand.Read(buf)
-	return hex.EncodeToString(buf)
-}
-
-func validVisitorID(id string) bool {
-	if len(id) != 16 {
-		return false
-	}
-	_, err := hex.DecodeString(id)
-	return err == nil
-}
-
-// publicVisitor is what the world sees: rows and the page carry this, never
-// the cookie itself. A visitor id in the log cannot be copied into another
-// browser to take someone's seat, because the cookie it comes from is
-// HttpOnly and never published.
-func publicVisitor(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:8])
+// publicVisitor is what a world row carries: the identity id itself. One
+// stable id across every browser session and every world is what lets the same
+// person keep their seat, holdings and journal rows.
+func publicVisitor(identityID string) string {
+	return identityID
 }
 
 // JournalAppend stores one event. The page owns the meaning; the server owns
 // order, identity, the match boundary and the rules stamp.
 func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
-	author := identityFromRequest(r)
-	if author == "" {
-		writeStateError(w, http.StatusUnauthorized, "pick a name first")
+	p := principalFrom(r)
+	if p == nil {
+		writeStateError(w, http.StatusUnauthorized, "sign in to play")
 		return
 	}
-	visitor := visitorFromRequest(w, r)
+	visitor := p.IdentityID
 	key := chi.URLParam(r, "key")
 
 	site, err := h.queries.CurrentSite(r.Context())

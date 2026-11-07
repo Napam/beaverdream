@@ -51,6 +51,8 @@ type JournalRowView struct {
 // the picked filters. OlderBefore is the id to page back from, or 0 when this
 // is the last page.
 type JournalBrowse struct {
+	// Base is the world's admin mount path, for links.
+	Base        string
 	Key         string
 	Match       int64
 	Visitor     string
@@ -66,8 +68,9 @@ func SortJournalKeys(keys []JournalKeyView) {
 }
 
 // journalPath is the journal page with a selection.
-func journalPath(feed string, match int64, visitor string, before int64) string {
+func journalPath(base, feed string, match int64, visitor string, before int64) string {
 	return Panel{
+		Base:    base,
 		Page:    PageJournal,
 		Feed:    feed,
 		Match:   match,
@@ -120,7 +123,7 @@ func clearConfirm(key string) string {
 // clearAction is where a key's clear form posts. The key is a lowercase name,
 // so it is safe in a path and a script string.
 func clearAction(key string, p Panel) string {
-	return "/admin/journal/" + key + "/clear" + p.query()
+	return p.Action("/journal/"+key+"/clear") + p.query()
 }
 
 // payloadText shows a payload on one block. Hostile text is safe: templ
@@ -146,7 +149,7 @@ func holdingsClearConfirm(key string) string {
 // holdingsClearAction is where a visitor counter's clear form posts. The key
 // is a lowercase name, so it is safe in a path and a script string.
 func holdingsClearAction(key string, p Panel) string {
-	return "/admin/state/" + key + "/clear" + p.query()
+	return p.Action("/state/"+key+"/clear") + p.query()
 }
 
 func signed(n int64) string {

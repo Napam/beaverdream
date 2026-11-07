@@ -121,15 +121,16 @@ func stateValueMatches(def webmaster.StateKey, raw string) bool {
 // action gets 204, because every open page gets the new value from its live
 // stream. A plain form is sent back to the board; a fetch gets JSON.
 func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
-	author := identityFromRequest(r)
-	if author == "" {
+	p := principalFrom(r)
+	if p == nil {
 		if wantsHTML(r) {
-			http.Redirect(w, r, "/", http.StatusSeeOther)
+			http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 			return
 		}
-		writeStateError(w, http.StatusUnauthorized, "pick a name first")
+		writeStateError(w, http.StatusUnauthorized, "sign in to play")
 		return
 	}
+	author := p.DisplayName
 	if err := r.ParseForm(); err != nil {
 		writeStateError(w, http.StatusBadRequest, "bad form")
 		return
@@ -152,29 +153,15 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	// The cooldown keys on the browser, not the display name, so two people
-	// who picked the same name do not throttle each other. A request without
-	// the visitor cookie falls back to the name; a fresh id per request would
-	// skip the cooldown. Visitor ops need the cookie, since it owns the
-	// counts, and every page the board serves sets it.
-	visitor := visitorCookie(r)
+	// The cooldown keys on the identity, not the display name, so two people
+	// who picked the same name do not throttle each other. A visitor counter
+	// is owned by the identity, the same id in every browser and world.
+	visitor := p.IdentityID
 	slot := visitor
-	if visitor == "" {
-		if !def.Global() {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			writeJSON(
-				w,
-				map[string]any{"ok": false, "reason": refusedBad, "error": "no visitor id"},
-			)
-			return
-		}
-		slot = "name:" + author
-	}
 	if !h.allowStateWrite(slot, key) {
 		if def.Global() {
 			if wantsHTML(r) {
-				http.Redirect(w, r, "/", http.StatusSeeOther)
+				http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 				return
 			}
 			writeStateError(w, http.StatusTooManyRequests, "slow down")
@@ -222,7 +209,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

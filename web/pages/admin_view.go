@@ -761,15 +761,6 @@ func statusBar(status string) string {
 	return "bg-gray-400"
 }
 
-// turnPath is a turn's page. The newest turn links to the page that follows
-// the newest, so it keeps up as turns land.
-func turnPath(id int64, newest bool) string {
-	if newest {
-		return "/admin/turns"
-	}
-	return "/admin/turns/" + strconv.FormatInt(id, 10)
-}
-
 // pickedRow highlights the turn the list shows: the picked one, or the newest
 // when nothing is picked. The bar sits on the left edge so a row keeps its
 // height wherever it appears.

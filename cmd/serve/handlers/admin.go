@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,20 +22,18 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
-// requireAdmin guards the admin routes. A request is allowed with the
-// remembered login cookie or the admin token in a header or form field. The
-// cookie is safe only because these routes live on the admin host; see
-// AdminCookieName. A state change from another origin is refused outright,
-// so the board's scripts cannot drive an action with a borrowed cookie.
+// requireAdmin guards one world's admin routes. The app auth middleware has
+// already authenticated the session and the frame headers are on the router;
+// this only checks the ADMIN role and, for a cookie request, the CSRF result.
 func (h *Handlers) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	h.adminHeaders(w)
-	authed, csrf := h.adminAccess(r)
-	if !authed {
+	p := principalFrom(r)
+	if p == nil || !p.Admin {
 		// 404 rather than 403: the panel should not advertise itself.
 		http.NotFound(w, r)
 		return false
 	}
-	if !csrf {
+	if r.Method == http.MethodPost && !p.API && !p.CSRFOK {
 		h.logger.Warn("Admin action refused for a missing token",
 			slog.String("path", r.URL.Path),
 		)
@@ -44,23 +41,6 @@ func (h *Handlers) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
-}
-
-// adminTokenOK reports a request that carries the admin token: the stream and
-// fetch calls send it as a header, action forms as a hidden field. The query
-// string is deliberately not accepted, so the token never lands in a URL,
-// history entry or referrer.
-func (h *Handlers) adminTokenOK(r *http.Request) bool {
-	token := r.Header.Get("X-Admin-Token")
-	if token == "" {
-		token = r.PostFormValue("token")
-	}
-	return h.tokenMatches(token)
-}
-
-func (h *Handlers) tokenMatches(token string) bool {
-	return h.cfg.AdminToken != "" &&
-		subtle.ConstantTimeCompare([]byte(token), []byte(h.cfg.AdminToken)) == 1
 }
 
 // adminHeaders are the ones every admin response carries.
@@ -73,6 +53,22 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
+// adminBase is the world's admin mount path.
+func (h *Handlers) adminBase() string {
+	return "/admin/w/" + h.world.Slug
+}
+
+// basePath is the world's board mount path, without a trailing slash.
+func (h *Handlers) basePath() string {
+	return "/w/" + h.world.Slug
+}
+
+// boardPath is the board page with the trailing slash relative model links
+// resolve against.
+func (h *Handlers) boardPath() string {
+	return h.basePath() + "/"
+}
+
 // Admin, AdminTurns, AdminTurn and AdminSite are the admin pages. Each one
 // shows the password form until the browser remembers a login. The password
 // form POSTs back to the same path; a correct password sets the signed,
@@ -80,11 +76,11 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 // URL. These routes are only served on the admin host, which has no board and
 // so never runs the model's JavaScript.
 func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, pages.Panel{Page: pages.PageOverview})
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageOverview})
 }
 
 func (h *Handlers) AdminTurns(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, pages.Panel{Page: pages.PageTurns})
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageTurns})
 }
 
 func (h *Handlers) AdminTurn(w http.ResponseWriter, r *http.Request) {
@@ -93,50 +89,21 @@ func (h *Handlers) AdminTurn(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.servePanel(w, r, pages.Panel{Page: pages.PageTurns, Turn: id})
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id})
 }
 
 func (h *Handlers) AdminSite(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, pages.Panel{Page: pages.PageSite})
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageSite})
 }
 
-// servePanel answers one admin page: the password form without the token, the
-// page patched into #admin-body for the panel's own navigation, and the whole
-// document otherwise.
+// servePanel answers one world admin page. The app auth middleware owns
+// sign-in; a non-admin never reaches here, and an admin session that expires
+// is sent back to the app login on its next request.
 func (h *Handlers) servePanel(w http.ResponseWriter, r *http.Request, panel pages.Panel) {
-	authed, _ := h.adminAccess(r)
-	switch {
-	case authed:
-		h.adminDone(w, r, panel, "")
-	case r.Method == http.MethodPost && h.tokenMatches(r.PostFormValue("password")):
-		// Answer with a redirect, so the next request carries the new cookie
-		// and the page gets its CSRF token, and a reload cannot re-post the
-		// password.
-		h.adminHeaders(w)
-		h.setAdminSession(w, r)
-		http.Redirect(w, r, r.URL.RequestURI(), http.StatusSeeOther)
-	case r.Method == http.MethodPost:
-		h.renderLogin(w, r, panel, true)
-	default:
-		h.renderLogin(w, r, panel, false)
+	if !h.requireAdmin(w, r) {
+		return
 	}
-}
-
-// renderLogin is the only page an unauthenticated visitor gets. A failed
-// password answers 401, so a tool can tell the attempt apart from a success.
-func (h *Handlers) renderLogin(
-	w http.ResponseWriter,
-	r *http.Request,
-	panel pages.Panel,
-	failed bool,
-) {
-	h.adminHeaders(w)
-	if failed {
-		w.WriteHeader(http.StatusUnauthorized)
-	}
-	if err := pages.AdminLogin(panel.Path(), failed).Render(r.Context(), w); err != nil {
-		h.logger.Error("Failed to render the admin login", slog.Any("error", err))
-	}
+	h.adminDone(w, r, panel, "")
 }
 
 // errNoTurn is a turn page whose id names no webmaster turn.
@@ -153,8 +120,10 @@ func (h *Handlers) adminDone(
 ) {
 	h.adminHeaders(w)
 	view, err := h.loadAdmin(r.Context(), panel, message)
-	view.Board = h.BoardURL(r)
-	view.CSRF = h.csrfFor(r)
+	view.Board = playOrigin(r, h.cfg) + h.boardPath()
+	if p := principalFrom(r); p != nil {
+		view.CSRF = p.CSRFToken
+	}
 	if errors.Is(err, errNoTurn) {
 		http.NotFound(w, r)
 		return
@@ -230,7 +199,7 @@ func (h *Handlers) loadAdmin(
 		}
 		view.Turns = turns
 		view.Turn = detail
-		view.Queue = pages.NewQueue(h.queuedWork())
+		view.Queue = h.queueView(ctx)
 		if live {
 			view.Run = run
 			view.Panel.Live = true
@@ -272,12 +241,21 @@ func (h *Handlers) adminStreamInit(panel pages.Panel) string {
 	)
 }
 
-// The pages actions answer with: instructions from the overview, repairs
-// from the site page.
-var (
-	overviewPanel = pages.Panel{Page: pages.PageOverview}
-	sitePanel     = pages.Panel{Page: pages.PageSite}
-)
+// queueView shows the queued posts with display names, not identity ids.
+func (h *Handlers) queueView(ctx context.Context) pages.QueueView {
+	posts, instructions := h.queuedWork()
+	shown := make([]sqlc.Post, len(posts))
+	copy(shown, posts)
+	for i := range shown {
+		shown[i].Author = h.authorName(ctx, shown[i].Author)
+	}
+	return pages.NewQueue(shown, instructions)
+}
+
+// panel names one page of this world's admin.
+func (h *Handlers) panel(page string) pages.Panel {
+	return pages.Panel{Base: h.adminBase(), Page: page}
+}
 
 const (
 	// adminTurnCount is how many turns the list and the charts show.
@@ -347,6 +325,9 @@ func (h *Handlers) withStoredPosts(ctx context.Context, row pages.TurnRow) pages
 			slog.Any("error", err),
 		)
 		return row
+	}
+	for i := range posts {
+		posts[i].Author = h.authorName(ctx, posts[i].Author)
 	}
 	return row.WithPosts(posts)
 }
@@ -545,7 +526,7 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 		return fmt.Sprintf("undid version %d", current.ID), true
 	}()
 	if ok {
-		h.adminDone(w, r, sitePanel, message)
+		h.adminDone(w, r, h.panel(pages.PageSite), message)
 	}
 }
 
@@ -558,14 +539,14 @@ func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
 	changed, err := h.heal(r.Context())
 	if err != nil {
 		h.logger.Error("Failed to heal the board", slog.Any("error", err))
-		h.adminDone(w, r, sitePanel, "heal failed: "+err.Error())
+		h.adminDone(w, r, h.panel(pages.PageSite), "heal failed: "+err.Error())
 		return
 	}
 	if !changed {
-		h.adminDone(w, r, sitePanel, "the board is already plain")
+		h.adminDone(w, r, h.panel(pages.PageSite), "the board is already plain")
 		return
 	}
-	h.adminDone(w, r, sitePanel, "the board went back to the seed")
+	h.adminDone(w, r, h.panel(pages.PageSite), "the board went back to the seed")
 }
 
 // AdminMutate sends a free-form instruction straight to the model. It can also
@@ -582,7 +563,7 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 
 	instruction := truncate(strings.TrimSpace(r.FormValue("instruction")), webmaster.MaxBodyLen)
 	if instruction == "" {
-		h.adminDone(w, r, overviewPanel, "nothing to send")
+		h.adminDone(w, r, h.panel(pages.PageOverview), "nothing to send")
 		return
 	}
 
@@ -604,11 +585,11 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 	res, err := h.mutate(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
-		h.adminDone(w, r, overviewPanel, "mutation failed: "+err.Error())
+		h.adminDone(w, r, h.panel(pages.PageOverview), "mutation failed: "+err.Error())
 	case res.Changed:
-		h.adminDone(w, r, overviewPanel, "changed: "+res.Reason)
+		h.adminDone(w, r, h.panel(pages.PageOverview), "changed: "+res.Reason)
 	default:
-		h.adminDone(w, r, overviewPanel, "no change: "+res.Reason)
+		h.adminDone(w, r, h.panel(pages.PageOverview), "no change: "+res.Reason)
 	}
 }
 
@@ -625,7 +606,7 @@ func (h *Handlers) StopTurn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad turn id", http.StatusBadRequest)
 		return
 	}
-	panel := pages.Panel{Page: pages.PageTurns, Turn: id}
+	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id}
 	if h.stopTurn(id) {
 		h.adminDone(w, r, panel, "stop sent, the turn is ending")
 		return
@@ -649,7 +630,7 @@ func (h *Handlers) RetryTurn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad turn id", http.StatusBadRequest)
 		return
 	}
-	panel := pages.Panel{Page: pages.PageTurns, Turn: id}
+	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id}
 
 	res, refusal, err := h.runRetry(r.Context(), id)
 	switch {
@@ -660,9 +641,19 @@ func (h *Handlers) RetryTurn(w http.ResponseWriter, r *http.Request) {
 	case refusal != "":
 		h.adminDone(w, r, panel, refusal)
 	case res.Changed:
-		h.adminDone(w, r, pages.Panel{Page: pages.PageTurns}, "retried: "+res.Reason)
+		h.adminDone(
+			w,
+			r,
+			pages.Panel{Base: h.adminBase(), Page: pages.PageTurns},
+			"retried: "+res.Reason,
+		)
 	default:
-		h.adminDone(w, r, pages.Panel{Page: pages.PageTurns}, "retried, no change: "+res.Reason)
+		h.adminDone(
+			w,
+			r,
+			pages.Panel{Base: h.adminBase(), Page: pages.PageTurns},
+			"retried, no change: "+res.Reason,
+		)
 	}
 }
 
@@ -776,6 +767,6 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return fmt.Sprintf("restored version %d", id), true
 	}()
 	if ok {
-		h.adminDone(w, r, sitePanel, message)
+		h.adminDone(w, r, h.panel(pages.PageSite), message)
 	}
 }

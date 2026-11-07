@@ -44,7 +44,7 @@ func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 	var once sync.Once
 	h, queries := setupWithModel(
 		t,
-		handlers.Config{AdminToken: testAdminToken},
+		handlers.Config{},
 		holdModel(&calls, release, 1),
 	)
 	// After the server's cleanup, so a fatal cannot leave a held call

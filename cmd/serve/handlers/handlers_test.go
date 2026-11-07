@@ -22,6 +22,7 @@ import (
 	"github.com/Napam/beaverdream/db"
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/mockllm"
+	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/Napam/beaverdream/web/pages"
 	"github.com/go-chi/chi/v5"
@@ -34,7 +35,7 @@ const testAdminToken = "test-token"
 
 func setup(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
-	return setupWithConfig(t, handlers.Config{AdminToken: testAdminToken})
+	return setupWithConfig(t, handlers.Config{})
 }
 
 func setupWithConfig(t *testing.T, cfg handlers.Config) (*handlers.Handlers, *sqlc.Queries) {
@@ -50,7 +51,8 @@ func setupWithModel(
 ) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
 
-	dbPath := filepath.Join(t.TempDir(), "test.db") +
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db") +
 		"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 	dbConn, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -68,6 +70,18 @@ func setupWithModel(
 		t.Fatalf("migrate: %v", err)
 	}
 
+	reg, err := registry.Open(
+		context.Background(),
+		filepath.Join(dir, "registry.db"),
+		beaverdream.RegistryMigrationsFS,
+		logger,
+		registry.WithHasher(registry.NewArgon2id(1, 1024, 1)),
+	)
+	if err != nil {
+		t.Fatalf("open registry: %v", err)
+	}
+	t.Cleanup(func() { _ = reg.Close() })
+
 	mockServer := httptest.NewServer(wrap(mockllm.Handler()))
 	t.Cleanup(mockServer.Close)
 
@@ -76,13 +90,17 @@ func setupWithModel(
 		option.WithAPIKey("test"),
 	)
 	queries := sqlc.New(dbConn)
-	h := handlers.New(
-		logger,
-		dbConn,
-		queries,
-		webmaster.New(client, "mock-model", 3, ""),
-		cfg,
-	)
+	h := handlers.New(handlers.Deps{
+		Logger:   logger,
+		Registry: reg,
+		World: registry.World{
+			ID: "test-world", Slug: "test", Status: registry.WorldReady,
+		},
+		DB:      dbConn,
+		Queries: queries,
+		Mutator: webmaster.New(client, "mock-model", 3, ""),
+		Config:  cfg,
+	})
 	t.Cleanup(h.Close)
 	return h, queries
 }
@@ -90,7 +108,6 @@ func setupWithModel(
 func setupCompaction(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
 	return setupWithConfig(t, handlers.Config{
-		AdminToken:         testAdminToken,
 		CompactAfterTokens: 2500,
 		CompactAfterTurns:  40,
 	})
@@ -102,8 +119,16 @@ func withURLParam(req *http.Request, key, value string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
 
-func identityCookie(name string) *http.Cookie {
-	return &http.Cookie{Name: handlers.IdentityCookieName, Value: url.QueryEscape(name)}
+// withIdentity makes a request as a signed-in play identity. The id is the
+// name here because these unit tests do not seed a registry identity for every
+// speaker; the world handler falls back to the id when it cannot resolve one.
+func withIdentity(req *http.Request, name string) *http.Request {
+	return handlers.WithTestPrincipal(req, name, name, false, true)
+}
+
+// withAdmin makes a request as the bootstrap admin on the app plane.
+func withAdmin(req *http.Request) *http.Request {
+	return handlers.WithTestAdmin(req, "admin", "admin")
 }
 
 func postForm(
@@ -127,7 +152,7 @@ func postAdmin(
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("X-Admin-Token", testAdminToken)
+	req = withAdmin(req)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	return rec
@@ -142,7 +167,7 @@ func postAdminAt(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, nil)
-	req.Header.Set("X-Admin-Token", testAdminToken)
+	req = withAdmin(req)
 	rec := httptest.NewRecorder()
 	h(rec, withURLParam(req, "id", id))
 	return rec
@@ -152,7 +177,7 @@ func postAdminAt(
 func getAdmin(t *testing.T, h http.HandlerFunc, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("X-Admin-Token", testAdminToken)
+	req = withAdmin(req)
 	rec := httptest.NewRecorder()
 	h(rec, req)
 	return rec
@@ -169,7 +194,7 @@ func postFormAs(
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if name != "" {
-		req.AddCookie(identityCookie(name))
+		req = withIdentity(req, name)
 	}
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -188,7 +213,7 @@ func stateForm(
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if name != "" {
-		req.AddCookie(identityCookie(name))
+		req = withIdentity(req, name)
 	}
 	req = withURLParam(req, "key", key)
 	rec := httptest.NewRecorder()
@@ -226,8 +251,8 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/" {
-		t.Errorf("Location = %q, want / so the page stays at the top", got)
+	if got := rec.Header().Get("Location"); got != "/w/test/" {
+		t.Errorf("Location = %q, want /w/test/ so the page stays at the top", got)
 	}
 
 	posts, err := queries.ListPosts(ctx)
@@ -348,7 +373,7 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 	h, _ := setup(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
+	req = withIdentity(req, "dave")
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 
@@ -363,10 +388,10 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		"<!doctype html>",
 		"<h1>beaverdream</h1>",
 		`class="postbox"`,
-		`action="/posts"`,
+		`action="posts"`,
 		`posting as dave`,
-		`href="/identity"`,
-		`set name`,
+		`/account`,
+		`account`,
 		`data-version="1"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -396,7 +421,7 @@ func TestIndexServesModelScripts(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
+	req = withIdentity(req, "dave")
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 	if rec.Code != http.StatusOK {
@@ -404,123 +429,6 @@ func TestIndexServesModelScripts(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `<script>document.title='owned'</script>`) {
 		t.Error("model script was stripped from the page")
-	}
-}
-
-func TestIndexAsksForNameOnFirstVisit(t *testing.T) {
-	h, _ := setup(t)
-
-	rec := httptest.NewRecorder()
-	h.Index(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
-		t.Errorf("Cache-Control = %q, want no-store", got)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{
-		`action="/identity"`,
-		`name="name"`,
-		"shown next to every post you write",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("identity page is missing %q", want)
-		}
-	}
-	if strings.Contains(body, `action="/posts"`) {
-		t.Error("first visit already shows the board form")
-	}
-}
-
-func TestSetIdentityStoresCookie(t *testing.T) {
-	h, _ := setup(t)
-
-	rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
-		"name": {"  Dave  "},
-	}, "")
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want 303", rec.Code)
-	}
-	if got := rec.Header().Get("Location"); got != "/" {
-		t.Errorf("Location = %q, want /", got)
-	}
-
-	cookies := rec.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("cookies = %d, want 1", len(cookies))
-	}
-	cookie := cookies[0]
-	if cookie.Name != handlers.IdentityCookieName {
-		t.Errorf("cookie name = %q", cookie.Name)
-	}
-	if cookie.Value != "Dave" {
-		t.Errorf("cookie value = %q, want Dave", cookie.Value)
-	}
-	if !cookie.HttpOnly {
-		t.Error("identity cookie is not HttpOnly")
-	}
-	if cookie.SameSite != http.SameSiteLaxMode {
-		t.Errorf("SameSite = %v, want Lax", cookie.SameSite)
-	}
-	if cookie.Path != "/" {
-		t.Errorf("Path = %q, want /", cookie.Path)
-	}
-	if cookie.MaxAge <= 0 {
-		t.Errorf("MaxAge = %d, want a persistent cookie", cookie.MaxAge)
-	}
-
-	board := httptest.NewRequest(http.MethodGet, "/", nil)
-	board.AddCookie(cookie)
-	page := httptest.NewRecorder()
-	h.Index(page, board)
-	if !strings.Contains(page.Body.String(), `action="/posts"`) {
-		t.Error("identity cookie did not unlock the board")
-	}
-}
-
-func TestIdentityPagePrefillsTheCurrentName(t *testing.T) {
-	h, _ := setup(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/identity", nil)
-	req.AddCookie(identityCookie("dave"))
-	rec := httptest.NewRecorder()
-	h.Identity(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	for _, want := range []string{
-		`value="dave"`,
-		"your display name",
-		"save name",
-		`href="/"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("identity page is missing %q", want)
-		}
-	}
-}
-
-func TestSetIdentityDefaultsAnUsableName(t *testing.T) {
-	h, _ := setup(t)
-
-	for _, input := range []string{"", "   ", "<><><>", "admin", "ADMIN"} {
-		rec := postFormAs(t, h.SetIdentity, "/identity", url.Values{
-			"name": {input},
-		}, "")
-		if rec.Code != http.StatusSeeOther {
-			t.Fatalf("input %q: status = %d, want 303", input, rec.Code)
-		}
-		cookies := rec.Result().Cookies()
-		if len(cookies) != 1 {
-			t.Fatalf("input %q: cookies = %d, want 1", input, len(cookies))
-		}
-		if cookies[0].Value != "Anonymous" {
-			t.Errorf("input %q: value = %q, want Anonymous", input, cookies[0].Value)
-		}
 	}
 }
 
@@ -533,8 +441,8 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/" {
-		t.Errorf("Location = %q, want /", got)
+	if got := rec.Header().Get("Location"); got != "/w/test/" {
+		t.Errorf("Location = %q, want /w/test/", got)
 	}
 
 	posts, err := queries.ListPosts(context.Background())
@@ -610,7 +518,7 @@ func TestIndexCarriesTheNewestPostID(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
+	req = withIdentity(req, "dave")
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 	if rec.Code != http.StatusOK {
@@ -625,100 +533,38 @@ func TestIndexCarriesTheNewestPostID(t *testing.T) {
 	}
 }
 
-func TestAdminRequiresTokenWhenSet(t *testing.T) {
-	h, _ := setupWithConfig(t, handlers.Config{AdminToken: "secret"})
+func TestAdminPanelNeedsAnAdminPrincipal(t *testing.T) {
+	h, _ := setup(t)
 
-	// A browser GET cannot send a header, so it gets the password form and
-	// none of the panel.
-	open := httptest.NewRecorder()
-	h.Admin(open, httptest.NewRequest(http.MethodGet, "/admin", nil))
-	if open.Code != http.StatusOK {
-		t.Fatalf("without token: status = %d, want the login page", open.Code)
+	anonymous := httptest.NewRecorder()
+	h.Admin(anonymous, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if anonymous.Code != http.StatusNotFound {
+		t.Fatalf("without principal: status = %d, want 404", anonymous.Code)
 	}
-	if !strings.Contains(open.Body.String(), `name="password"`) {
-		t.Fatal("the page without a token is not the password form")
-	}
-	if strings.Contains(open.Body.String(), "talk to the webmaster") {
-		t.Fatal("the page without a token carries admin data")
+	if strings.Contains(anonymous.Body.String(), "talk to the webmaster") {
+		t.Fatal("an anonymous request carries admin data")
 	}
 
-	// A wrong password shows the form again and does not claim success.
-	wrong := postForm(t, h.Admin, "/admin", url.Values{"password": {"nope"}})
-	if wrong.Code != http.StatusUnauthorized ||
-		!strings.Contains(wrong.Body.String(), "wrong password") {
-		t.Fatalf("wrong password: status = %d, want 401 with the form", wrong.Code)
+	member := httptest.NewRecorder()
+	req := handlers.WithTestPrincipal(
+		httptest.NewRequest(http.MethodGet, "/admin", nil), "m", "member", false, true)
+	h.Admin(member, req)
+	if member.Code != http.StatusNotFound {
+		t.Fatalf("member: status = %d, want 404", member.Code)
 	}
 
-	// The password is the token. A correct one sets the remembered login and
-	// redirects, so the next request carries the cookie and gets its CSRF
-	// token, and a reload cannot repost the password.
-	authed := postForm(t, h.Admin, "/admin", url.Values{"password": {"secret"}})
-	if authed.Code != http.StatusSeeOther || authed.Header().Get("Location") != "/admin" {
-		t.Fatalf("with password: status = %d, want a redirect back", authed.Code)
+	admin := httptest.NewRecorder()
+	req = withAdmin(httptest.NewRequest(http.MethodGet, "/admin", nil))
+	h.Admin(admin, req)
+	if admin.Code != http.StatusOK ||
+		!strings.Contains(admin.Body.String(), "talk to the webmaster") {
+		t.Fatalf("admin: status = %d, want the panel", admin.Code)
 	}
-	if got := authed.Header().Get("Referrer-Policy"); got != "no-referrer" {
+	if got := admin.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("Referrer-Policy = %q", got)
 	}
-	if got := authed.Header().Get("Cache-Control"); got != "no-store" {
+	if got := admin.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q", got)
-	}
-	cookies := authed.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("admin set %d cookies, want one", len(cookies))
-	}
-	login := cookies[0]
-	if login.Name != handlers.AdminCookieName || login.Value == "" {
-		t.Errorf("cookie = %q, want a remembered login", login.Name)
-	}
-	if !login.HttpOnly || login.SameSite != http.SameSiteStrictMode ||
-		login.Path != "/" || login.MaxAge <= 0 || login.Domain != "" {
-		t.Errorf("cookie attributes = %+v", login)
-	}
-
-	// The cookie opens the panel on a later visit, with no password.
-	remembered := httptest.NewRecorder()
-	again := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	again.AddCookie(login)
-	h.Admin(remembered, again)
-	if remembered.Code != http.StatusOK ||
-		!strings.Contains(remembered.Body.String(), "talk to the webmaster") {
-		t.Fatalf("remembered login: status = %d, want the panel", remembered.Code)
-	}
-	if strings.Contains(remembered.Body.String(), "secret") {
-		t.Error("the panel carries the admin token")
-	}
-
-	// A value that was edited by hand is not a login.
-	forged := httptest.NewRecorder()
-	tampered := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	tampered.AddCookie(&http.Cookie{
-		Name:  handlers.AdminCookieName,
-		Value: login.Value + "x",
-	})
-	h.Admin(forged, tampered)
-	if strings.Contains(forged.Body.String(), "talk to the webmaster") {
-		t.Fatal("a tampered cookie opened the panel")
-	}
-
-	// A fetch can send the token as a header instead.
-	header := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
-	req.Header.Set("X-Admin-Token", "secret")
-	h.Admin(header, req)
-	if header.Code != http.StatusOK ||
-		!strings.Contains(header.Body.String(), "talk to the webmaster") {
-		t.Fatalf("header token: status = %d, want the panel", header.Code)
-	}
-
-	// The token is not accepted in the query string any more.
-	query := httptest.NewRecorder()
-	h.Admin(query, httptest.NewRequest(http.MethodGet, "/admin?token=secret", nil))
-	if strings.Contains(query.Body.String(), "talk to the webmaster") {
-		t.Fatal("a query token still opens the panel")
-	}
-	action := postForm(t, h.HealBoard, "/admin/heal?token=secret", url.Values{})
-	if action.Code != http.StatusNotFound {
-		t.Fatalf("query token action: status = %d, want 404", action.Code)
 	}
 }
 
@@ -741,7 +587,7 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	pageReq := httptest.NewRequest(http.MethodGet, "/", nil)
-	pageReq.AddCookie(identityCookie("dave"))
+	pageReq = withIdentity(pageReq, "dave")
 	h.Index(page, pageReq)
 	if !strings.Contains(page.Body.String(), `id="bd-state"`) {
 		t.Error("board page does not carry the shared-state tag")
@@ -1353,7 +1199,6 @@ func setupWithSummarizer(
 func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
 	var calls atomic.Int32
 	h, queries := setupWithSummarizer(t, handlers.Config{
-		AdminToken:         testAdminToken,
 		CompactAfterTokens: 2500,
 		CompactAfterTurns:  compactionTurns,
 	}, func(w http.ResponseWriter, _ *http.Request) {
@@ -1393,7 +1238,6 @@ func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
 func TestSlowSummaryDoesNotDelayTheVersion(t *testing.T) {
 	release := make(chan struct{})
 	h, queries := setupWithSummarizer(t, handlers.Config{
-		AdminToken:         testAdminToken,
 		CompactAfterTokens: 2500,
 		CompactAfterTurns:  compactionTurns,
 	}, func(w http.ResponseWriter, _ *http.Request) {
@@ -1523,7 +1367,6 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 // fixed 2000-turn cap would drop the oldest line on every turn instead.
 func TestRoomLogKeepsEveryTurnBelowTheBackstop(t *testing.T) {
 	h, queries := setupWithConfig(t, handlers.Config{
-		AdminToken:         testAdminToken,
 		CompactAfterTokens: 10_000_000,
 		CompactAfterTurns:  3000,
 	})
@@ -1669,7 +1512,6 @@ func TestRunPendingAnswersAStoredPost(t *testing.T) {
 // nothing is compacted.
 func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
 	h, queries := setupWithConfig(t, handlers.Config{
-		AdminToken:         testAdminToken,
 		CompactAfterTokens: 10,
 		CompactAfterTurns:  5,
 	})
@@ -1752,7 +1594,7 @@ func TestResetCancelsTheRunningTurn(t *testing.T) {
 	var hold atomic.Bool
 	hold.Store(true)
 	inFlight := make(chan struct{})
-	h, queries := setupWithModel(t, handlers.Config{AdminToken: testAdminToken},
+	h, queries := setupWithModel(t, handlers.Config{},
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				// The server only notices a dropped client once the body is
@@ -1869,15 +1711,15 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 	// Only an errored turn offers the button.
 	page := func(id int64) string {
 		req := httptest.NewRequest(http.MethodGet, "/admin/turns/"+strconv.FormatInt(id, 10), nil)
-		req.Header.Set("X-Admin-Token", testAdminToken)
+		req = withAdmin(req)
 		rec := httptest.NewRecorder()
 		h.AdminTurn(rec, withURLParam(req, "id", strconv.FormatInt(id, 10)))
 		return rec.Body.String()
 	}
-	if !strings.Contains(page(turn.ID), "/admin/retry/"+id) {
+	if !strings.Contains(page(turn.ID), "/admin/w/test/retry/"+id) {
 		t.Error("the errored turn has no retry button")
 	}
-	if strings.Contains(page(runs[0].ID), "/admin/retry/") {
+	if strings.Contains(page(runs[0].ID), "/admin/w/test/retry/") {
 		t.Error("a turn that did not error offers a retry")
 	}
 }
@@ -2019,5 +1861,25 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 	trigger := pages.NewTurnRow(runs[0], messages).Trigger
 	if !strings.Contains(trigger, post.Body) {
 		t.Errorf("trigger = %q, want the post the first turn had", trigger)
+	}
+}
+
+func TestBoardsRenderWithAMissingIdentity(t *testing.T) {
+	h, queries := setup(t)
+	if _, err := queries.CreatePost(context.Background(), sqlc.CreatePostParams{
+		Author: "ghost-identity", Body: "still readable",
+	}); err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = withIdentity(req, "dave")
+	rec := httptest.NewRecorder()
+	h.Index(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	page := rec.Body.String()
+	if !strings.Contains(page, "ghost-identity") || !strings.Contains(page, "still readable") {
+		t.Error("a post whose identity is missing did not render with its fallback id")
 	}
 }

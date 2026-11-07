@@ -85,8 +85,8 @@ templ journalKeyCard(k JournalKeyView, picked string, panel Panel, csrf string) 
 		<div class="flex flex-wrap items-center gap-2">
 			if k.Rows > 0 {
 				<a
-					href={ templ.SafeURL(journalPath(k.Key, 0, "", 0)) }
-					data-on:click={ navTo(journalPath(k.Key, 0, "", 0)) }
+					href={ templ.SafeURL(journalPath(panel.Base, k.Key, 0, "", 0)) }
+					data-on:click={ navTo(journalPath(panel.Base, k.Key, 0, "", 0)) }
 					class={ adminButton }
 				>browse rows</a>
 				<form
@@ -144,17 +144,17 @@ templ journalBrowse(b *JournalBrowse) {
 			</div>
 			<div class="flex flex-wrap items-center gap-1.5 text-xs">
 				<span class="text-gray-500 dark:text-neutral-500">match</span>
-				@browseLink(journalPath(b.Key, 0, b.Visitor, 0), "all", b.Match == 0)
+				@browseLink(journalPath(b.Base, b.Key, 0, b.Visitor, 0), "all", b.Match == 0)
 				for _, m := range b.Matches {
-					@browseLink(journalPath(b.Key, m.Match, b.Visitor, 0), i64(m.Match)+" ("+itoa(m.Rows)+")", b.Match == m.Match)
+					@browseLink(journalPath(b.Base, b.Key, m.Match, b.Visitor, 0), i64(m.Match)+" ("+itoa(m.Rows)+")", b.Match == m.Match)
 				}
 			</div>
 			if b.Visitor != "" {
 				<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-neutral-400">
 					<span>visitor <span class="font-mono">{ b.Visitor }</span></span>
 					<a
-						href={ templ.SafeURL(journalPath(b.Key, b.Match, "", 0)) }
-						data-on:click={ navTo(journalPath(b.Key, b.Match, "", 0)) }
+						href={ templ.SafeURL(journalPath(b.Base, b.Key, b.Match, "", 0)) }
+						data-on:click={ navTo(journalPath(b.Base, b.Key, b.Match, "", 0)) }
 						class="text-sky-700 hover:underline dark:text-sky-400"
 					>show everyone</a>
 				</div>
@@ -172,8 +172,8 @@ templ journalBrowse(b *JournalBrowse) {
 							<span>match { i64(row.Match) }</span>
 							<span>rules { i64(row.Rules) }</span>
 							<a
-								href={ templ.SafeURL(journalPath(b.Key, b.Match, row.Visitor, 0)) }
-								data-on:click={ navTo(journalPath(b.Key, b.Match, row.Visitor, 0)) }
+								href={ templ.SafeURL(journalPath(b.Base, b.Key, b.Match, row.Visitor, 0)) }
+								data-on:click={ navTo(journalPath(b.Base, b.Key, b.Match, row.Visitor, 0)) }
 								title="show only this visitor"
 								class="text-sky-700 hover:underline dark:text-sky-400"
 							>{ row.Visitor }</a>
@@ -187,8 +187,8 @@ templ journalBrowse(b *JournalBrowse) {
 			<div class="flex justify-between border-t border-gray-200 px-4 py-2 text-xs dark:border-neutral-800">
 				if b.Before > 0 {
 					<a
-						href={ templ.SafeURL(journalPath(b.Key, b.Match, b.Visitor, 0)) }
-						data-on:click={ navTo(journalPath(b.Key, b.Match, b.Visitor, 0)) }
+						href={ templ.SafeURL(journalPath(b.Base, b.Key, b.Match, b.Visitor, 0)) }
+						data-on:click={ navTo(journalPath(b.Base, b.Key, b.Match, b.Visitor, 0)) }
 						class="text-sky-700 hover:underline dark:text-sky-400"
 					>back to the newest</a>
 				} else {
@@ -196,8 +196,8 @@ templ journalBrowse(b *JournalBrowse) {
 				}
 				if b.OlderBefore > 0 {
 					<a
-						href={ templ.SafeURL(journalPath(b.Key, b.Match, b.Visitor, b.OlderBefore)) }
-						data-on:click={ navTo(journalPath(b.Key, b.Match, b.Visitor, b.OlderBefore)) }
+						href={ templ.SafeURL(journalPath(b.Base, b.Key, b.Match, b.Visitor, b.OlderBefore)) }
+						data-on:click={ navTo(journalPath(b.Base, b.Key, b.Match, b.Visitor, b.OlderBefore)) }
 						class="text-sky-700 hover:underline dark:text-sky-400"
 					>older rows</a>
 				}

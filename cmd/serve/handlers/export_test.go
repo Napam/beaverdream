@@ -2,10 +2,91 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
+
+// WithTestPrincipal puts a synthetic signed-in identity on a request. Tests
+// call handler methods directly, so the auth middleware is not in the path;
+// this is the one seam that replaces it. Production never calls it.
+func WithTestPrincipal(
+	r *http.Request,
+	id, name string,
+	admin bool,
+	csrfOK bool,
+) *http.Request {
+	return withPrincipal(r, &principal{
+		IdentityID:   id,
+		DisplayName:  name,
+		SessionHash:  "test-session-" + id,
+		SessionToken: "test-token-" + id,
+		Scope:        registry.ScopePlay,
+		Admin:        admin,
+		CSRFOK:       csrfOK,
+		CSRFToken:    "test-csrf",
+	})
+}
+
+// WithTestAdmin is WithTestPrincipal for the app/admin plane.
+func WithTestAdmin(r *http.Request, id, name string) *http.Request {
+	return withPrincipal(r, &principal{
+		IdentityID:   id,
+		DisplayName:  name,
+		LoginID:      "test-login-" + id,
+		SessionHash:  "test-session-" + id,
+		SessionToken: "test-token-" + id,
+		Scope:        registry.ScopeApp,
+		Admin:        true,
+		CSRFOK:       true,
+		CSRFToken:    "test-csrf",
+	})
+}
+
+// TestAuth wraps a handler with the principal the production auth middleware
+// would set. Event streams run through a real httptest server, so the identity
+// has to live on the server side of the request.
+func AuthForTest(h *Handlers, next http.Handler, id, name string, admin bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		_, err := h.reg.DB().
+			ExecContext(ctx, `INSERT OR IGNORE INTO identities (id, display_name) VALUES (?, ?)`, id, name)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		login := "fixture-" + id
+		_, err = h.reg.DB().
+			ExecContext(ctx, `INSERT OR IGNORE INTO logins (id, identity_id, source, external_id) VALUES (?, ?, 'password', ?)`, login, id, login)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if admin {
+			if err = h.reg.GrantRole(ctx, id, registry.RoleAdmin); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+		session, token, err := h.reg.NewSession(ctx, id, login, registry.ScopePlay)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		next.ServeHTTP(w, withPrincipal(r, &principal{
+			IdentityID:   id,
+			DisplayName:  name,
+			SessionHash:  session.Hash,
+			SessionToken: token,
+			Scope:        registry.ScopePlay,
+			Admin:        admin,
+			CSRFOK:       true,
+			CSRFToken:    "test-csrf",
+		}))
+	})
+}
 
 // JournalState and JournalRulesUsed expose what the prompt and the schema tool
 // get about the journal, without running a model.
@@ -116,3 +197,19 @@ func (h *Handlers) SequencesForTest(ctx context.Context) (map[string]int64, erro
 	}
 	return seqs, rows.Err()
 }
+
+// LoadedForTest reports how many worlds the app currently holds open.
+func (a *App) LoadedForTest() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.runtimes)
+}
+
+// RegistryForTest exposes the registry so a test can inspect usage rows.
+func (h *Handlers) RegistryForTest() *registry.Registry { return h.reg }
+
+// WorldForTest is the world this handler serves.
+func (h *Handlers) WorldForTest() registry.World { return h.world }
+
+// SetBudgetForTest changes the budget one world handler enforces.
+func (h *Handlers) SetBudgetForTest(b registry.Budget) { h.budget = b }

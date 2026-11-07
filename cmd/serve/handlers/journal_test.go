@@ -2,8 +2,6 @@ package handlers_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -22,11 +20,8 @@ const (
 	visitorB = "bbbbbbbbbbbbbbbb"
 )
 
-// publicID mirrors the server's derived id: rows never carry the cookie.
-func publicID(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:8])
-}
+// publicID is the identity id a world row carries.
+func publicID(raw string) string { return raw }
 
 func declareJournal(t *testing.T, queries *sqlc.Queries, schema string) {
 	t.Helper()
@@ -80,8 +75,7 @@ func appendJournalRules(
 	}
 	req := httptest.NewRequest(http.MethodPost, "/j/"+key, strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(identityCookie("dave"))
-	req.AddCookie(&http.Cookie{Name: handlers.VisitorCookieName, Value: visitor})
+	req = handlers.WithTestPrincipal(req, visitor, "dave", false, true)
 	req = withURLParam(req, "key", key)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -239,7 +233,7 @@ func TestJournalAssignsVisitor(t *testing.T) {
 	body := strings.NewReader(`{"payload":{"cell":1},"rules":1}`)
 	req := httptest.NewRequest(http.MethodPost, "/j/moves", body)
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(identityCookie("dave"))
+	req = handlers.WithTestPrincipal(req, visitorA, "dave", false, true)
 	req = withURLParam(req, "key", "moves")
 	rec := httptest.NewRecorder()
 	h.JournalAppend(rec, req)
@@ -247,14 +241,12 @@ func TestJournalAssignsVisitor(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	found := ""
-	for _, cookie := range rec.Result().Cookies() {
-		if cookie.Name == handlers.VisitorCookieName {
-			found = cookie.Value
-		}
+	out, _ := readJournal(t, h.JournalRead, "moves", 0)
+	if len(out.Rows) != 1 || out.Rows[0].Visitor != visitorA {
+		t.Fatalf("rows = %+v, want visitor %q", out.Rows, visitorA)
 	}
-	if len(found) != 16 {
-		t.Fatalf("visitor cookie = %q, want a 16 character id", found)
+	if cookies := rec.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("append set cookies %v, want none", cookies)
 	}
 }
 
@@ -324,7 +316,7 @@ func TestGameRequestShipsAWorkingFeed(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
+	req = handlers.WithTestPrincipal(req, "dave", "dave", false, true)
 	rec2 := httptest.NewRecorder()
 	h.Index(rec2, req)
 	page := rec2.Body.String()

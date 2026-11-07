@@ -116,7 +116,7 @@ func (h *Handlers) ClearHoldings(w http.ResponseWriter, r *http.Request) {
 		)
 		message = "clear failed: " + err.Error()
 	}
-	h.adminDone(w, r, journalPanel(r.URL.Query()), message)
+	h.adminDone(w, r, h.journalPanel(r.URL.Query()), message)
 }
 
 func (h *Handlers) clearHoldings(ctx context.Context, key string) (string, error) {

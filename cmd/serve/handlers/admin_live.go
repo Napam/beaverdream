@@ -16,23 +16,24 @@ import (
 
 // AdminLive is an admin page's one stream. The page names itself in the query,
 // and the stream patches the fragments that page rendered, so the panel
-// follows the board without polling. The token rides in the X-Admin-Token
-// remembered login cookie or the token header; a request without either answers
-// 204, which tells Datastar to stop retrying a page the browser cannot fix.
+// follows the board without polling. The app session cookie authenticates it;
+// an anonymous or non-admin request answers 204, which tells Datastar to stop
+// retrying a page the browser cannot fix.
 func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	h.adminHeaders(w)
-	if !h.adminAuthed(r) {
+	p := principalFrom(r)
+	if p == nil || !p.Admin {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// The page's forms carry this token, so the fragments the stream patches
 	// keep working after the page has loaded.
-	csrf := h.csrfFor(r)
-	panel := pages.Panel{Page: r.URL.Query().Get("page")}
+	csrf := p.CSRFToken
+	panel := pages.Panel{Base: h.adminBase(), Page: r.URL.Query().Get("page")}
 	switch panel.Page {
 	case pages.PageOverview, pages.PageSite:
 	case pages.PageJournal:
-		panel = journalPanel(r.URL.Query())
+		panel = h.journalPanel(r.URL.Query())
 	case pages.PageTurns:
 		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
 		// The page says whether it rendered the turn in flight, so a turn
@@ -45,8 +46,18 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe before the first sync, so a change that lands during it is
 	// pushed after it instead of lost.
-	sub, cancel := h.hub.subscribe(topicAll | topicDraft)
+	sub, cancel := h.hub.subscribeAs(topicAll|topicDraft, p.IdentityID, p.SessionHash)
 	defer cancel()
+	select {
+	case <-sub.closed:
+		w.WriteHeader(http.StatusNoContent)
+		return
+	default:
+	}
+	if !h.streamSessionValid(r, p) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
@@ -62,6 +73,8 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-sub.closed:
 			return
 		case <-h.stop:
 			return
@@ -113,7 +126,7 @@ func (h *Handlers) syncAdmin(
 	switch panel.Page {
 	case pages.PageOverview:
 		if t&(topicSite|topicTurns) != 0 {
-			if err := h.patchAdminMetrics(ctx, sse); err != nil {
+			if err := h.patchAdminMetrics(ctx, sse, panel); err != nil {
 				return err
 			}
 			if err := h.patchAdminMemory(ctx, sse); err != nil {
@@ -130,7 +143,7 @@ func (h *Handlers) syncAdmin(
 	case pages.PageTurns:
 		switch {
 		case t&(topicSite|topicTurns|topicBusy) != 0:
-			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive, csrf); err != nil {
+			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive, csrf, panel); err != nil {
 				return err
 			}
 		case t&topicDraft != 0:
@@ -151,7 +164,7 @@ func (h *Handlers) syncAdmin(
 		}
 	case pages.PageSite:
 		if t&topicSite != 0 {
-			if err := h.patchAdminVersion(ctx, sse, csrf); err != nil {
+			if err := h.patchAdminVersion(ctx, sse, csrf, panel); err != nil {
 				return err
 			}
 		}
@@ -190,6 +203,7 @@ func (h *Handlers) patchAdminVersion(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 	csrf string,
+	panel pages.Panel,
 ) error {
 	versions, err := h.queries.ListSiteVersions(ctx, adminVersions)
 	if err != nil {
@@ -205,7 +219,7 @@ func (h *Handlers) patchAdminVersion(
 		ctx,
 		sse,
 		"admin-version",
-		pages.AdminVersion(current, csrf),
+		pages.AdminVersion(current, csrf, panel),
 	); err != nil {
 		return err
 	}
@@ -213,7 +227,7 @@ func (h *Handlers) patchAdminVersion(
 		ctx,
 		sse,
 		"admin-versions",
-		pages.AdminVersions(versions, current.ID, csrf),
+		pages.AdminVersions(versions, current.ID, csrf, panel),
 	)
 }
 
@@ -235,13 +249,19 @@ func (h *Handlers) patchAdminMemory(
 func (h *Handlers) patchAdminMetrics(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
+	panel pages.Panel,
 ) error {
 	turns, _, err := h.adminTurns(ctx, -1, nil)
 	if err != nil {
 		h.logger.Error("Live admin stream could not list turns", slog.Any("error", err))
 		return nil
 	}
-	return h.patchAdmin(ctx, sse, "admin-metrics", pages.AdminMetrics(pages.NewMetrics(turns)))
+	return h.patchAdmin(
+		ctx,
+		sse,
+		"admin-metrics",
+		pages.AdminMetrics(pages.NewMetrics(turns), panel),
+	)
 }
 
 // patchAdminTurns brings the turn list forward, and the inspector when it
@@ -254,6 +274,7 @@ func (h *Handlers) patchAdminTurns(
 	picked int64,
 	wasLive *bool,
 	csrf string,
+	panel pages.Panel,
 ) error {
 	run := h.runProgress()
 	live := liveInspector(picked, run)
@@ -278,7 +299,7 @@ func (h *Handlers) patchAdminTurns(
 		ctx,
 		sse,
 		"admin-history",
-		pages.AdminHistory(turns, picked, pages.NewQueue(h.queuedWork())),
+		pages.AdminHistory(turns, picked, h.queueView(ctx), panel),
 	); err != nil {
 		return err
 	}
@@ -293,7 +314,7 @@ func (h *Handlers) patchAdminTurns(
 		ctx,
 		sse,
 		"admin-turn",
-		pages.AdminTurn(latest, picked == 0, older, newer, run, csrf),
+		pages.AdminTurn(latest, picked == 0, older, newer, run, csrf, panel),
 	)
 }
 

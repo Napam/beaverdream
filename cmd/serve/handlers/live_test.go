@@ -48,9 +48,12 @@ func openLive(t *testing.T, h *handlers.Handlers, at cursor) *liveClient {
 		t,
 		h.Live,
 		"/live?datastar="+url.QueryEscape(string(signals)),
-		func(req *http.Request) {
+		func(next http.Handler) http.Handler {
+			return handlers.AuthForTest(h, next, "dave", "dave", false)
+		},
+		func(req *http.Request) *http.Request {
 			req.Header.Set("Datastar-Request", "true")
-			req.AddCookie(identityCookie("dave"))
+			return req
 		},
 	)
 }
@@ -61,10 +64,15 @@ func openSSE(
 	t *testing.T,
 	handler http.HandlerFunc,
 	path string,
-	set func(*http.Request),
+	wrap func(http.Handler) http.Handler,
+	set func(*http.Request) *http.Request,
 ) *liveClient {
 	t.Helper()
-	srv := httptest.NewServer(handler)
+	var served http.Handler = handler
+	if wrap != nil {
+		served = wrap(served)
+	}
+	srv := httptest.NewServer(served)
 	t.Cleanup(srv.Close)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -73,7 +81,7 @@ func openSSE(
 		t.Fatalf("request: %v", err)
 	}
 	if set != nil {
-		set(req)
+		req = set(req)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -186,7 +194,7 @@ func datastarPost(
 	req.Header.Set("Accept", datastarAccept)
 	req.Header.Set("Datastar-Request", "true")
 	if name != "" {
-		req.AddCookie(identityCookie(name))
+		req = withIdentity(req, name)
 	}
 	if key, ok := strings.CutPrefix(req.URL.Path, "/x/state/"); ok {
 		req = withURLParam(req, "key", key)
@@ -349,7 +357,7 @@ func TestIndexPageCarriesTheJournalCursor(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
+	req = withIdentity(req, "dave")
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 

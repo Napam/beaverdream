@@ -2,12 +2,16 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/starfederation/datastar-go/datastar"
 )
@@ -16,14 +20,11 @@ import (
 // the response is written directly: there is no shell and no iframe, so the
 // model's markup is the document.
 func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
-	// The page depends on the visitor's cookie.
+	// The page depends on the play session's identity.
 	w.Header().Set("Cache-Control", "private, no-store")
-	if identityFromRequest(r) == "" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		if _, err := io.WriteString(w, webmaster.IdentityDoc("")); err != nil {
-			h.logger.Error("Failed to write identity page", slog.Any("error", err))
-		}
+	p := principalFrom(r)
+	if p == nil {
+		http.Error(w, "open a board with a play session", http.StatusUnauthorized)
 		return
 	}
 
@@ -41,8 +42,8 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	converted := make([]webmaster.Post, len(posts))
-	for i, p := range posts {
-		converted[i] = postFromRow(p)
+	for i, post := range posts {
+		converted[i] = h.postFromRow(r.Context(), post)
 	}
 	// The board reads newest first. The model still gets the conversation
 	// oldest first, which is easier to follow.
@@ -51,8 +52,12 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docSite := h.siteWithState(r.Context(), site)
-	docSite.Name = identityFromRequest(r)
-	visitor := visitorFromRequest(w, r)
+	docSite.Name = p.DisplayName
+	docSite.WorldID = h.world.ID
+	docSite.WorldSlug = h.world.Slug
+	docSite.BasePath = h.basePath()
+	docSite.AccountURL = h.accountURL(r)
+	visitor := p.IdentityID
 	docSite.Visitor = publicVisitor(visitor)
 	// $mine and $tops are on the page from the start, so markup bound to
 	// them renders before the stream connects.
@@ -93,13 +98,13 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := strings.TrimSpace(r.FormValue("body"))
-	author := identityFromRequest(r)
-	if author == "" {
+	p := principalFrom(r)
+	if p == nil {
 		if isDatastar(r) {
-			_ = datastar.NewSSE(w, r).Redirect("/")
+			_ = datastar.NewSSE(w, r).Redirect(h.boardPath())
 			return
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 		return
 	}
 	if body == "" {
@@ -108,8 +113,28 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	body = truncate(body, webmaster.MaxBodyLen)
 
+	// The budget is checked before the insert, so nobody sees a post that can
+	// never get an answer. A running turn may overshoot by one, by design.
+	if !p.Admin && h.reg != nil {
+		if err := h.reg.CheckBudget(
+			r.Context(),
+			p.IdentityID,
+			h.budget,
+		); errors.Is(
+			err,
+			registry.ErrBudget,
+		) {
+			h.budgetRefused(w, r, body)
+			return
+		} else if err != nil {
+			h.logger.Error("Failed to check the budget", slog.Any("error", err))
+			http.Error(w, "Could not post", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	post, err := h.queries.CreatePost(r.Context(), sqlc.CreatePostParams{
-		Author: author,
+		Author: p.IdentityID,
 		Body:   body,
 	})
 	if err != nil {
@@ -119,7 +144,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	h.hub.publish(topicPosts)
 
-	if !h.allowRewrite(author) {
+	if !h.allowRewrite(p.IdentityID) {
 		h.logger.Warn("Post stored without a rewrite", slog.Bool("throttled", true))
 		h.postDone(w, r)
 		return
@@ -129,6 +154,40 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	h.postDone(w, r)
 }
 
+// budgetRefused answers an over-budget post. Datastar and JSON callers get a
+// 429 with reason budget; a plain form gets the typed text back in a small
+// app-owned page, without a board render, so a reload does not lose it.
+func (h *Handlers) budgetRefused(w http.ResponseWriter, r *http.Request, body string) {
+	if isDatastar(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false, "reason": "budget", "error": "no tokens left today",
+		})
+		return
+	}
+	if wantsHTML(r) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusTooManyRequests)
+		action := h.basePath() + "/posts"
+		_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>out of tokens</title>
+<main style="max-width:48rem;margin:2rem auto;font:16px system-ui;padding:0 1rem">
+<p>No tokens are left for today. Your message was not posted.</p>
+<form method="post" action="%s"><textarea name="body" rows="4" style="width:100%%">%s</textarea>
+<p><button type="submit">try again</button></p></form>
+<p><a href="%s/">back to the board</a></p></main>`,
+			html.EscapeString(action), html.EscapeString(body),
+			html.EscapeString(h.basePath()))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok": false, "reason": "budget", "error": "no tokens left today",
+	})
+}
+
 // postDone answers a post. The board shows newest first, so a plain form
 // lands on the new post at the top.
 func (h *Handlers) postDone(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +195,7 @@ func (h *Handlers) postDone(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 }
 
 // isDatastar reports a request sent by a Datastar action. Its reply must not

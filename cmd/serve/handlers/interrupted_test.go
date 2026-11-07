@@ -24,7 +24,7 @@ func TestInterruptedTurnKeepsItsPrompt(t *testing.T) {
 	var once sync.Once
 	h, queries := setupWithModel(
 		t,
-		handlers.Config{AdminToken: testAdminToken},
+		handlers.Config{},
 		holdModel(&calls, release, 0),
 	)
 	t.Cleanup(func() { once.Do(func() { close(release) }) })

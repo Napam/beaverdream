@@ -112,8 +112,7 @@ func stateOp(t *testing.T, h *handlers.Handlers, path, visitor string) (int, opR
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	req.Header.Set("Accept", "application/json")
-	req.AddCookie(identityCookie("dave"))
-	req.AddCookie(&http.Cookie{Name: handlers.VisitorCookieName, Value: visitor})
+	req = handlers.WithTestPrincipal(req, visitor, "dave", false, true)
 	key, _, _ := strings.Cut(strings.TrimPrefix(req.URL.Path, "/x/state/"), "?")
 	req = withURLParam(req, "key", key)
 	rec := httptest.NewRecorder()
@@ -316,10 +315,12 @@ func TestLiveStreamPushesOnlyThisVisitorsHoldings(t *testing.T) {
 	open := func(visitor string) *liveClient {
 		signals, _ := json.Marshal(map[string]cursor{"_bd": {Version: site.ID}})
 		return openSSE(t, h.Live, "/live?datastar="+url.QueryEscape(string(signals)),
-			func(req *http.Request) {
+			func(next http.Handler) http.Handler {
+				return handlers.AuthForTest(h, next, visitor, "dave", false)
+			},
+			func(req *http.Request) *http.Request {
 				req.Header.Set("Datastar-Request", "true")
-				req.AddCookie(identityCookie("dave"))
-				req.AddCookie(&http.Cookie{Name: handlers.VisitorCookieName, Value: visitor})
+				return req
 			})
 	}
 	a, b := open(visitorA), open(visitorB)
@@ -342,8 +343,7 @@ func TestFirstRenderSeedsTheVisitorsHoldings(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.AddCookie(identityCookie("dave"))
-	req.AddCookie(&http.Cookie{Name: handlers.VisitorCookieName, Value: visitorA})
+	req = handlers.WithTestPrincipal(req, visitorA, "dave", false, true)
 	rec := httptest.NewRecorder()
 	h.Index(rec, req)
 	page := rec.Body.String()
@@ -467,15 +467,15 @@ func TestModelDeclaredWalletWorksEndToEnd(t *testing.T) {
 	}
 }
 
-// A browser without the visitor cookie cannot own counts, and a script that
-// drops the cookie still hits the cooldown on shared keys through its name.
+// A board request without a play session cannot own counts. Shared keys still
+// work from a signed-in request, because they are not tied to an owner.
 func TestStateWritesWithoutTheVisitorCookie(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
 
-	rec := datastarPost(t, h.SetState, "/x/state/coins", url.Values{"add": {"5"}}, "dave")
+	rec := datastarPost(t, h.SetState, "/x/state/coins", url.Values{"add": {"5"}}, "")
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("a visitor op without the cookie: status = %d, want 401", rec.Code)
+		t.Fatalf("a visitor op without a play session: status = %d, want 401", rec.Code)
 	}
 	if rec := datastarPost(
 		t,
@@ -616,10 +616,12 @@ func TestLiveStreamDropsKeysTheSchemaNoLongerDeclares(t *testing.T) {
 	}
 	signals, _ := json.Marshal(map[string]cursor{"_bd": {Version: site.ID}})
 	live := openSSE(t, h.Live, "/live?datastar="+url.QueryEscape(string(signals)),
-		func(req *http.Request) {
+		func(next http.Handler) http.Handler {
+			return handlers.AuthForTest(h, next, visitorA, "dave", false)
+		},
+		func(req *http.Request) *http.Request {
 			req.Header.Set("Datastar-Request", "true")
-			req.AddCookie(identityCookie("dave"))
-			req.AddCookie(&http.Cookie{Name: handlers.VisitorCookieName, Value: visitorA})
+			return req
 		})
 	live.next(t, []string{`"mine":{"coins":5,"rod":0}`})
 

@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+
+	"github.com/Napam/beaverdream/web/pages"
 )
 
 // ResetBoard returns the board to the state the first migrations created: one
@@ -106,6 +108,6 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		return "board reset to the original version", true
 	}()
 	if ok {
-		h.adminDone(w, r, sitePanel, message)
+		h.adminDone(w, r, h.panel(pages.PageSite), message)
 	}
 }

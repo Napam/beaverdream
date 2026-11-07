@@ -46,7 +46,8 @@ type liveView struct {
 // its page lacks. GET never calls the model.
 func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 	// 204 is Datastar's signal to stop retrying.
-	if identityFromRequest(r) == "" {
+	p := principalFrom(r)
+	if p == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -59,15 +60,25 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe before the first sync, so a change that lands during it is
 	// pushed after it instead of lost.
-	sub, cancel := h.hub.subscribe(topicAll)
+	sub, cancel := h.hub.subscribeAs(topicAll, p.IdentityID, p.SessionHash)
 	defer cancel()
+	select {
+	case <-sub.closed:
+		w.WriteHeader(http.StatusNoContent)
+		return
+	default:
+	}
+	if !h.streamSessionValid(r, p) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	sse := datastar.NewSSE(w, r)
 	ctx := sse.Context()
 	view := liveView{
 		cursor:  signals.BD,
 		clears:  h.journalClears.Load(),
-		visitor: visitorCookie(r),
+		visitor: p.IdentityID,
 	}
 	if err := h.syncLive(ctx, sse, &view, topicAll); err != nil {
 		return
@@ -78,6 +89,8 @@ func (h *Handlers) Live(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-sub.closed:
 			return
 		case <-h.stop:
 			return
@@ -217,7 +230,7 @@ func (h *Handlers) syncPosts(
 	posts := make([]webmaster.Post, len(rows))
 	ids := make([]int64, len(rows))
 	for i, row := range rows {
-		posts[i] = postFromRow(row)
+		posts[i] = h.postFromRow(ctx, row)
 		ids[i] = row.ID
 	}
 	// A post can land between the id read above and the rows read, so the

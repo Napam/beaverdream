@@ -16,6 +16,7 @@ import (
 
 	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/env"
+	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/Napam/beaverdream/web/pages"
 )
@@ -47,21 +48,19 @@ const (
 // overrides it for a provider that is slower still.
 var mutationTimeout = env.GetEnvPositiveDuration("TURN_TIMEOUT", time.Hour)
 
-// Config holds the environment knobs the handlers enforce.
+// Config holds the environment knobs one world's handlers enforce.
 type Config struct {
-	// AdminToken is the admin password. It signs the remembered login cookie
-	// and still works in the X-Admin-Token header or a form field for scripts.
-	AdminToken string
-	// AdminPort is the port that serves /admin, so the login cookie lives on
-	// an origin the board's scripts never run on. The board's port redirects
-	// there. Empty means the port after Port.
-	AdminPort string
-	// AdminURL is the public URL of the admin panel, for a proxy with its own
-	// admin hostname. When set, the board redirects /admin there instead of to
-	// AdminPort on the request's host. Empty keeps the host and AdminPort.
-	AdminURL string
-	// Port is the board's port, used for the link back from the admin pages.
-	Port string
+	// AppPort and AppURL locate the management plane for board links. Empty
+	// AppURL derives the origin from the request's host and AppPort.
+	AppPort string
+	AppURL  string
+	// AppSessionTTL and PlaySessionTTL are the cookie lifetimes. Zero means a
+	// browser-session cookie.
+	AppSessionTTL  time.Duration
+	PlaySessionTTL time.Duration
+	// PlayPort and PlayURL locate the board for the admin panel.
+	PlayPort string
+	PlayURL  string
 	// CompactAfterTokens is the estimated whole-prompt size that triggers
 	// compaction. Zero uses webmaster.CompactAfterTokens.
 	CompactAfterTokens int
@@ -77,6 +76,21 @@ type Config struct {
 	// ThreeAddonsSrc is the path the import map gives "three/addons". Empty
 	// uses webmaster.ThreeAddonsPath.
 	ThreeAddonsSrc string
+}
+
+// Deps is everything one world's handlers need. The world is already open and
+// migrated when New is called.
+type Deps struct {
+	Logger   *slog.Logger
+	Registry *registry.Registry
+	World    registry.World
+	DB       *sql.DB
+	Queries  *sqlc.Queries
+	Mutator  *webmaster.Mutator
+	Config   Config
+	Budget   registry.Budget
+	// ModelSem caps model turns across every loaded world. Nil means no cap.
+	ModelSem chan struct{}
 }
 
 // runState is what the live endpoint and the admin panel show while a
@@ -102,10 +116,15 @@ type runState struct {
 // Handlers serves the board and the admin panel.
 type Handlers struct {
 	logger  *slog.Logger
+	reg     *registry.Registry
+	world   registry.World
 	db      *sql.DB
 	queries *sqlc.Queries
 	mutator *webmaster.Mutator
 	cfg     Config
+	budget  registry.Budget
+	// modelSem is the instance-wide model turn limiter shared by every world.
+	modelSem chan struct{}
 
 	// hub tells the open pages' live streams what changed. Every write to
 	// the board publishes; the streams do the reading.
@@ -164,20 +183,18 @@ type Handlers struct {
 	pageOverBudget bool
 }
 
-// New wires the handlers.
-func New(
-	logger *slog.Logger,
-	dbConn *sql.DB,
-	queries *sqlc.Queries,
-	mutator *webmaster.Mutator,
-	cfg Config,
-) *Handlers {
+// New wires one world's handlers.
+func New(d Deps) *Handlers {
 	h := &Handlers{
-		logger:        logger,
-		db:            dbConn,
-		queries:       queries,
-		mutator:       mutator,
-		cfg:           cfg,
+		logger:        d.Logger,
+		reg:           d.Registry,
+		world:         d.World,
+		db:            d.DB,
+		queries:       d.Queries,
+		mutator:       d.Mutator,
+		cfg:           d.Config,
+		budget:        d.Budget,
+		modelSem:      d.ModelSem,
 		hub:           newHub(),
 		lastRewriteAt: make(map[string]time.Time),
 		lastStateAt:   make(map[string]time.Time),
@@ -187,15 +204,15 @@ func New(
 		wake:          make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 
-		compactAfterTokens: cfg.CompactAfterTokens,
-		compactAfterTurns:  cfg.CompactAfterTurns,
+		compactAfterTokens: d.Config.CompactAfterTokens,
+		compactAfterTurns:  d.Config.CompactAfterTurns,
 	}
 
-	if h.cfg.Port == "" {
-		h.cfg.Port = "6930"
+	if h.cfg.AppPort == "" {
+		h.cfg.AppPort = "6930"
 	}
-	if h.cfg.AdminPort == "" {
-		h.cfg.AdminPort = "6932"
+	if h.cfg.PlayPort == "" {
+		h.cfg.PlayPort = "6932"
 	}
 	if h.compactAfterTokens <= 0 {
 		h.compactAfterTokens = webmaster.CompactAfterTokens
@@ -206,24 +223,24 @@ func New(
 	// Compaction treats the budget as the whole prompt. A page cap that fills
 	// it switches compaction off once the page grows that large.
 	if pageTokens := webmaster.PageBytes() / 4; pageTokens >= h.compactAfterTokens {
-		logger.Warn("MAX_PAGE_BYTES fills the compaction budget; compaction will stop",
+		d.Logger.Warn("MAX_PAGE_BYTES fills the compaction budget; compaction will stop",
 			slog.Int("page_tokens", pageTokens),
 			slog.Int("budget_tokens", h.compactAfterTokens),
 		)
 	}
-	if site, err := queries.CurrentSite(context.Background()); err == nil {
+	if site, err := d.Queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID
 	}
 	// A turn that was running when the process died never finished. Mark it
 	// so it cannot be read back as something the webmaster said.
-	if err := queries.FailRunningTurns(context.Background()); err != nil {
-		logger.Error("Failed to close interrupted turns", slog.Any("error", err))
+	if err := d.Queries.FailRunningTurns(context.Background()); err != nil {
+		d.Logger.Error("Failed to close interrupted turns", slog.Any("error", err))
 	}
-	mutator.OnRound = h.setRunningRound
-	mutator.OnRoundDone = h.logRoundDone
-	mutator.OnDraft = h.setDraft
-	mutator.OnMessage = h.addRunMessage
-	mutator.OnSay = h.say
+	d.Mutator.OnRound = h.setRunningRound
+	d.Mutator.OnRoundDone = h.logRoundDone
+	d.Mutator.OnDraft = h.setDraft
+	d.Mutator.OnMessage = h.addRunMessage
+	d.Mutator.OnSay = h.say
 	h.workerWG.Add(1)
 	go func() {
 		defer h.workerWG.Done()
@@ -285,13 +302,42 @@ func normalizeSchema(schema string) string {
 	return schema
 }
 
-func postFromRow(row sqlc.Post) webmaster.Post {
+// authorName resolves a stored identity id to the display name the board and
+// the model read. A missing or disabled identity keeps the id, so a world
+// restored without its registry still shows something.
+func (h *Handlers) authorName(ctx context.Context, id string) string {
+	if id == "" || h.reg == nil {
+		return id
+	}
+	switch id {
+	case "admin", "browser", "server", "webmaster":
+		return id
+	}
+	identity, err := h.reg.GetIdentity(ctx, id)
+	if err != nil || identity.Disabled() || identity.DisplayName == "" {
+		return id
+	}
+	return identity.DisplayName
+}
+
+// turnAuthorName resolves a room-log author. A webmaster turn already stores
+// display names; a post or reply stores the identity id.
+func (h *Handlers) turnAuthorName(ctx context.Context, kind, author string) string {
+	switch kind {
+	case webmaster.TurnPost, webmaster.TurnReply:
+		return h.authorName(ctx, author)
+	}
+	return author
+}
+
+func (h *Handlers) postFromRow(ctx context.Context, row sqlc.Post) webmaster.Post {
 	return webmaster.Post{
-		ID:     row.ID,
-		Author: row.Author,
-		Body:   row.Body,
-		When:   formatWhen(row.CreatedAt),
-		Kind:   row.Kind,
+		ID:       row.ID,
+		Author:   h.authorName(ctx, row.Author),
+		AuthorID: row.Author,
+		Body:     row.Body,
+		When:     formatWhen(row.CreatedAt),
+		Kind:     row.Kind,
 	}
 }
 
@@ -427,7 +473,7 @@ func (h *Handlers) mutateHeld(
 
 	triggers := make([]webmaster.Post, 0, len(triggerPosts))
 	for _, post := range triggerPosts {
-		triggers = append(triggers, postFromRow(post))
+		triggers = append(triggers, h.postFromRow(ctx, post))
 	}
 	if len(triggers) == 0 {
 		triggers = []webmaster.Post{{Author: "admin", Body: instruction}}
@@ -445,7 +491,7 @@ func (h *Handlers) mutateHeld(
 	}
 	authors := []string{"admin"}
 	if len(triggerPosts) > 0 {
-		authors = postAuthors(triggerPosts)
+		authors = h.postAuthorNames(ctx, triggerPosts)
 	}
 	turn, err := h.queries.StartTurn(ctx, sqlc.StartTurnParams{
 		Kind:   webmaster.TurnWebmaster,
@@ -523,9 +569,13 @@ func (h *Handlers) mutateHeld(
 		return webmaster.Result{}, err
 	}
 
+	if !h.acquireModel(ctx) {
+		return webmaster.Result{}, ctx.Err()
+	}
 	start := time.Now()
 	res, mutErr := h.mutator.MutatePosts(ctx, currentSite, room, triggers)
 	elapsed := time.Since(start).Milliseconds()
+	h.releaseModel()
 	h.setFinishing()
 
 	if mutErr != nil {
@@ -638,6 +688,11 @@ func (h *Handlers) mutateHeld(
 		status = "error"
 	} else {
 		finished = true
+		// Usage is charged after the world commit, never inside it: the two
+		// files cannot share a transaction. A crash here loses one turn's
+		// charge, which is the accepted gap. Admin turns and admin-authored
+		// shares are exempt in the registry.
+		h.recordUsage(ctx, kind, triggerPosts, turn.ID, res)
 		// The conversation is stored now, so the inspector can drop the live
 		// rounds before compaction runs.
 		h.finishRunningTurn()
@@ -711,6 +766,63 @@ func (h *Handlers) mutateHeld(
 	h.logger.Info("Mutation finished", attrs...)
 
 	return res, mutErr
+}
+
+// acquireModel takes the instance-wide model turn slot, or gives up when the
+// turn is canceled while it waits. A nil semaphore means no cap.
+func (h *Handlers) acquireModel(ctx context.Context) bool {
+	if h.modelSem == nil {
+		return true
+	}
+	select {
+	case h.modelSem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (h *Handlers) releaseModel() {
+	if h.modelSem != nil {
+		<-h.modelSem
+	}
+}
+
+// recordUsage charges a finished post turn to the distinct identities that
+// wrote the batch. It runs after the version and turn are committed. Admin
+// instruction turns write nothing, and the registry skips admin shares. A
+// failed turn that still stored its row is charged too, so a model that keeps
+// failing cannot spend free tokens.
+func (h *Handlers) recordUsage(
+	ctx context.Context,
+	kind string,
+	triggers []sqlc.Post,
+	turnID int64,
+	res webmaster.Result,
+) {
+	if h.reg == nil || kind == "admin" || h.world.ID == "" {
+		return
+	}
+	ids := postAuthorIDs(triggers)
+	if len(ids) == 0 {
+		return
+	}
+	var tokens int64
+	for _, round := range res.Rounds {
+		tokens += round.PromptTokens + round.CompletionTokens
+	}
+	if tokens <= 0 {
+		return
+	}
+	chargeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := h.reg.RecordBatchUsage(chargeCtx, h.world.ID, tokens, ids, turnID); err != nil {
+		h.logger.Error("Failed to charge turn usage",
+			slog.Int64("turn_id", turnID),
+			slog.Int64("tokens", tokens),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // roundAttrs sums the rounds of one mutation for the finish log. A done-only
@@ -857,7 +969,7 @@ func (h *Handlers) compactRoom(
 			turns[i] = webmaster.Turn{
 				ID:      row.ID,
 				Kind:    row.Kind,
-				Author:  row.Author,
+				Author:  h.turnAuthorName(ctx, row.Kind, row.Author),
 				Body:    row.Body,
 				Said:    row.Said,
 				Changes: row.Changes,
@@ -904,6 +1016,10 @@ func (h *Handlers) summarize(
 		summarizeTimeout,
 	)
 	defer cancel()
+	if !h.acquireModel(summaryCtx) {
+		return "", summaryCtx.Err()
+	}
+	defer h.releaseModel()
 	text, err := h.mutator.Summarize(summaryCtx, previous, turns)
 	if err != nil {
 		return "", fmt.Errorf("summarize: %w", err)
@@ -957,7 +1073,7 @@ func (h *Handlers) roomFor(ctx context.Context, before int64) (webmaster.Room, e
 		turns[len(rows)-1-i] = webmaster.Turn{
 			ID:      row.ID,
 			Kind:    row.Kind,
-			Author:  row.Author,
+			Author:  h.turnAuthorName(ctx, row.Kind, row.Author),
 			Body:    row.Body,
 			Said:    row.Said,
 			Changes: row.Changes,
@@ -1061,7 +1177,7 @@ func (h *Handlers) runPending() {
 		cancel(nil)
 		return
 	}
-	h.beginRun("post", postAuthors(batch))
+	h.beginRun("post", h.postAuthorNames(context.Background(), batch))
 	_, err := h.mutateHeld(ctx, "post", "", batch)
 	cancel(nil)
 	h.clearRun()
@@ -1118,6 +1234,31 @@ func postAuthors(posts []sqlc.Post) []string {
 		authors = append(authors, author)
 	}
 	return authors
+}
+
+// postAuthorNames is postAuthors with identity ids resolved for the admin
+// panel and the turn row. The room log reads names, never raw ids.
+func (h *Handlers) postAuthorNames(ctx context.Context, posts []sqlc.Post) []string {
+	ids := postAuthors(posts)
+	for i, id := range ids {
+		ids[i] = h.authorName(ctx, id)
+	}
+	return ids
+}
+
+// postAuthorIDs is the distinct stored identity ids of a batch, which budget
+// usage charges. The empty author is nobody.
+func postAuthorIDs(posts []sqlc.Post) []string {
+	seen := make(map[string]bool, len(posts))
+	ids := make([]string, 0, len(posts))
+	for _, post := range posts {
+		if post.Author == "" || seen[post.Author] {
+			continue
+		}
+		seen[post.Author] = true
+		ids = append(ids, post.Author)
+	}
+	return ids
 }
 
 // beginRun, endRun and the snapshot helpers keep the live state in one place.
@@ -1412,6 +1553,14 @@ func (h *Handlers) resetLive(version int64) {
 	h.lastError = ""
 	h.liveMu.Unlock()
 	h.hub.publish(topicAll)
+}
+
+// hasWork reports a queued post, an admin instruction waiting for the lock,
+// or a turn in flight. A world with any of them is not idle.
+func (h *Handlers) hasWork() bool {
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	return h.running != nil || len(h.pending) > 0 || len(h.waiting) > 0
 }
 
 func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {

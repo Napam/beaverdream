@@ -3,25 +3,20 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
-	"github.com/Napam/beaverdream/db"
-	"github.com/Napam/beaverdream/db/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/env"
+	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/Napam/beaverdream/lib/worlds"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	_ "modernc.org/sqlite"
@@ -39,8 +34,8 @@ func main() {
 	}
 }
 
-// run wires up dependencies and starts the HTTP server, returning any fatal
-// startup or serving error so main stays a one-liner.
+// run wires up dependencies and starts the app and play listeners, returning
+// any fatal startup or serving error so main stays a one-liner.
 func run(logger *slog.Logger) error {
 	if cwd, err := os.Getwd(); err == nil {
 		logger.Info("Initializing beaverdream", slog.String("cwd", cwd))
@@ -49,28 +44,51 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
 	}
 
-	dbConn, err := openSQLite(env.Vars.DBPath)
+	ctx := context.Background()
+	reg, err := registry.Open(
+		ctx,
+		env.Vars.RegistryPath,
+		beaverdream.RegistryMigrationsFS,
+		logger,
+		registry.WithSessionTTLs(env.Vars.AppSessionTTL, env.Vars.PlaySessionTTL),
+		registry.WithHandoffTTL(env.Vars.HandoffTTL),
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("open the registry: %w", err)
 	}
 	defer func() {
-		if err := dbConn.Close(); err != nil {
-			logger.Error("Failed to close database", slog.Any("error", err))
+		if err := reg.Close(); err != nil {
+			logger.Error("Failed to close the registry", slog.Any("error", err))
 		}
 	}()
 
-	if env.Vars.DbMigrateOnStart {
-		if _, err := db.RunMigrations(
-			context.Background(),
-			beaverdream.MigrationsFS,
-			dbConn,
-			logger,
-		); err != nil {
-			return fmt.Errorf("run migrations: %w", err)
-		}
+	bootstrap, err := reg.EnsureBootstrapAdmin(ctx, env.Vars.AdminPassword)
+	if err != nil {
+		return fmt.Errorf("bootstrap the admin: %w", err)
+	}
+	if bootstrap.Generated {
+		logger.Warn("ADMIN_PASSWORD is not set, generated one for this run",
+			slog.String("admin_username", registry.BootstrapUsername),
+			slog.String("admin_password", bootstrap.Password),
+		)
 	}
 
-	queries := sqlc.New(dbConn)
+	manager := worlds.NewManager(
+		reg,
+		env.Vars.WorldsDir,
+		beaverdream.WorldMigrationsFS,
+		logger,
+	)
+	recovery, err := manager.Recover(ctx)
+	if err != nil {
+		return fmt.Errorf("recover worlds: %w", err)
+	}
+	for _, id := range recovery.Finished {
+		logger.Info("Finished a world left creating", slog.String("world_id", id))
+	}
+	for _, id := range recovery.Removed {
+		logger.Info("Removed a world left deleting or broken", slog.String("world_id", id))
+	}
 
 	sessionID := resolveSessionID(env.Vars.OpenAIBaseURL, env.Vars.OpencodeSessionID)
 	clientOpts := []option.RequestOption{
@@ -84,48 +102,56 @@ func run(logger *slog.Logger) error {
 		clientOpts = append(clientOpts, option.WithHeader("x-opencode-session", sessionID))
 	}
 	client := openai.NewClient(clientOpts...)
-	mutator := webmaster.New(
-		client,
-		env.Vars.OpenAIModel,
-		env.Vars.MutationRounds,
-		env.Vars.OpenAIReasoningEffort,
-	)
-
-	adminToken, err := resolveAdminToken(logger, env.Vars.AdminPassword)
-	if err != nil {
-		return err
+	newMutator := func() *webmaster.Mutator {
+		return webmaster.New(
+			client,
+			env.Vars.OpenAIModel,
+			env.Vars.MutationRounds,
+			env.Vars.OpenAIReasoningEffort,
+		)
 	}
 
-	if env.Vars.AdminPort == env.Vars.Port {
-		return fmt.Errorf("ADMIN_PORT must differ from PORT: the admin needs its own origin")
-	}
-
-	h := handlers.New(logger, dbConn, queries, mutator, handlers.Config{
-		AdminToken:     adminToken,
-		AdminPort:      env.Vars.AdminPort,
-		AdminURL:       env.Vars.AdminURL,
-		Port:           env.Vars.Port,
+	cfg := handlers.Config{
+		AppPort:        env.Vars.AppPort,
+		AppURL:         env.Vars.AppURL,
+		PlayPort:       env.Vars.PlayPort,
+		PlayURL:        env.Vars.PlayURL,
+		AppSessionTTL:  env.Vars.AppSessionTTL,
+		PlaySessionTTL: env.Vars.PlaySessionTTL,
 		DatastarSrc:    beaverdream.StaticRootPath("static/datastar.js"),
 		ThreeSrc:       beaverdream.StaticRootPath("static/three.module.js"),
 		ThreeAddonsSrc: beaverdream.StaticRootPath("static/three-addons.js"),
+	}
+	app := handlers.NewApp(logger, reg, manager, newMutator, handlers.AppConfig{
+		Config: cfg,
+		Budget: registry.Budget{
+			Identity: env.Vars.DailyTokensIdentity,
+			Global:   env.Vars.DailyTokensGlobal,
+		},
+		ModelConcurrency: env.Vars.ModelConcurrency,
+		WorldIdleTimeout: env.Vars.WorldIdleTimeout,
 	})
-	defer h.Close()
+	defer app.Close()
 
-	router := SetupRouter(logger, h)
-	adminRouter := SetupAdminRouter(logger, h)
+	appRouter := app.AppRouter()
+	playRouter := app.PlayRouter()
 
 	logAttrs := []slog.Attr{
-		slog.String("address", env.Vars.Host+":"+env.Vars.Port),
-		slog.String("admin_address", env.Vars.Host+":"+env.Vars.AdminPort),
-		slog.String("db_path", env.Vars.DBPath),
+		slog.String("app_address", env.Vars.Host+":"+env.Vars.AppPort),
+		slog.String("play_address", env.Vars.Host+":"+env.Vars.PlayPort),
+		slog.String("registry_path", env.Vars.RegistryPath),
+		slog.String("worlds_dir", env.Vars.WorldsDir),
 		slog.String("openai_base_url", env.Vars.OpenAIBaseURL),
 		slog.String("openai_model", env.Vars.OpenAIModel),
 		slog.Bool("openai_api_key_set", env.Vars.OpenAIAPIKey != ""),
 		slog.String("openai_reasoning_effort", env.Vars.OpenAIReasoningEffort),
 		slog.Bool("tls", env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != ""),
 	}
-	if env.Vars.AdminURL != "" {
-		logAttrs = append(logAttrs, slog.String("admin_url", env.Vars.AdminURL+"/admin"))
+	if env.Vars.AppURL != "" {
+		logAttrs = append(logAttrs, slog.String("app_url", env.Vars.AppURL))
+	}
+	if env.Vars.PlayURL != "" {
+		logAttrs = append(logAttrs, slog.String("play_url", env.Vars.PlayURL))
 	}
 	if env.Vars.LiveReloadHost != "" && env.Vars.LiveReloadPort != "" {
 		logAttrs = append(logAttrs, slog.String(
@@ -163,47 +189,10 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 
-	// The admin gets its own listener, so no board is ever served on the
-	// origin that holds the login cookie.
 	errs := make(chan error, 2)
-	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.Port, router, "board") }()
-	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.AdminPort, adminRouter, "admin") }()
-	if err := <-errs; err != nil {
-		return err
-	}
-	return nil
-}
-
-// resolveAdminToken returns the configured token, or generates a random one
-// so the admin panel is never open by default. The generated token only lives
-// for this process; set ADMIN_PASSWORD for a stable one.
-func resolveAdminToken(logger *slog.Logger, configured string) (string, error) {
-	if configured != "" {
-		return configured, nil
-	}
-	token, err := randomHex(16)
-	if err != nil {
-		return "", fmt.Errorf("generate admin token: %w", err)
-	}
-	host := env.Vars.Host
-	switch host {
-	case "", "0.0.0.0", "::", "[::]":
-		host = "localhost"
-	}
-	scheme := "http"
-	if env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != "" {
-		scheme = "https"
-	}
-	adminURL := scheme + "://" + net.JoinHostPort(host, env.Vars.AdminPort) + "/admin"
-	if env.Vars.AdminURL != "" {
-		adminURL = env.Vars.AdminURL + "/admin"
-	}
-	logger.Warn(
-		"ADMIN_PASSWORD is not set, generated one for this run",
-		slog.String("admin_url", adminURL),
-		slog.String("admin_password", token),
-	)
-	return token, nil
+	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.AppPort, appRouter, "app") }()
+	go func() { errs <- serve(env.Vars.Host+":"+env.Vars.PlayPort, playRouter, "play") }()
+	return <-errs
 }
 
 // resolveSessionID returns a stable id for OpenCode Go routing. Other providers
@@ -228,116 +217,4 @@ func randomHex(size int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-// favicon sends the browser's implicit icon request to the beaver the
-// code-owned pages already link.
-func favicon(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, webmaster.FaviconPath, http.StatusMovedPermanently)
-}
-
-// SetupRouter registers every route. Writes are commands that answer with a
-// redirect or 204; /live is the one stream an open page reads from.
-func SetupRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
-	router := chi.NewRouter()
-	router.Use(middleware.Recoverer)
-	// The board's port has no admin routes. It sends /admin to the admin
-	// port, whose origin the board's scripts cannot reach.
-	router.Use(h.RedirectAdmin)
-
-	beaverdream.SetupStatic(router)
-
-	// A browser that ignores the page's icon link still asks for this.
-	router.Get("/favicon.ico", favicon)
-
-	router.Get("/", h.Index)
-	router.Get("/identity", h.Identity)
-	router.Post("/identity", h.SetIdentity)
-	router.Post("/posts", h.CreatePost)
-	router.Get("/live", h.Live)
-	router.Get("/version", h.Version)
-	router.Get("/x/state", h.State)
-	router.Post("/x/state/{key}", h.SetState)
-	router.Get("/j/{key}", h.JournalRead)
-	router.Post("/j/{key}", h.JournalAppend)
-	router.Post("/x/err", h.ClientError)
-
-	logger.Debug("Routes registered")
-	return router
-}
-
-// SetupAdminRouter serves the panel and the assets it loads, and nothing else.
-// No board route is mounted here: the model's page never runs on the origin
-// that holds the admin login cookie.
-func SetupAdminRouter(logger *slog.Logger, h *handlers.Handlers) *chi.Mux {
-	router := chi.NewRouter()
-	router.Use(middleware.Recoverer)
-
-	beaverdream.SetupStatic(router)
-
-	// A browser that ignores the page's icon link still asks for this.
-	router.Get("/favicon.ico", favicon)
-
-	router.Get("/admin", h.Admin)
-	router.Post("/admin", h.Admin)
-	router.Get("/admin/", h.Admin)
-	router.Get("/admin/turns", h.AdminTurns)
-	router.Post("/admin/turns", h.AdminTurns)
-	router.Get("/admin/turns/{id}", h.AdminTurn)
-	router.Post("/admin/turns/{id}", h.AdminTurn)
-	router.Get("/admin/site", h.AdminSite)
-	router.Post("/admin/site", h.AdminSite)
-	router.Get("/admin/journal", h.AdminJournal)
-	router.Post("/admin/journal", h.AdminJournal)
-	router.Post("/admin/journal/{key}/clear", h.ClearJournal)
-	router.Post("/admin/state/{key}/clear", h.ClearHoldings)
-	router.Get("/admin/live", h.AdminLive)
-	router.Post("/admin/mutate", h.AdminMutate)
-	router.Post("/admin/retry/{id}", h.RetryTurn)
-	router.Post("/admin/stop/{id}", h.StopTurn)
-	router.Post("/admin/undo", h.UndoLast)
-	router.Post("/admin/heal", h.HealBoard)
-	router.Post("/admin/versions/{id}/restore", h.RestoreVersion)
-	router.Post("/admin/reset", h.ResetBoard)
-	router.Post("/admin/logout", h.AdminLogout)
-
-	logger.Debug("Admin routes registered")
-	return router
-}
-
-// sqlitePragmas configure every connection: foreign keys (off by default in
-// SQLite), a busy timeout so concurrent writers wait instead of failing
-// immediately, and WAL plus NORMAL sync so readers don't block the writer.
-const sqlitePragmas = "_pragma=busy_timeout(5000)" +
-	"&_pragma=foreign_keys(1)" +
-	"&_pragma=journal_mode(WAL)" +
-	"&_pragma=synchronous(NORMAL)"
-
-// openSQLite opens the database. The pragmas travel in the DSN so they apply
-// to every pooled connection, not just the first.
-func openSQLite(path string) (*sql.DB, error) {
-	// SQLite creates the file but not its folder, so a DB_PATH in a new
-	// folder works on the first start. A file: URI or :memory: is left alone.
-	file, _, _ := strings.Cut(path, "?")
-	if file != "" && !strings.HasPrefix(file, "file:") && !strings.HasPrefix(file, ":") {
-		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-			return nil, fmt.Errorf("create the database folder: %w", err)
-		}
-	}
-	separator := "?"
-	if strings.Contains(path, "?") {
-		separator = "&"
-	}
-	dbConn, err := sql.Open("sqlite", path+separator+sqlitePragmas)
-	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	// Every live stream reads on every publish, so several readers are always
-	// in flight. Go keeps two idle connections by default and opens a new one
-	// when they are busy; each new one reruns the pragmas, and closing it again
-	// costs a worker thread. Under 20 players that churn was thousands of
-	// connections a second and most of the CPU. Keep one small fixed pool.
-	dbConn.SetMaxOpenConns(16)
-	dbConn.SetMaxIdleConns(16)
-	return dbConn, nil
 }

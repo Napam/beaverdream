@@ -31,14 +31,14 @@ var journalKeyName = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // journalPanel reads the journal page's selection from a query: the key being
 // browsed, a match, a visitor, and the row id to page back from.
-func journalPanel(q url.Values) pages.Panel {
-	panel := pages.Panel{Page: pages.PageJournal}
+func (h *Handlers) journalPanel(q url.Values) pages.Panel {
+	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageJournal}
 	if key := q.Get("feed"); journalKeyName.MatchString(key) {
 		panel.Feed = key
 	}
 	panel.Match, _ = strconv.ParseInt(q.Get("match"), 10, 64)
 	panel.Before, _ = strconv.ParseInt(q.Get("before"), 10, 64)
-	if visitor := q.Get("visitor"); validVisitorID(visitor) {
+	if visitor := q.Get("visitor"); visitor != "" && len(visitor) <= 64 {
 		panel.Visitor = visitor
 	}
 	panel.Match = max(panel.Match, 0)
@@ -48,7 +48,7 @@ func journalPanel(q url.Values) pages.Panel {
 
 // AdminJournal is the journal page.
 func (h *Handlers) AdminJournal(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, journalPanel(r.URL.Query()))
+	h.servePanel(w, r, h.journalPanel(r.URL.Query()))
 }
 
 // ClearJournal deletes every row of one key. Open pages hold those rows in
@@ -61,7 +61,7 @@ func (h *Handlers) ClearJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := chi.URLParam(r, "key")
-	panel := journalPanel(r.URL.Query())
+	panel := h.journalPanel(r.URL.Query())
 	if !journalKeyName.MatchString(key) {
 		http.NotFound(w, r)
 		return
@@ -199,7 +199,11 @@ func (h *Handlers) adminJournalBrowse(
 	panel pages.Panel,
 ) *pages.JournalBrowse {
 	browse := &pages.JournalBrowse{
-		Key: panel.Feed, Match: panel.Match, Visitor: panel.Visitor, Before: panel.Before,
+		Base:    panel.Base,
+		Key:     panel.Feed,
+		Match:   panel.Match,
+		Visitor: panel.Visitor,
+		Before:  panel.Before,
 	}
 	matches, err := h.queries.JournalMatches(ctx, panel.Feed)
 	if err != nil {

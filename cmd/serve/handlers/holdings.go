@@ -281,7 +281,7 @@ func (h *Handlers) answerVisitorOp(
 	reason string,
 ) {
 	if wantsHTML(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
 		return
 	}
 	if reason == "" && isDatastar(r) {

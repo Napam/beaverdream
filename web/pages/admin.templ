@@ -127,6 +127,10 @@ const (
 // Panel names one admin page. Turn is the turn the turns page shows, or 0 to
 // follow the newest.
 type Panel struct {
+	// Base is the world's admin mount path, for example
+	// "/admin/w/heroes". Empty uses "/admin", which keeps the root panel and
+	// its tests working.
+	Base string
 	Page string
 	Turn int64
 	// Feed, Match, Visitor and Before are what the journal page browses: a
@@ -143,18 +147,38 @@ type Panel struct {
 
 // Path is where the page lives. A login form posts back to it, so a reload
 // returns to the same page.
+func (p Panel) base() string {
+	if p.Base == "" {
+		return "/admin"
+	}
+	return p.Base
+}
+
+// Action is an admin route under this panel's base. path starts with "/".
+func (p Panel) Action(path string) string {
+	return p.base() + path
+}
+
 func (p Panel) Path() string {
 	switch {
 	case p.Page == PageTurns && p.Turn > 0:
-		return "/admin/turns/" + i64(p.Turn)
+		return p.Action("/turns/" + i64(p.Turn))
 	case p.Page == PageTurns:
-		return "/admin/turns"
+		return p.Action("/turns")
 	case p.Page == PageSite:
-		return "/admin/site"
+		return p.Action("/site")
 	case p.Page == PageJournal:
-		return "/admin/journal" + p.query()
+		return p.Action("/journal") + p.query()
 	}
-	return "/admin"
+	return p.base()
+}
+
+// turnPath is one turn under this panel's base.
+func (p Panel) turnPath(id int64, newest bool) string {
+	if newest {
+		return p.Action("/turns")
+	}
+	return p.Action("/turns/" + i64(id))
 }
 
 // query is the journal selection as a query string, empty when nothing is
@@ -184,7 +208,7 @@ func (p Panel) query() string {
 // LivePath is the page's stream. It names the page, so the stream pushes only
 // the panels this page shows.
 func (p Panel) LivePath() string {
-	path := "/admin/live?page=" + p.Page
+	path := p.Action("/live?page=" + p.Page)
 	if p.Turn > 0 {
 		path += "&turn=" + i64(p.Turn)
 	}
@@ -259,48 +283,6 @@ func navTo(path string) string {
 		fetchPage(path) + "; window.scrollTo(0, 0) }"
 }
 
-// AdminLogin is the only thing an unauthenticated visitor sees: a password
-// box. A correct password sets the login cookie, good for 30 days; the form
-// posts to the page it was asked for, so a reload, a new tab or a link from
-// someone else lands where it was going.
-templ AdminLogin(action string, failed bool) {
-	<html lang="en">
-		<head>
-			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>beaverdream admin</title>
-			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
-			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
-			@themeScript()
-		</head>
-		<body class="min-h-dvh bg-gray-100 text-gray-800 dark:bg-neutral-950 dark:text-neutral-300">
-			<main class="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4">
-				<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-				<form method="post" action={ templ.SafeURL(action) } class="flex flex-col gap-2">
-					<label class="text-xs text-gray-500 dark:text-neutral-400" for="password">password</label>
-					<input
-						id="password"
-						type="password"
-						name="password"
-						autocomplete="current-password"
-						autofocus
-						required
-						class={ adminInput }
-					/>
-					if failed {
-						<p class="text-sm text-red-600 dark:text-red-400">wrong password</p>
-					}
-					<button
-						type="submit"
-						class="cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
-					>enter</button>
-					<p class="text-xs text-gray-400 dark:text-neutral-500">signing in needs cookies; without them every visit asks again</p>
-				</form>
-			</main>
-		</body>
-	</html>
-}
-
 // AdminPage is the shell. Back and forward fetch the page the address bar
 // names; everything else lives in AdminBody, which navigation replaces.
 templ AdminPage(view AdminView, datastar string) {
@@ -336,15 +318,15 @@ templ AdminBody(view AdminView) {
 			<div class="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-1 px-4 sm:px-6">
 				<h1 class="shrink-0 text-base font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
 				<nav class="flex shrink-0 gap-1 self-stretch text-sm">
-					@navLink(view.Panel, PageOverview, "/admin", "overview")
-					@navLink(view.Panel, PageTurns, "/admin/turns", "turns")
-					@navLink(view.Panel, PageSite, "/admin/site", "site")
-					@navLink(view.Panel, PageJournal, "/admin/journal", "data")
+					@navLink(view.Panel, PageOverview, view.Panel.Action(""), "overview")
+					@navLink(view.Panel, PageTurns, view.Panel.Action("/turns"), "turns")
+					@navLink(view.Panel, PageSite, view.Panel.Action("/site"), "site")
+					@navLink(view.Panel, PageJournal, view.Panel.Action("/journal"), "data")
 				</nav>
 				<div class="ml-auto flex items-center gap-1.5">
 					@themeToggle()
 					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
-					<form method="post" action="/admin/logout" class="contents">
+					<form method="post" action="/logout" class="contents">
 						@csrfInput(view.CSRF)
 						<button type="submit" class="cursor-pointer rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200">sign out</button>
 					</form>
@@ -391,8 +373,8 @@ templ navLink(current Panel, page string, path string, label string) {
 // remembers: the compacted history and its own notes.
 templ overviewPage(view AdminView) {
 	<div class="flex flex-col gap-6">
-		@adminInstruct(view.CSRF)
-		@AdminMetrics(view.Metrics)
+		@adminInstruct(view.Panel, view.CSRF)
+		@AdminMetrics(view.Metrics, view.Panel)
 		@AdminBudget(view.Budget)
 		@AdminMemory(view.Summary, view.SummaryThrough, view.Notes)
 	</div>
@@ -403,8 +385,8 @@ templ overviewPage(view AdminView) {
 templ turnsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
-		@AdminHistory(view.Turns, view.Panel.Turn, view.Queue)
-		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run, view.CSRF)
+		@AdminHistory(view.Turns, view.Panel.Turn, view.Queue, view.Panel)
+		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run, view.CSRF, view.Panel)
 	</div>
 }
 
@@ -412,15 +394,15 @@ templ turnsPage(view AdminView) {
 // destructive action, top to bottom.
 templ sitePage(view AdminView) {
 	<div class="flex flex-col gap-6">
-		@AdminVersion(view.Site, view.CSRF)
-		@AdminVersions(view.Versions, view.Site.ID, view.CSRF)
+		@AdminVersion(view.Site, view.CSRF, view.Panel)
+		@AdminVersions(view.Versions, view.Site.ID, view.CSRF, view.Panel)
 	</div>
 	<section class={ adminCard + " border-red-500/30 dark:border-red-500/30" }>
 		<p class={ adminLabel }>danger zone</p>
 		<div class="mt-2 flex flex-wrap items-center gap-4">
 			<form
 				method="post"
-				action="/admin/reset"
+				action={ templ.SafeURL(view.Panel.Action("/reset")) }
 				onsubmit={ templ.JSUnsafeFuncCall("return " + resetConfirm) }
 			>
 				@csrfInput(view.CSRF)
@@ -428,7 +410,7 @@ templ sitePage(view AdminView) {
 					type="submit"
 					data-indicator:_resetting
 					data-attr:disabled="$_resetting"
-					data-on:click={ "evt.preventDefault(); if (" + resetConfirm + ") @post('/admin/reset', {contentType: 'form'})" }
+					data-on:click={ "evt.preventDefault(); if (" + resetConfirm + ") @post('" + view.Panel.Action("/reset") + "', {contentType: 'form'})" }
 					class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
 				>reset the board</button>
 			</form>
@@ -439,10 +421,10 @@ templ sitePage(view AdminView) {
 	</section>
 }
 
-templ adminInstruct(csrf string) {
+templ adminInstruct(panel Panel, csrf string) {
 	<section class={ adminCard }>
 		<p class={ adminLabel }>talk to the webmaster</p>
-		<form method="post" action="/admin/mutate" class="mt-2 flex flex-col gap-2" data-on:submit="@post('/admin/mutate', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" data-indicator:_sending>
+		<form method="post" action={ templ.SafeURL(panel.Action("/mutate")) } class="mt-2 flex flex-col gap-2" data-on:submit={ "@post('" + panel.Action("/mutate") + "', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" } data-indicator:_sending>
 			@csrfInput(csrf)
 			<textarea
 				name="instruction"
@@ -488,7 +470,7 @@ templ AdminLiveCard(live LiveView) {
 
 // AdminMetrics charts the recent finished turns: what each one cost in tokens
 // and how long it took. A column opens its turn in the inspector.
-templ AdminMetrics(m MetricsView) {
+templ AdminMetrics(m MetricsView, panel Panel) {
 	<section id="admin-metrics" class={ adminCard + " flex flex-col gap-5" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<p class={ adminLabel }>recent turns</p>
@@ -525,9 +507,9 @@ templ AdminMetrics(m MetricsView) {
 				>
 					for _, row := range m.Turns {
 						<a
-							href={ templ.SafeURL(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							href={ templ.SafeURL(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							title={ turnTitle(row) }
-							data-on:click={ navTo(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							data-on:click={ navTo(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
 						>
 							<span class="flex w-full flex-col overflow-hidden rounded-t-sm" style={ height(row.PromptTokens+row.CompletionTokens, m.MaxTokens) }>
@@ -553,9 +535,9 @@ templ AdminMetrics(m MetricsView) {
 				<div class="flex h-28 items-end gap-0.5 border-b border-gray-200 dark:border-neutral-800">
 					for _, row := range m.Turns {
 						<a
-							href={ templ.SafeURL(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							href={ templ.SafeURL(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							title={ turnTitle(row) }
-							data-on:click={ navTo(turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							data-on:click={ navTo(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col items-center justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
 						>
 							<span class="text-[10px] leading-4 text-gray-400 tabular-nums dark:text-neutral-500">{ itoa(row.Rounds) }</span>
@@ -670,7 +652,7 @@ templ AdminMemory(summary string, through int64, notes string) {
 // link per turn. The stream patches it when a run ends or a post arrives, so
 // a turn appears without a reload. picked is the turn the page shows, or 0
 // for the newest.
-templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
+templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) {
 	<section id="admin-history" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
 			<p class={ adminLabel }>turns</p>
@@ -725,8 +707,8 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView) {
 					for i, row := range turns {
 						<li>
 							<a
-								href={ templ.SafeURL(turnPath(row.Run.ID, i == 0)) }
-								data-on:click={ navTo(turnPath(row.Run.ID, i == 0)) }
+								href={ templ.SafeURL(panel.turnPath(row.Run.ID, i == 0)) }
+								data-on:click={ navTo(panel.turnPath(row.Run.ID, i == 0)) }
 								title={ turnTitle(row) }
 								class={ historyGrid + " border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60 " + pickedRow(row.Run.ID, picked, i == 0) }
 							>
@@ -767,11 +749,11 @@ templ csrfInput(token string) {
 
 // retryTurn runs an errored turn again. The form sits under the error it
 // answers, so the action is where the reason is.
-templ retryTurn(id int64, csrf string) {
+templ retryTurn(id int64, csrf string, panel Panel) {
 	<form
 		method="post"
-		action={ "/admin/retry/" + i64(id) }
-		data-on:submit={ "@post('/admin/retry/" + i64(id) + "', {contentType: 'form'})" }
+		action={ templ.SafeURL(panel.Action("/retry/" + i64(id))) }
+		data-on:submit={ "@post('" + panel.Action("/retry/"+i64(id)) + "', {contentType: 'form'})" }
 		data-indicator:_retrying
 	>
 		@csrfInput(csrf)
@@ -801,6 +783,7 @@ templ AdminTurn(
 	newer int64,
 	run *RunProgress,
 	csrf string,
+	panel Panel,
 ) {
 	<div id="admin-turn">
 		if detail == nil {
@@ -809,29 +792,29 @@ templ AdminTurn(
 			</div>
 		} else {
 			<div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-neutral-500">
-				@stepTurn(older, true)
+				@stepTurn(older, true, panel)
 				if following {
 					<span>following the newest turn</span>
 				} else {
 					<span>showing turn #{ i64(detail.Row.Run.ID) }</span>
 				}
-				@stepTurn(newer, false)
+				@stepTurn(newer, false, panel)
 				if !following {
-					<a href="/admin/turns" data-on:click={ navTo("/admin/turns") } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
+					<a href={ templ.SafeURL(panel.Action("/turns")) } data-on:click={ navTo(panel.Action("/turns")) } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
 				}
 			</div>
-			@turnInspector(*detail, run, csrf)
+			@turnInspector(*detail, run, csrf, panel)
 		}
 	</div>
 }
 
 // stepTurn is one step through the list by id, with a dull arrow at either
 // end.
-templ stepTurn(id int64, older bool) {
+templ stepTurn(id int64, older bool, panel Panel) {
 	if id > 0 {
 		<a
-			href={ templ.SafeURL(turnPath(id, false)) }
-			data-on:click={ navTo(turnPath(id, false)) }
+			href={ templ.SafeURL(panel.turnPath(id, false)) }
+			data-on:click={ navTo(panel.turnPath(id, false)) }
 			title={ "turn #" + i64(id) }
 			class="rounded-sm border border-gray-200 px-1.5 py-0.5 font-mono hover:bg-gray-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
 		>
@@ -852,11 +835,11 @@ templ stepTurn(id int64, older bool) {
 	}
 }
 
-templ turnInspector(d TurnDetail, run *RunProgress, csrf string) {
+templ turnInspector(d TurnDetail, run *RunProgress, csrf string, panel Panel) {
 	<div class="flex flex-col gap-4">
-		@turnHeader(d, csrf)
+		@turnHeader(d, csrf, panel)
 		if d.Row.Run.Status == "running" {
-			@turnRunning(d, run, csrf)
+			@turnRunning(d, run, csrf, panel)
 		} else if !d.Stored {
 			<div class={ adminCard }>
 				<p class="text-sm text-gray-500 dark:text-neutral-400">No conversation was stored for this turn.</p>
@@ -876,7 +859,7 @@ templ turnInspector(d TurnDetail, run *RunProgress, csrf string) {
 // turnRunning is the inspector before the conversation is stored. It shows
 // what the model read, every finished round in full, and the round being
 // written as it streams. The stored turn replaces it when the turn lands.
-templ turnRunning(d TurnDetail, run *RunProgress, csrf string) {
+templ turnRunning(d TurnDetail, run *RunProgress, csrf string, panel Panel) {
 	if run == nil || run.TurnID != d.Row.Run.ID {
 		<div class={ adminCard }>
 			<p class="text-sm text-gray-500 dark:text-neutral-400">This turn is still running. Its conversation is stored when it ends.</p>
@@ -888,8 +871,8 @@ templ turnRunning(d TurnDetail, run *RunProgress, csrf string) {
 			<span class={ adminChip }>started { run.Since.UTC().Format("Jan 2 15:04:05") } UTC</span>
 			<form
 				method="post"
-				action={ "/admin/stop/" + i64(d.Row.Run.ID) }
-				data-on:submit={ "@post('/admin/stop/" + i64(d.Row.Run.ID) + "', {contentType: 'form'})" }
+				action={ templ.SafeURL(panel.Action("/stop/" + i64(d.Row.Run.ID))) }
+				data-on:submit={ "@post('" + panel.Action("/stop/"+i64(d.Row.Run.ID)) + "', {contentType: 'form'})" }
 				data-indicator:_stopping
 				class="ml-auto"
 			>
@@ -968,7 +951,7 @@ templ pinned(text string) {
 	</div>
 }
 
-templ turnHeader(d TurnDetail, csrf string) {
+templ turnHeader(d TurnDetail, csrf string, panel Panel) {
 	<div class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 			<span class="font-mono text-lg font-semibold text-gray-900 dark:text-neutral-100">#{ i64(d.Row.Run.ID) }</span>
@@ -1010,7 +993,7 @@ templ turnHeader(d TurnDetail, csrf string) {
 					<pre class={ adminPre + " bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400" }>{ d.Row.Run.ErrorText }</pre>
 				}
 				<div class="flex justify-end">
-					@retryTurn(d.Row.Run.ID, csrf)
+					@retryTurn(d.Row.Run.ID, csrf, panel)
 				</div>
 			</div>
 		}
@@ -1270,7 +1253,7 @@ func codeFields(site sqlc.SiteVersion) []codeField {
 }
 
 // AdminVersion is the current render and the two one-click repairs.
-templ AdminVersion(site sqlc.SiteVersion, csrf string) {
+templ AdminVersion(site sqlc.SiteVersion, csrf string, panel Panel) {
 	<section id="admin-version" class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<p class={ adminLabel }>current version</p>
@@ -1305,11 +1288,11 @@ templ AdminVersion(site sqlc.SiteVersion, csrf string) {
 			</div>
 		}
 		<div class="flex flex-wrap gap-2">
-			<form method="post" action="/admin/undo" data-on:submit="@post('/admin/undo', {contentType: 'form'})" data-indicator:_undoing>
+			<form method="post" action={ templ.SafeURL(panel.Action("/undo")) } data-on:submit={ "@post('" + panel.Action("/undo") + "', {contentType: 'form'})" } data-indicator:_undoing>
 				@csrfInput(csrf)
 				<button type="submit" data-attr:disabled="$_undoing" class={ adminButton }>undo last change</button>
 			</form>
-			<form method="post" action="/admin/heal" data-on:submit="@post('/admin/heal', {contentType: 'form'})" data-indicator:_healing>
+			<form method="post" action={ templ.SafeURL(panel.Action("/heal")) } data-on:submit={ "@post('" + panel.Action("/heal") + "', {contentType: 'form'})" } data-indicator:_healing>
 				@csrfInput(csrf)
 				<button type="submit" data-attr:disabled="$_healing" class={ adminButton }>heal now</button>
 			</form>
@@ -1332,7 +1315,7 @@ func largestVersion(versions []sqlc.SiteVersion) int64 {
 
 // AdminVersions lists the newest versions with their size, and a restore
 // button for every version except the current one.
-templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, csrf string) {
+templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, csrf string, panel Panel) {
 	<section id="admin-versions" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-3 dark:border-neutral-800">
 			<p class={ adminLabel }>versions</p>
@@ -1354,8 +1337,8 @@ templ AdminVersions(versions []sqlc.SiteVersion, currentID int64, csrf string) {
 					if version.ID != currentID {
 						<form
 							method="post"
-							action={ "/admin/versions/" + i64(version.ID) + "/restore" }
-							data-on:submit={ "@post('/admin/versions/" + i64(version.ID) + "/restore', {contentType: 'form'})" }
+							action={ templ.SafeURL(panel.Action("/versions/" + i64(version.ID) + "/restore")) }
+							data-on:submit={ "@post('" + panel.Action("/versions/"+i64(version.ID)+"/restore") + "', {contentType: 'form'})" }
 							data-indicator:_restoring
 						>
 							@csrfInput(csrf)

@@ -107,7 +107,9 @@ prefer simple, readable code over production hardening.
   log, then the notes, the page and the new post, which change every turn.
   A page that already moves something with keys gets a short hint after the
   new post, so it never shifts the cached prefix. The hint names the game
-  skills; the model decides which to load.
+  skills; the model decides which to load. A page with a journal schema gets
+  a second hint after that one: keep what the other visitors see of a player
+  in step with every change, through one renderer for both.
   The system prompt is one static string and includes `BaseCSS` and a sample
   post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo and restore

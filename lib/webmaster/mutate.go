@@ -913,20 +913,31 @@ act, through shared state or a journal. "make pacman" means one board everyone
 plays on. Build it for a single player only when the post asks for that. A
 color, a restyle, a text change or a purely visual idea needs none of this.
 
-The same goes for every feature added later: assume it is shared live. One
-poster asks, but everyone on the page gets it, and each visitor sees what
-happens to every character, not just their own. Before you add an ability, a
-look, an effect or a change to the world, ask what the other visitors see,
-and build that in the same turn:
+The same goes for every feature added or changed later: assume it is shared
+live. One poster asks, but everyone on the page gets it, and each visitor
+sees what happens to every character, not just their own. Whenever you add or
+change an ability, a look, an effect or the world, even a small tweak like
+"thicker", "faster" or "bigger", ask what the other visitors see, and build
+that in the same turn:
 - What a player is (character, suit, form, what they hold): send it with their
   motion, so the others draw them that way.
 - What a player does (a shot, a throw, a transform, an effect): one journal
   row when it happens, and every other page plays the same thing on that
   player.
 - What it does to others: damage, knockback and pickups reach the other
-  players, not just the poster's screen.
+  players, not just the poster's screen, and hit the same targets the
+  poster's screen shows being hit.
 - What changes the world (time of day, broken walls, an opened door): shared
   state or a journal every page folds, never a variable in one tab.
+Draw your own player's acts and the other players' copies with the same
+function: a row from another player calls the code that draws your own
+effect, with their position. Then a tweak to the effect reaches everyone at
+once. When you find a page that draws them in two places, make the remote
+handler call the local one before you change the look. Other players seeing
+a generic stand-in (a thin tracer for a lightning bolt, a plain blast for a
+sword) is a bug, and so is deciding the others do not need to see it. In your
+notes, write for each player feature how the others see it, so a later turn
+that tweaks it knows what to keep in step.
 Features that stay in one browser are fine where they make sense: the camera,
 settings, menus, a visitor's own interface, or anything the post asks to keep
 to one person. Sharing is the default; when unsure, share it.
@@ -1493,7 +1504,8 @@ func (b *promptBuilder) close() {
 // grows at the end, so a provider can cache everything up to the end of the
 // log. The notes, the page and the new post can change every turn, so they
 // come after it. The movement hint follows the new post on pages that already
-// move, so it never shifts the cached prefix.
+// move, and the sharing hint on pages with a journal, so neither shifts the
+// cached prefix.
 func userPrompt(site Site, room Room, triggers []Post) string {
 	prompt, _ := userPromptSections(site, room, triggers)
 	return prompt
@@ -1573,6 +1585,15 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString("call load_skill with controls. Load feel for hits and effects, space\n")
 		b.WriteString("for walls and damage, entities for kinds of characters, paths for\n")
 		b.WriteString("finding the way around walls, characters for how they look and move.\n")
+	}
+
+	if len(ParseJournalSchema(site.JournalSchema)) > 0 {
+		b.WriteString("\n")
+		b.section("shared")
+		b.WriteString("Other visitors see this page live through its journal. Whatever you\n")
+		b.WriteString("change on a player (look, act, effect, damage), change what the others\n")
+		b.WriteString("see of it in the same turn. If their copies have their own renderer,\n")
+		b.WriteString("make it call yours.\n")
 	}
 
 	b.close()

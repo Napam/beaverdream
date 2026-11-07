@@ -1,14 +1,14 @@
 -- +goose Up
--- The whole schema in one file. beaverdream starts as a plain message board:
--- no posts, a light seed design, and empty model-declared state.
+-- The whole world schema in one file. beaverdream starts as a plain message
+-- board: no posts, a light seed design, and empty model-declared state.
 --
 -- turns is the room. Everything anyone says lives here in one order: visitor
 -- posts, the webmaster's turns, and the server events that move the page
--- without the model. turn.id is the conversation order, and the page the
--- webmaster produced hangs off the turn that produced it.
+-- without the model. turn.id is the conversation order, and the page a turn
+-- produced hangs off that turn.
 CREATE TABLE turns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  -- post, webmaster, heal, undo, restore, clear
+  -- post, webmaster, reply, heal, undo, restore, journal, state, alert
   kind TEXT NOT NULL,
   author TEXT NOT NULL DEFAULT '',
   -- What prompted a webmaster turn (an admin instruction, empty for posts),
@@ -33,24 +33,26 @@ CREATE INDEX turns_kind_id ON turns (kind, id);
 
 CREATE INDEX turns_kind_created_at ON turns (kind, created_at);
 
--- The board only shows posts. The view is the code-owned post list: model
--- text (said, notes, changes) can never reach it by accident.
+-- The board shows posts and the webmaster's replies. The view is the
+-- code-owned post list: model text (said, notes, changes) can never reach it
+-- by accident. kind tells the board which is which, never the author name.
 CREATE VIEW posts AS
 SELECT
   id,
   author,
   body,
-  created_at
+  created_at,
+  kind
 FROM
   turns
 WHERE
-  kind = 'post';
+  kind IN ('post', 'reply');
 
--- site_versions is the render. The current site is simply max(id). Each
--- mutation appends a row, so a bad render never destroys the previous one.
--- html is the page body and holds literal {{posts}} where the code-owned post
--- list goes. turn_id names the turn that produced this render, including
--- server events.
+-- site_versions is the render. The current site is simply max(id). Each turn
+-- that changes the page appends a row, so a bad render never destroys the
+-- previous one. html is the page body and holds literal {{posts}} where the
+-- code-owned post list goes. turn_id names the turn that produced this
+-- render, including server events.
 CREATE TABLE site_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   css TEXT NOT NULL DEFAULT '',
@@ -92,6 +94,45 @@ CREATE TABLE site_state (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+-- Visitor state: counts one visitor owns that outlive every rewrite. A key is
+-- declared in the version's state_schema with scope "visitor"; the holdings
+-- stay here under the key's name whatever later schemas say, so a key that is
+-- declared again gets its balances back. Heal keeps them; only reset and an
+-- admin clear delete them.
+CREATE TABLE state_holdings (
+  -- The identity id as the board sees it (publicVisitor). Display names are
+  -- not unique, so this is the stable key.
+  visitor TEXT NOT NULL,
+  key TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  -- The display name on the latest write, for the top lists.
+  name TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (visitor, key)
+);
+
+CREATE INDEX state_holdings_key ON state_holdings (key, amount DESC);
+
+-- Successful visitor ops only, one row per key changed. The rows of one trade
+-- share op_id. This is the audit log and the rolling-hour window for
+-- per_hour; rows older than a day are pruned on write.
+CREATE TABLE state_ops (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_id INTEGER NOT NULL,
+  visitor TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  -- add, spend, trade
+  op TEXT NOT NULL,
+  -- The key for add and spend, the recipe name for trade.
+  source TEXT NOT NULL,
+  key TEXT NOT NULL,
+  delta INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX state_ops_window ON state_ops (visitor, key, created_at);
+
+CREATE INDEX state_ops_created_at ON state_ops (created_at);
+
 -- The journal is the one flexible store: an append-only log of small JSON
 -- events grouped by a model-declared key. The server owns order, identity,
 -- time and the rules stamp; it never reads what a payload means. A page reads
@@ -99,8 +140,8 @@ CREATE TABLE site_state (
 CREATE TABLE journal (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key TEXT NOT NULL,
-  -- Opaque per-browser id, set by the server. Display names are not unique,
-  -- so this is what can hold a seat.
+  -- The identity id as the board sees it (publicVisitor). Display names are
+  -- not unique, so this is the stable key.
   visitor TEXT NOT NULL DEFAULT '',
   -- Compact JSON written by the page. Never rendered by the server.
   payload TEXT NOT NULL DEFAULT '{}',
@@ -140,7 +181,7 @@ main{margin-top:1.25em}
 .postbox button:hover{filter:brightness(1.08)}',
     '<h1>beaverdream</h1><p class="tagline">a small message board</p>' ||
       '<main>' ||
-      '<form class="postbox" method="post" action="/posts" data-on:submit="@post(''/posts'', {contentType: ''form''}); el.reset()">' ||
+      '<form class="postbox" method="post" action="posts" data-on:submit="@post(''posts'', {contentType: ''form''}); el.reset()">' ||
       '<p class="postbox-title">post a message</p>' ||
       '<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>' ||
       '<div class="postbox-actions"><span>posting as {{name}}</span>' ||
@@ -152,6 +193,12 @@ main{margin-top:1.25em}
   );
 
 -- +goose Down
+DROP VIEW IF EXISTS posts;
+
+DROP TABLE IF EXISTS state_ops;
+
+DROP TABLE IF EXISTS state_holdings;
+
 DROP TABLE IF EXISTS journal;
 
 DROP TABLE IF EXISTS room_summaries;
@@ -159,7 +206,5 @@ DROP TABLE IF EXISTS room_summaries;
 DROP TABLE IF EXISTS site_state;
 
 DROP TABLE IF EXISTS site_versions;
-
-DROP VIEW IF EXISTS posts;
 
 DROP TABLE IF EXISTS turns;

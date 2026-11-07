@@ -16,9 +16,19 @@ var webFS embed.FS
 //go:embed db/migrations/*
 var migrationsFS embed.FS
 
+//go:embed db/registry/migrations/*
+var registryMigrationsFS embed.FS
+
 var (
+	// MigrationsFS is the world migration set. It is kept for the existing
+	// world open path; new code can use WorldMigrationsFS, its explicit name.
 	MigrationsFS fs.FS
-	hashFS       *hashfs.FS
+	// WorldMigrationsFS is the migration set every world file runs.
+	WorldMigrationsFS fs.FS
+	// RegistryMigrationsFS is the migration set for the registry file. The
+	// world and registry sets are never mixed.
+	RegistryMigrationsFS fs.FS
+	hashFS               *hashfs.FS
 )
 
 func init() {
@@ -31,6 +41,12 @@ func init() {
 	MigrationsFS, err = fs.Sub(migrationsFS, "db/migrations")
 	if err != nil {
 		panic("failed to strip migrations prefix: " + err.Error())
+	}
+	WorldMigrationsFS = MigrationsFS
+
+	RegistryMigrationsFS, err = fs.Sub(registryMigrationsFS, "db/registry/migrations")
+	if err != nil {
+		panic("failed to strip registry migrations prefix: " + err.Error())
 	}
 }
 

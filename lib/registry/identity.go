@@ -1,0 +1,540 @@
+package registry
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+)
+
+// RoleAdmin is the only role for now.
+const RoleAdmin = "ADMIN"
+
+// BootstrapUsername is the fixed username of the bootstrap admin login.
+const BootstrapUsername = "admin"
+
+// Identity is one person. Display names are not unique.
+type Identity struct {
+	ID          string
+	DisplayName string
+	// InviteID is empty when no invite made the identity.
+	InviteID   string
+	CreatedAt  time.Time
+	DisabledAt *time.Time
+}
+
+// Disabled reports whether the identity cannot sign in or play.
+func (i Identity) Disabled() bool { return i.DisabledAt != nil }
+
+// Login is one way to sign in. SecretHash is deliberately not part of this
+// type: only the registry holds a password hash.
+type Login struct {
+	ID          string
+	IdentityID  string
+	Source      string
+	ExternalID  string
+	CreatedAt   time.Time
+	LastLoginAt *time.Time
+}
+
+// BootstrapResult is what EnsureBootstrapAdmin did.
+type BootstrapResult struct {
+	IdentityID string
+	LoginID    string
+	// Password is the configured password, or the generated one when the
+	// caller passed an empty string. The caller logs it; the registry never
+	// writes a plaintext password anywhere.
+	Password string
+	// Generated is true when Password was generated for this start.
+	Generated bool
+	// PasswordChanged is true when this start revoked the admin's existing
+	// sessions because the bootstrap password no longer matched.
+	PasswordChanged bool
+}
+
+// CreateIdentityWithPassword makes a person and one password login. It is the
+// path tests use outside an invite; a public signup must go through
+// RedeemInvite.
+func (r *Registry) CreateIdentityWithPassword(
+	ctx context.Context,
+	username, password, displayName string,
+) (*Identity, error) {
+	username, err := CleanUsername(username)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidatePassword(password); err != nil {
+		return nil, err
+	}
+	displayName = CleanDisplayName(displayName, username)
+	hash, err := r.hasher.Hash(password)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin identity: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := r.timestamp()
+	identityID, err := r.newID()
+	if err != nil {
+		return nil, err
+	}
+	loginID, err := r.newID()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO identities (id, display_name, created_at) VALUES (?, ?, ?)`,
+		identityID, displayName, now,
+	); err != nil {
+		return nil, fmt.Errorf("insert identity: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO logins (id, identity_id, source, external_id, secret_hash, created_at)
+		 VALUES (?, ?, 'password', ?, ?, ?)`,
+		loginID, identityID, username, hash, now,
+	); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrUsernameTaken
+		}
+		return nil, fmt.Errorf("insert login: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit identity: %w", err)
+	}
+	return &Identity{
+		ID:          identityID,
+		DisplayName: displayName,
+		CreatedAt:   r.now().UTC(),
+	}, nil
+}
+
+// EnsureBootstrapAdmin makes the ADMIN_PASSWORD the truth for the admin
+// identity on every start: it writes the password hash, clears disabled_at,
+// grants ADMIN again, and revokes existing admin sessions when the password
+// changed. A password comparison verifies the input against the old hash,
+// because argon2 salts differ on every write.
+func (r *Registry) EnsureBootstrapAdmin(
+	ctx context.Context,
+	password string,
+) (BootstrapResult, error) {
+	generated := password == ""
+	if generated {
+		token, err := r.newToken()
+		if err != nil {
+			return BootstrapResult{}, err
+		}
+		password = token
+	}
+	if err := ValidatePassword(password); err != nil {
+		return BootstrapResult{}, err
+	}
+	hash, err := r.hasher.Hash(password)
+	if err != nil {
+		return BootstrapResult{}, err
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return BootstrapResult{}, fmt.Errorf("begin bootstrap: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := r.timestamp()
+	var (
+		identityID string
+		loginID    string
+		oldHash    string
+	)
+	err = tx.QueryRowContext(ctx,
+		`SELECT i.id, l.id, l.secret_hash
+		 FROM logins l
+		 JOIN identities i ON i.id = l.identity_id
+		 WHERE l.source = 'password' AND l.external_id = ?`,
+		BootstrapUsername,
+	).Scan(&identityID, &loginID, &oldHash)
+	changed := false
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		identityID, err = r.newID()
+		if err != nil {
+			return BootstrapResult{}, err
+		}
+		loginID, err = r.newID()
+		if err != nil {
+			return BootstrapResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO identities (id, display_name, created_at) VALUES (?, ?, ?)`,
+			identityID, BootstrapUsername, now,
+		); err != nil {
+			return BootstrapResult{}, fmt.Errorf("insert admin identity: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO logins (id, identity_id, source, external_id, secret_hash, created_at)
+			 VALUES (?, ?, 'password', ?, ?, ?)`,
+			loginID, identityID, BootstrapUsername, hash, now,
+		); err != nil {
+			return BootstrapResult{}, fmt.Errorf("insert admin login: %w", err)
+		}
+	case err != nil:
+		return BootstrapResult{}, fmt.Errorf("read admin login: %w", err)
+	default:
+		changed = !r.hasher.Verify(password, oldHash)
+		if changed {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE sessions SET revoked_at = ?
+				 WHERE identity_id = ? AND revoked_at IS NULL`,
+				now, identityID,
+			); err != nil {
+				return BootstrapResult{}, fmt.Errorf("revoke admin sessions: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE logins SET secret_hash = ? WHERE id = ?`, hash, loginID,
+		); err != nil {
+			return BootstrapResult{}, fmt.Errorf("update admin password: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE identities
+		 SET disabled_at = NULL, display_name = CASE
+		   WHEN display_name = '' THEN ? ELSE display_name END
+		 WHERE id = ?`,
+		BootstrapUsername, identityID,
+	); err != nil {
+		return BootstrapResult{}, fmt.Errorf("restore admin identity: %w", err)
+	}
+	if err := grantRoleTx(ctx, tx, identityID, RoleAdmin, now); err != nil {
+		return BootstrapResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return BootstrapResult{}, fmt.Errorf("commit bootstrap: %w", err)
+	}
+	return BootstrapResult{
+		IdentityID:      identityID,
+		LoginID:         loginID,
+		Password:        password,
+		Generated:       generated,
+		PasswordChanged: changed,
+	}, nil
+}
+
+// GrantRole gives an identity an active role, unless it already has one.
+func (r *Registry) GrantRole(ctx context.Context, identityID, role string) error {
+	if err := validateRole(role); err != nil {
+		return err
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin grant role: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := grantRoleTx(ctx, tx, identityID, role, r.timestamp()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit grant role: %w", err)
+	}
+	return nil
+}
+
+func grantRoleTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	identityID, role, now string,
+) error {
+	var exists int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM identity_roles
+		 WHERE identity_id = ? AND role = ? AND revoked_at IS NULL`,
+		identityID, role,
+	).Scan(&exists)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read role: %w", err)
+	}
+	id, err := randomID()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO identity_roles (id, identity_id, role, granted_at)
+		 VALUES (?, ?, ?, ?)`,
+		id, identityID, role, now,
+	); err != nil {
+		return fmt.Errorf("insert role: %w", err)
+	}
+	return nil
+}
+
+func validateRole(role string) error {
+	if role != RoleAdmin {
+		return fmt.Errorf("%w: unknown role %q", ErrInvalidInput, role)
+	}
+	return nil
+}
+
+// IsAdmin reports whether the identity has an active ADMIN role and is not
+// disabled.
+func (r *Registry) IsAdmin(ctx context.Context, identityID string) (bool, error) {
+	if identityID == "" {
+		return false, nil
+	}
+	var found int
+	err := r.db.QueryRowContext(ctx,
+		`SELECT 1
+		 FROM identities i
+		 WHERE i.id = ? AND i.disabled_at IS NULL
+		   AND EXISTS (
+		     SELECT 1 FROM identity_roles r
+		     WHERE r.identity_id = i.id AND r.role = ? AND r.revoked_at IS NULL
+		   )`,
+		identityID, RoleAdmin,
+	).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read admin role: %w", err)
+	}
+	return true, nil
+}
+
+// RequireAdmin returns ErrForbidden unless identityID is an active admin.
+func (r *Registry) RequireAdmin(ctx context.Context, identityID string) error {
+	admin, err := r.IsAdmin(ctx, identityID)
+	if err != nil {
+		return err
+	}
+	if !admin {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// DisableIdentity marks an identity disabled, revokes every session it holds
+// and keeps its roles. Only an admin may disable an identity; an admin may
+// disable itself, and the next bootstrap restores it.
+func (r *Registry) DisableIdentity(ctx context.Context, actorID, identityID string) error {
+	if err := r.RequireAdmin(ctx, actorID); err != nil {
+		return err
+	}
+	now := r.timestamp()
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin disable identity: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx,
+		`UPDATE identities SET disabled_at = COALESCE(disabled_at, ?) WHERE id = ?`,
+		now, identityID,
+	)
+	if err != nil {
+		return fmt.Errorf("disable identity: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("disable identity rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = ?
+		 WHERE identity_id = ? AND revoked_at IS NULL`,
+		now, identityID,
+	); err != nil {
+		return fmt.Errorf("revoke identity sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit disable identity: %w", err)
+	}
+	return nil
+}
+
+// RevokeAllSessions logs an identity out everywhere.
+func (r *Registry) RevokeAllSessions(ctx context.Context, identityID string) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = ?
+		 WHERE identity_id = ? AND revoked_at IS NULL`,
+		r.timestamp(), identityID,
+	)
+	if err != nil {
+		return fmt.Errorf("revoke all sessions: %w", err)
+	}
+	return nil
+}
+
+// GetIdentity reads one identity.
+func (r *Registry) GetIdentity(ctx context.Context, identityID string) (*Identity, error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT id, display_name, COALESCE(invite_id, ''), created_at, disabled_at
+		 FROM identities WHERE id = ?`,
+		identityID,
+	)
+	identity, err := scanIdentity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read identity: %w", err)
+	}
+	return identity, nil
+}
+
+// ListIdentities returns every identity for the admin page, newest first.
+func (r *Registry) ListIdentities(ctx context.Context, actorID string) ([]Identity, error) {
+	if err := r.RequireAdmin(ctx, actorID); err != nil {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, display_name, COALESCE(invite_id, ''), created_at, disabled_at
+		 FROM identities ORDER BY created_at DESC, id DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list identities: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var identities []Identity
+	for rows.Next() {
+		identity, err := scanIdentity(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list identities row: %w", err)
+		}
+		identities = append(identities, *identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list identities rows: %w", err)
+	}
+	return identities, nil
+}
+
+// SetDisplayName changes an identity's own display name. Names stay
+// non-unique.
+func (r *Registry) SetDisplayName(ctx context.Context, identityID, name string) error {
+	name = CleanDisplayName(name, "")
+	if name == "" {
+		return fmt.Errorf("%w: display name is empty", ErrInvalidInput)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE identities SET display_name = ? WHERE id = ? AND disabled_at IS NULL`,
+		name, identityID,
+	)
+	if err != nil {
+		return fmt.Errorf("set display name: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set display name rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CleanUsername trims and validates a username. Usernames are stored as typed
+// but compared exactly; they are not case-folded.
+func CleanUsername(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if n := utf8.RuneCountInString(value); n < 3 || n > 32 {
+		return "", fmt.Errorf("%w: username must be 3 to 32 characters", ErrInvalidInput)
+	}
+	for i, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case i > 0 && (r == '_' || r == '-' || r == '.'):
+		default:
+			return "", fmt.Errorf("%w: username has a bad character", ErrInvalidInput)
+		}
+	}
+	return value, nil
+}
+
+// ValidatePassword requires at least eight bytes, at most one kilobyte.
+func ValidatePassword(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+	}
+	if len(password) > 1024 {
+		return fmt.Errorf("%w: password is too long", ErrInvalidInput)
+	}
+	return nil
+}
+
+// CleanDisplayName trims, removes control characters, collapses whitespace and
+// caps the name. An empty name falls back to the username.
+func CleanDisplayName(value, fallback string) string {
+	value = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		value = fallback
+	}
+	runes := []rune(value)
+	if len(runes) > 64 {
+		value = string(runes[:64])
+	}
+	return value
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanIdentity(row rowScanner) (*Identity, error) {
+	var (
+		identity   Identity
+		createdAt  string
+		disabledAt sql.NullString
+	)
+	if err := row.Scan(
+		&identity.ID,
+		&identity.DisplayName,
+		&identity.InviteID,
+		&createdAt,
+		&disabledAt,
+	); err != nil {
+		return nil, err
+	}
+	t, err := scanTime(createdAt)
+	if err != nil {
+		return nil, err
+	}
+	identity.CreatedAt = t
+	disabled, err := nullableTime(disabledAt)
+	if err != nil {
+		return nil, err
+	}
+	identity.DisabledAt = disabled
+	return &identity, nil
+}
+
+func randomID() (string, error) {
+	// Roles only need a stable unique row id; reuse the registry id shape.
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("random id: %w", err)
+	}
+	return fmt.Sprintf("%x", buf), nil
+}

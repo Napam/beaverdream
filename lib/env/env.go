@@ -7,15 +7,55 @@ import (
 	"time"
 )
 
-type Env = struct {
-	// Set DB_MIGRATE_ON_START=true (or 1, t, etc.) to enable. Defaults to false.
-	DbMigrateOnStart bool
-	Host             string
-	Port             string
-	// For logging purposes only. Not needed in production, so they're optional.
-	LiveReloadHost string
-	// For logging purposes only. Not needed in production, so they're optional.
-	LiveReloadPort string
+// Env is the process configuration. The process environment is the only
+// input; the Taskfile loads .env before it runs the server.
+type Env struct {
+	Host string
+	// AppPort is the management plane: login, account, API tokens, invites,
+	// the lobby and every admin page.
+	AppPort string
+	// PlayPort serves the boards under /w/{slug}. It never serves login,
+	// invites or admin.
+	PlayPort string
+	// AppURL and PlayURL are the public origins when a proxy or two hosts
+	// front the server. Empty derives the origin from the request.
+	AppURL  string
+	PlayURL string
+
+	// TLS certificate and key. With both set the server speaks TLS, so
+	// browsers get HTTP/2 and every live stream shares one connection.
+	// Without them it serves HTTP/1.1 and h2c for a proxy in front.
+	TLSCertFile string
+	TLSKeyFile  string
+
+	// RegistryPath is the registry SQLite file. It holds identities, logins,
+	// sessions, invites, roles, usage and the worlds table. WorldsDir holds
+	// one <world-id>.db per world; the slug never reaches the path.
+	RegistryPath string
+	WorldsDir    string
+
+	// AdminPassword bootstraps the admin identity on every start. Empty makes
+	// the server generate one and log it.
+	AdminPassword string
+
+	// AppSessionTTL bounds an app session. PlaySessionTTL is zero by default,
+	// so a play session does not expire.
+	AppSessionTTL  time.Duration
+	PlaySessionTTL time.Duration
+	// HandoffTTL bounds the one-time code that moves a browser from the app
+	// port to the play port.
+	HandoffTTL time.Duration
+
+	// Daily token budgets, per UTC day. Zero means unlimited.
+	DailyTokensIdentity int64
+	DailyTokensGlobal   int64
+
+	// ModelConcurrency caps model turns running at once across every loaded
+	// world. WorldIdleTimeout unloads a world with no subscribers, queued
+	// posts or running turn; zero never unloads.
+	ModelConcurrency int
+	WorldIdleTimeout time.Duration
+
 	// Model used to rewrite the site. Defaults to the mock's model id, so
 	// `task dev` plus `task dev.mock-llm` works with no configuration.
 	OpenAIModel string
@@ -31,77 +71,60 @@ type Env = struct {
 	// Reasoning effort for models that support it: minimal, low, medium,
 	// high, xhigh. Empty leaves the provider default.
 	OpenAIReasoningEffort string
-	// Path to the sqlite database file. Defaults to "./data/sqlite.db".
-	DBPath string
-	// Admin password. Empty means the server generates a random one at
-	// startup and logs the URL.
-	AdminPassword string
-	// Optional public URL of the admin panel, such as
-	// "https://admin.example.com". The board redirects /admin there when set.
-	// Trailing slashes are trimmed.
-	AdminURL string
-	// Port that serves the admin pages. The board's port redirects /admin
-	// here. A separate origin keeps the board's scripts, and the model's, off
-	// the origin that holds the admin login cookie. Defaults to the port after
-	// PORT, skipping the live reload proxy.
-	AdminPort string
 	// Tool rounds per mutation before the loop gives up.
 	MutationRounds int
-	// TLS certificate and key. With both set the server speaks TLS, so
-	// browsers get HTTP/2 and every live stream shares one connection.
-	// Without them it serves HTTP/1.1 and h2c for a proxy in front.
-	TLSCertFile string
-	TLSKeyFile  string
+
+	// For logging purposes only. Not needed in production, so they're optional.
+	LiveReloadHost string
+	// For logging purposes only. Not needed in production, so they're optional.
+	LiveReloadPort string
 }
 
 var Vars *Env
 
 func init() {
-	// The process environment is the only input. The Taskfile loads .env
-	// before it runs the server, so a binary started by hand does not read it.
-	migrate, _ := strconv.ParseBool(os.Getenv("DB_MIGRATE_ON_START"))
-	Vars = &Env{
-		DbMigrateOnStart:      migrate,
+	Vars = Load()
+}
+
+// Load reads the process environment into a fresh Env.
+func Load() *Env {
+	return &Env{
 		Host:                  GetEnv("HOST", "localhost"),
-		Port:                  GetEnv("PORT", "6930"),
-		LiveReloadHost:        os.Getenv("LIVE_RELOAD_PROXY_HOST"),
-		LiveReloadPort:        os.Getenv("LIVE_RELOAD_PROXY_PORT"),
+		AppPort:               GetEnv("APP_PORT", "6930"),
+		PlayPort:              GetEnv("PLAY_PORT", "6932"),
+		AppURL:                trimURL(os.Getenv("APP_URL")),
+		PlayURL:               trimURL(os.Getenv("PLAY_URL")),
+		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
+		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),
+		RegistryPath:          GetEnv("REGISTRY_PATH", "./data/registry.db"),
+		WorldsDir:             GetEnv("WORLDS_DIR", "./data/worlds"),
+		AdminPassword:         os.Getenv("ADMIN_PASSWORD"),
+		AppSessionTTL:         GetEnvPositiveDuration("APP_SESSION_TTL", 168*time.Hour),
+		PlaySessionTTL:        GetEnvNonNegativeDuration("PLAY_SESSION_TTL", 0),
+		HandoffTTL:            GetEnvPositiveDuration("HANDOFF_TTL", time.Minute),
+		DailyTokensIdentity:   GetEnvNonNegativeInt64("DAILY_TOKENS_IDENTITY", 1_000_000),
+		DailyTokensGlobal:     GetEnvNonNegativeInt64("DAILY_TOKENS_GLOBAL", 5_000_000),
+		ModelConcurrency:      GetEnvPositiveInt("MODEL_CONCURRENCY", 1),
+		WorldIdleTimeout:      GetEnvNonNegativeDuration("WORLD_IDLE_TIMEOUT", 15*time.Minute),
 		OpenAIModel:           GetEnv("OPENAI_MODEL", "mock-model"),
 		OpenAIBaseURL:         GetEnv("OPENAI_BASE_URL", "http://localhost:6701"),
 		OpenAIAPIKey:          loadAPIKey(),
 		OpencodeSessionID:     os.Getenv("OPENCODE_SESSION_ID"),
 		OpenAIReasoningEffort: os.Getenv("OPENAI_REASONING_EFFORT"),
-		DBPath:                GetEnv("DB_PATH", "./data/sqlite.db"),
-		AdminPassword:         os.Getenv("ADMIN_PASSWORD"),
-		AdminURL:              strings.TrimRight(os.Getenv("ADMIN_URL"), "/"),
-		AdminPort:             adminPort(GetEnv("PORT", "6930")),
 		MutationRounds:        GetEnvInt("TURN_MAX_ROUNDS", 25),
-		TLSCertFile:           os.Getenv("TLS_CERT_FILE"),
-		TLSKeyFile:            os.Getenv("TLS_KEY_FILE"),
+		LiveReloadHost:        os.Getenv("LIVE_RELOAD_PROXY_HOST"),
+		LiveReloadPort:        os.Getenv("LIVE_RELOAD_PROXY_PORT"),
 	}
-}
-
-// adminPort is the port the admin listener uses: the one after the board's,
-// skipping the live reload proxy so the two never collide in dev.
-func adminPort(port string) string {
-	if configured := os.Getenv("ADMIN_PORT"); configured != "" {
-		return configured
-	}
-	board, err := strconv.Atoi(port)
-	if err != nil {
-		return "6932"
-	}
-	next := board + 1
-	if strconv.Itoa(next) == os.Getenv("LIVE_RELOAD_PROXY_PORT") {
-		next++
-	}
-	return strconv.Itoa(next)
 }
 
 // loadAPIKey reads OPENAI_API_KEY, which the task or shell can supply. The key
 // never appears in logs.
 func loadAPIKey() string {
 	return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+}
+
+func trimURL(value string) string {
+	return strings.TrimRight(value, "/")
 }
 
 func GetEnv(name string, fallback string) string {
@@ -129,11 +152,31 @@ func GetEnvPositiveInt(name string, fallback int) int {
 	return val
 }
 
+// GetEnvNonNegativeInt64 reads a whole number that may be zero. A missing,
+// unparseable or negative value uses fallback.
+func GetEnvNonNegativeInt64(name string, fallback int64) int64 {
+	val, err := strconv.ParseInt(os.Getenv(name), 10, 64)
+	if err != nil || val < 0 {
+		return fallback
+	}
+	return val
+}
+
 // GetEnvDuration reads a Go duration such as "2s" or "1h". A missing or
 // unparseable value uses fallback. Zero is allowed.
 func GetEnvDuration(name string, fallback time.Duration) time.Duration {
 	val, err := time.ParseDuration(os.Getenv(name))
 	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+// GetEnvNonNegativeDuration is GetEnvDuration for a value that may be zero but
+// not negative. A missing, unparseable or negative value uses fallback.
+func GetEnvNonNegativeDuration(name string, fallback time.Duration) time.Duration {
+	val, err := time.ParseDuration(os.Getenv(name))
+	if err != nil || val < 0 {
 		return fallback
 	}
 	return val

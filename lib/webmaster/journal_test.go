@@ -414,7 +414,7 @@ func TestJournalConfigLeavesOutPromptData(t *testing.T) {
 		}},
 	}))
 	want := `{"visitor":"0123456789abcdef","keys":{"moves":{"match":2,"rules":3,"max":300}},` +
-		`"mine":{"coins":4},"tops":{}}`
+		`"mine":{"coins":4},"tops":{},"base":"","store":"bd:"}`
 	if data != want {
 		t.Fatalf("config = %s, want %s", data, want)
 	}

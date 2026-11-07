@@ -8,7 +8,6 @@ import (
 	"html"
 	"math/rand/v2"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -47,6 +46,20 @@ type Site struct {
 	Name             string
 	Plain            bool
 	ChangesSinceHeal int
+	// WorldID is the world's immutable registry id. Code-owned browser
+	// storage is keyed by it, so a reused slug cannot load a deleted world's
+	// saves or drafts. Empty keeps the root keys used by tests and a board
+	// served without a world.
+	WorldID string
+	// WorldSlug is the world's address name. It is shown to page scripts but
+	// never used as a storage key.
+	WorldSlug string
+	// BasePath is where the board is mounted, without a trailing slash, for
+	// example "/w/heroes". Empty mounts it at the root.
+	BasePath string
+	// AccountURL is the app's account page. Empty uses "/account". The app
+	// owns sign-in, so the board only links to it.
+	AccountURL string
 	// Datastar is the script path the page loads. Empty uses DatastarPath.
 	Datastar string
 	// Three is the path the page's import map gives the bare name "three".
@@ -55,6 +68,42 @@ type Site struct {
 	// ThreeAddons is the path the import map gives "three/addons". Empty
 	// uses ThreeAddonsPath.
 	ThreeAddons string
+}
+
+// baseURL is the world's mount path without a trailing slash. It is the
+// prefix every code-owned runtime endpoint and reload link uses.
+func (s Site) baseURL() string {
+	base := strings.TrimSpace(s.BasePath)
+	for len(base) > 1 && strings.HasSuffix(base, "/") {
+		base = strings.TrimSuffix(base, "/")
+	}
+	if base == "/" {
+		return ""
+	}
+	return base
+}
+
+// endpoint joins the world's mount path to one code-owned board route.
+func (s Site) endpoint(path string) string {
+	return s.baseURL() + path
+}
+
+// storeRoot is the prefix for every browser key the page runtime owns. The
+// world id, not the slug, keeps a renamed or reused world from seeing another
+// world's saved state.
+func (s Site) storeRoot() string {
+	if s.WorldID == "" {
+		return "bd:"
+	}
+	return "bd:" + s.WorldID + ":"
+}
+
+// accountHref is the app account link in the code-owned footer.
+func (s Site) accountHref() string {
+	if s.AccountURL == "" {
+		return "/account"
+	}
+	return s.AccountURL
 }
 
 // HoldingTotal is how much of one visitor counter everyone holds together,
@@ -67,10 +116,14 @@ type HoldingTotal struct {
 
 // Post is one message on the board.
 type Post struct {
-	ID     int64
+	ID int64
+	// Author is the display name shown on the board.
 	Author string
-	Body   string
-	When   string
+	// AuthorID is the stable identity id the page scripts see as
+	// data-author. It stays distinct when two people share a display name.
+	AuthorID string
+	Body     string
+	When     string
 	// Kind is TurnPost for a visitor post and TurnReply for the webmaster's
 	// answer. Only Kind marks a reply: a visitor can call themselves
 	// webmaster.
@@ -110,21 +163,6 @@ body{background:var(--bg);color:var(--fg);font-family:var(--font);line-height:1.
 .beaver-id a:hover{color:var(--accent)}
 `
 
-// identityCSS lays out the code-owned name page. The model never sees it.
-const identityCSS = `
-body{padding:1.5rem;max-width:48rem;margin:0 auto}
-h1{font-size:1.7em;line-height:1.25;letter-spacing:-.02em;margin:0 0 .4em}
-a{color:var(--accent);text-decoration:none}
-.tagline{color:var(--muted);margin:0 0 1.25em;font-size:.95em}
-.beaver-hint{margin:1em 0 0;font-size:.78em;color:var(--muted)}
-.postbox{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.9em;display:flex;flex-direction:column;gap:.55em;margin:0 0 1.5em}
-.postbox-title{margin:0;font-weight:700;font-size:.95em}
-.postbox input{width:100%;background:color-mix(in srgb,var(--bg) 90%,#fff 10%);color:var(--fg);border:1px solid var(--border);border-radius:3px;padding:.5em .6em;font:inherit;font-size:.95em}
-.postbox input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-.postbox-actions{display:flex;align-items:center;justify-content:space-between;gap:1em;color:var(--muted);font-size:.8em}
-.postbox button{background:var(--accent);color:#fff;border:0;border-radius:3px;padding:.5em 1em;font:inherit;font-weight:600;cursor:pointer}
-`
-
 var postRefPattern = regexp.MustCompile(`&gt;&gt;(\d+)`)
 
 // RenderPosts turns stored posts into the markup that replaces
@@ -140,6 +178,10 @@ func RenderPosts(posts []Post) string {
 		author := p.Author
 		if author == "" {
 			author = "anon"
+		}
+		authorID := p.AuthorID
+		if authorID == "" {
+			authorID = author
 		}
 		class, kind := "post", TurnPost
 		if p.Kind == TurnReply {
@@ -157,7 +199,7 @@ func RenderPosts(posts []Post) string {
 			p.ID,
 			p.ID,
 			kind,
-			html.EscapeString(author),
+			html.EscapeString(authorID),
 			html.EscapeString(p.When),
 			html.EscapeString(author),
 			html.EscapeString(p.When),
@@ -313,8 +355,9 @@ func liveMount(site Site, newestPost int64) string {
 	// every tab from reconnecting in the same instant.
 	retry := 1000 + rand.IntN(2000)
 	init := fmt.Sprintf(
-		`@get('/live', {retry: 'always', retryMaxCount: Infinity, retryInterval: %d, `+
+		`@get('%s', {retry: 'always', retryMaxCount: Infinity, retryInterval: %d, `+
 			`filterSignals: {include: /^_bd\./, exclude: /^$/}})`,
+		site.endpoint("/live"),
 		retry,
 	)
 	return `<div id="bd-live" hidden data-signals="` + html.EscapeString(string(signals)) +
@@ -336,6 +379,26 @@ const liveScript = `<script>
   var reloading = false
   var restored = false
 
+  // The journal config carries the world mount path and storage root. Both
+  // runtimes read them from one code-owned tag, so a page under /w/SLUG/
+  // reaches its own routes and storage.
+  var conf = {}
+  var confTag = document.getElementById('bd-journal')
+  if (confTag) {
+    try { conf = JSON.parse(confTag.textContent || '{}') } catch (e) { conf = {} }
+  }
+  var base = String(conf.base || '').replace(/\/+$/, '')
+  var store = String(conf.store || 'bd:')
+  function url(path) { return base + path }
+  function storageKey(name) { return store + name }
+
+  // A model page may keep the absolute /posts form or use the relative one
+  // the prompt asks for. The textarea's name is the contract in both.
+  function postArea() {
+    return document.querySelector('form[action$="/posts"] textarea[name=body]') ||
+      document.querySelector('textarea[name=body]')
+  }
+
   // Keys and input both count as typing. Capture sees them even when a page
   // script stops propagation.
   function markTyping() { typingAt = Date.now() }
@@ -356,16 +419,16 @@ const liveScript = `<script>
       // Before the draft has been restored, the box is still empty. Saving
       // now would overwrite the draft this page is about to bring back.
       if (!restored) return
-      var area = document.querySelector('form[action="/posts"] textarea[name=body]')
+      var area = postArea()
       if (area) {
-        sessionStorage.setItem('bd:draft', area.value)
-        sessionStorage.setItem('bd:focused', document.activeElement === area ? '1' : '0')
+        sessionStorage.setItem(storageKey('draft'), area.value)
+        sessionStorage.setItem(storageKey('focused'), document.activeElement === area ? '1' : '0')
       }
       var posts = document.querySelectorAll('.post')
       for (var i = 0; i < posts.length; i++) {
         var box = posts[i].getBoundingClientRect()
         if (box.bottom > 0) {
-          sessionStorage.setItem('bd:scroll', JSON.stringify({
+          sessionStorage.setItem(storageKey('scroll'), JSON.stringify({
             id: posts[i].id,
             top: Math.round(box.top)
           }))
@@ -382,20 +445,20 @@ const liveScript = `<script>
           history.replaceState(null, '', location.pathname + location.hash)
         }
       }
-      var draft = sessionStorage.getItem('bd:draft')
-      var area = document.querySelector('form[action="/posts"] textarea[name=body]')
+      var draft = sessionStorage.getItem(storageKey('draft'))
+      var area = postArea()
       if (draft !== null && area) {
         area.value = draft
         // Datastar's data-bind listens for input, not for a scripted value.
         area.dispatchEvent(new Event('input', { bubbles: true }))
-        if (sessionStorage.getItem('bd:focused') === '1') {
+        if (sessionStorage.getItem(storageKey('focused')) === '1') {
           area.focus()
           area.setSelectionRange(area.value.length, area.value.length)
         }
-        sessionStorage.removeItem('bd:draft')
-        sessionStorage.removeItem('bd:focused')
+        sessionStorage.removeItem(storageKey('draft'))
+        sessionStorage.removeItem(storageKey('focused'))
       }
-      var raw = sessionStorage.getItem('bd:scroll')
+      var raw = sessionStorage.getItem(storageKey('scroll'))
       if (raw && !location.hash) {
         var anchor = JSON.parse(raw)
         var el = document.getElementById(anchor.id)
@@ -404,7 +467,7 @@ const liveScript = `<script>
           window.scrollTo(0, Math.max(0, top - anchor.top))
         }
       }
-      sessionStorage.removeItem('bd:scroll')
+      sessionStorage.removeItem(storageKey('scroll'))
     } catch (e) {}
     restored = true
   }
@@ -421,7 +484,7 @@ const liveScript = `<script>
     }
     reloading = true
     saveState()
-    replacePage('/?v=' + next)
+    replacePage(url('/?v=' + next))
   }
 
   window.bdLive = {
@@ -473,32 +536,6 @@ const liveScript = `<script>
 })()
 </script>`
 
-// IdentityDoc is the code-owned page shown before a visitor's first post, and
-// again when they want to set their display name. It is deliberately plain: the
-// model has not taken over yet.
-func IdentityDoc(name string) string {
-	value := ""
-	back := ""
-	if name != "" {
-		value = ` value="` + html.EscapeString(name) + `"`
-		back = `<p class="beaver-id"><a href="/">back to the board</a></p>`
-	}
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
-		`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `"><title>beaverdream</title><style>` +
-		BaseCSS + identityCSS +
-		`</style></head><body>` +
-		`<h1>beaverdream</h1><p class="tagline">a small message board</p>` +
-		`<form class="postbox" method="post" action="/identity">` +
-		`<p class="postbox-title">your display name</p>` +
-		`<input name="name" maxlength="` + strconv.Itoa(MaxIdentityLen) + `" autofocus autocomplete="nickname" placeholder="Anonymous" aria-label="display name"` + value + `>` +
-		`<div class="postbox-actions"><span>shown next to every post you write</span>` +
-		`<button type="submit">save name</button></div>` +
-		`</form>` +
-		`<p class="beaver-hint">no account, no password. pick any name and change it whenever you like.</p>` +
-		back + `</body></html>`
-}
-
 // journalKeyConfig is one key as the client runtime gets it. Rules is the
 // number this page's code was written for; the runtime holds it for the life
 // of the tab. Max is the same row window the server keeps.
@@ -522,9 +559,17 @@ func journalConfig(site Site) []byte {
 		Keys    map[string]journalKeyConfig `json:"keys"`
 		Mine    map[string]int64            `json:"mine"`
 		Tops    json.RawMessage             `json:"tops"`
-	}{Visitor: site.Visitor, Keys: keys, Mine: mine, Tops: tops})
+		// Base is the world mount path the runtime prefixes to its routes.
+		Base string `json:"base"`
+		// Store is the browser-key root. It carries the immutable world id,
+		// so saves and drafts cannot cross worlds that share a slug.
+		Store string `json:"store"`
+	}{
+		Visitor: site.Visitor, Keys: keys, Mine: mine, Tops: tops,
+		Base: site.baseURL(), Store: site.storeRoot(),
+	})
 	if err != nil {
-		return []byte(`{"visitor":"","keys":{},"mine":{},"tops":{}}`)
+		return []byte(`{"visitor":"","keys":{},"mine":{},"tops":{},"base":"","store":"bd:"}`)
 	}
 	return data
 }
@@ -577,13 +622,18 @@ func SiteDoc(site Site, posts []Post) string {
 
 	var b strings.Builder
 	// data-name is code-owned so the model's JavaScript can tell who is
-	// looking without reading the HttpOnly cookie.
+	// looking without reading the HttpOnly cookie. The world fields are for
+	// scripts that need to build a board URL; the runtime already uses them.
 	fmt.Fprintf(
 		&b,
-		`<!doctype html><html lang="en" data-version="%d" data-post="%d" data-name="%s"><head><meta charset="utf-8">`,
+		`<!doctype html><html lang="en" data-version="%d" data-post="%d" data-name="%s" `+
+			`data-world="%s" data-world-slug="%s" data-base="%s"><head><meta charset="utf-8">`,
 		site.Version,
 		newest,
 		escapedName,
+		html.EscapeString(site.WorldID),
+		html.EscapeString(site.WorldSlug),
+		html.EscapeString(site.baseURL()),
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`)
@@ -629,7 +679,11 @@ func SiteDoc(site Site, posts []Post) string {
 		b.WriteString(`</script>`)
 	}
 	b.WriteString(page)
-	b.WriteString(`<p class="beaver-id"><a href="/identity">set name</a></p>`)
+	b.WriteString(
+		`<p class="beaver-id"><a href="` + html.EscapeString(
+			site.accountHref(),
+		) + `">account</a></p>`,
+	)
 	b.WriteString(`</body></html>`)
 	return b.String()
 }

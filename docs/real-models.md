@@ -39,6 +39,11 @@ Every model round is a paid request. A post can take several rounds, up to
 Friends can post all evening, so set a spend cap with your provider before you
 start. Check the provider's dashboard while you play.
 
+The server also enforces two daily token budgets, per identity and global, in
+`DAILY_TOKENS_IDENTITY` and `DAILY_TOKENS_GLOBAL`. They are a safety net, not a
+billing guarantee: a turn already running finishes, and admin turns are never
+charged. See [configuration.md](configuration.md#daily-token-budgets).
+
 ## Try one post first
 
 Post once before you invite anyone. The terminal logs each model round with its

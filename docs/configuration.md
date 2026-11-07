@@ -1,14 +1,14 @@
 # Configuration
 
 Every setting is an environment variable. Server settings come from
-`lib/env/env.go`; the few model limits under [Limits](#limits) are read at
-startup by `lib/webmaster` and `cmd/serve/handlers`. `.env.example` lists every
-one with its default. The Taskfile sets a few more for `task` runs.
+`lib/env/env.go`; the model limits under [Limits](#limits) are read at startup
+by `lib/webmaster`. `.env.example` lists every one with its default. The
+Taskfile sets a few more for `task` runs.
 
 ## Where values come from
 
-- The server reads only the process environment. A binary you start by hand does
-  not read `.env`.
+- The server reads only the process environment. A binary you start by hand
+  does not read `.env`.
 - `task` loads `.env` for every task. Values in the Taskfile's `env:` block
   override `.env`. Shell variables override both.
 - `.env` is gitignored. `.env.example` is the template: `cp .env.example .env`
@@ -19,36 +19,94 @@ one with its default. The Taskfile sets a few more for `task` runs.
 ```sh
 task build.go                   # writes ./bin/app with assets and migrations embedded
 set -a && . ./.env && set +a    # export the keys in .env into this shell
-DB_MIGRATE_ON_START=true ./bin/app
+./bin/app
 ```
 
-- Set `DB_MIGRATE_ON_START=true` so the tables exist. Without it a binary run
-  finds no tables. `.env.example` sets it, but your `.env` may not.
-- The binary listens on `localhost` unless `HOST` is set. For LAN play, run
-  `HOST=0.0.0.0 ./bin/app`.
-- `task db.migrate` also creates the tables. It uses `DB_PATH` from `.env` or
-  the shell, and `./data/sqlite.db` when that is unset.
+The binary listens on `localhost` unless `HOST` is set. For LAN play, run
+`HOST=0.0.0.0 ./bin/app`. The registry and each world file are created and
+migrated automatically on first open.
 
-## Server
+## Ports
 
 - `HOST` (default `localhost`): the address both listeners bind to. `task dev`
   sets `0.0.0.0`, so other devices can connect.
-- `PORT` (default `6930`): the board's port.
-- `ADMIN_PORT` (default: `PORT + 1`, skipping `LIVE_RELOAD_PROXY_PORT`): the port
-  the admin panel runs on. It must differ from `PORT`. It is `6932` under
-  `task dev` and `6931` for a bare binary.
-- `TLS_CERT_FILE`, `TLS_KEY_FILE` (default unset): serve HTTPS. Set both or
-  neither. Browsers use HTTP/2 only over TLS, so every open tab shares one
-  connection. Without them the server speaks HTTP/1.1 and accepts h2c from a
-  proxy that terminates TLS.
+- `APP_PORT` (default `6930`): the management plane. Login, account, API
+  tokens, invites, the lobby and every admin page.
+- `PLAY_PORT` (default `6932`): the boards. Each world serves under
+  `/w/{slug}`, including its live stream, posts, state and journal. It never
+  serves login, invites or admin.
+- `TLS_CERT_FILE`, `TLS_KEY_FILE` (default unset): serve HTTPS on both
+  listeners. Set both or neither. Browsers use HTTP/2 only over TLS, so every
+  open tab shares one connection. Without them the server speaks HTTP/1.1 and
+  accepts h2c from a proxy that terminates TLS.
 
-## Database
+Cookies ignore ports. On `localhost` the app and play listeners share a host,
+so a board script can send a request to the app port with the app cookie
+attached. The app's CSRF token and its refusal to be framed are what keep that
+from changing state. Strong isolation needs two different sites, which means
+two registrable domains. Test on two real domains before a public deployment.
 
-- `DB_PATH` (default `./data/sqlite.db`): the SQLite file. A relative path starts
-  from the working directory.
-- `DB_MIGRATE_ON_START` (default `false`, `true` in the Taskfile and
-  `.env.example`): run the goose migrations at startup. Any value Go's
-  `strconv.ParseBool` accepts works, such as `1`.
+## Public URLs
+
+- `APP_URL` (default empty): public origin of the app, such as
+  `https://app.example.com`. Trailing slashes are trimmed.
+- `PLAY_URL` (default empty): public origin of the boards, such as
+  `https://play.example.com`. Trailing slashes are trimmed.
+
+Leave them empty on a LAN: the server builds the play link from the request
+host and `PLAY_PORT`. Set both behind a proxy or when the app and play ports
+are on separate domains. Public deployments must use separate registrable
+domains; ports alone are not an origin boundary.
+
+## Storage
+
+- `REGISTRY_PATH` (default `./data/registry.db`): the registry SQLite file. It
+  holds identities, logins, sessions, invites, roles, usage and the `worlds`
+  table.
+- `WORLDS_DIR` (default `./data/worlds`): one file per world, named by the
+  world's immutable random id: `<WORLDS_DIR>/<id>.db`. The slug never reaches
+  the file path.
+- Migrations run when the registry opens and each time a world opens. A world
+  that sat idle catches up the next time it opens. There is no
+  `DB_MIGRATE_ON_START` switch and no single `DB_PATH`.
+- `task db.migrate` migrates the registry only. World files migrate on open.
+  It reads `REGISTRY_PATH` from `.env` or the shell, and
+  `REGISTRY_MIGRATIONS_DIR` (default `./db/registry/migrations`) if the
+  migration folder moves.
+
+Use `VACUUM INTO` or the SQLite backup API to back up the registry and world
+files. Never copy a live `.db` file: the WAL may hold recent writes.
+
+## Accounts, sessions and worlds
+
+- `ADMIN_PASSWORD` (default empty): the bootstrap admin password. On every
+  start the server writes an argon2id hash into the admin identity, clears its
+  disabled state, grants `ADMIN` if missing, and revokes the admin's sessions
+  when the password changed. Empty generates a random password and logs it.
+  Change the variable and restart; the UI does not change this login.
+- `APP_SESSION_TTL` (default `168h`): how long an app session lasts.
+- `PLAY_SESSION_TTL` (default `0`): how long a play session lasts. `0` means no
+  expiry.
+- `HANDOFF_TTL` (default `1m`): lifetime of the one-time code that moves a
+  browser from the app port to a board.
+- `MODEL_CONCURRENCY` (default `1`): model turns running at once across every
+  loaded world.
+- `WORLD_IDLE_TIMEOUT` (default `15m`): close a world with no subscribers, no
+  queued posts and no running turn. `0` never unloads one.
+
+## Daily token budgets
+
+- `DAILY_TOKENS_IDENTITY` (default `1000000`): tokens one identity may spend
+  in a UTC day.
+- `DAILY_TOKENS_GLOBAL` (default `5000000`): tokens all identities may spend
+  in a UTC day.
+
+`0` means unlimited for either. A post over budget gets `429` with reason
+`budget` and is not stored. A turn already running finishes, so the day can
+overshoot by one turn per running world. Admin turns never count and are never
+refused. A single turn can reach about 200k prompt tokens before compaction, so
+a per-identity limit below that allows about one turn a day. Tune from real
+usage.
 
 ## Model
 
@@ -96,20 +154,28 @@ A full 512 KiB page is about 131k tokens at the four-runes-per-token estimate.
 Check that the model's context holds `COMPACT_AT_PROMPT_TOKENS` plus the system
 prompt and `LLM_MAX_OUTPUT_TOKENS`.
 
-## Admin
+## Admin and API tokens
 
-- `ADMIN_PASSWORD` (default: random, generated and logged at each start): the admin
-  password. It also signs the login cookie. See [admin.md](admin.md).
-- `ADMIN_URL` (default unset): the public URL of the admin panel, such as
-  `https://admin.example.com`. When set, the board's `/admin` redirect goes there
-  instead of to `ADMIN_PORT` on the request's host. A trailing `/` is trimmed.
+- The admin is an identity with the `ADMIN` role, not a separate password
+  cookie. Its username is `admin`. Log in on the app port. Admin pages are
+  `/admin` and, per world, `/admin/w/{slug}/...`.
+- API tokens are created in the account page. Send one only as
+  `Authorization: Bearer <token>` on the app port. It is refused on the play
+  port. The old `X-Admin-Token` header and password-as-token are gone.
+- Every state-changing app POST that uses a cookie needs the `csrf` form field.
+  Bearer tokens skip it. See [admin.md](admin.md).
 
 ## Dev only
 
 These come from the Taskfile. The server does not need them.
 
-- `LIVE_RELOAD_PROXY_HOST` (`localhost`) and `LIVE_RELOAD_PROXY_PORT` (`6931`):
-  the templ live reload proxy. The server logs the address, and the port feeds
-  the admin port default.
-- `LIVE_RELOAD_PROXY_BIND` (`0.0.0.0`): the address the proxy binds. Only the
-  Taskfile reads it.
+- `LIVE_RELOAD_PROXY_HOST` (`localhost`), `LIVE_RELOAD_PROXY_PORT` (`6931`) and
+  `LIVE_RELOAD_PROXY_BIND` (`0.0.0.0`): the templ live reload proxy. It targets
+  the app port. The server only logs the address, and the Taskfile reads the
+  bind address.
+
+## Removed
+
+The old single-board settings are gone, with no aliases: `PORT`, `ADMIN_PORT`,
+`ADMIN_URL`, `DB_PATH`, `DB_MIGRATE_ON_START`, `AUTH`, `DAILY_TOKENS_MEMBER`
+and `X-Admin-Token`. The visitor and name cookies are replaced by identities.

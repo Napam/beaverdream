@@ -1051,7 +1051,7 @@ break the page, that is a valid outcome.
 Every version must contain a working post form, anywhere in the html. Start
 from this markup, because the server only listens on these names:
 
-<form class="postbox" method="post" action="/posts" data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()">
+<form class="postbox" method="post" action="posts" data-on:submit="@post('posts', {contentType: 'form'}); el.reset()">
   <p class="postbox-title">post a message</p>
   <textarea name="body" required maxlength="%d" rows="3" placeholder="say something" aria-label="message"></textarea>
   <div class="postbox-actions"><span>posting as {{name}}</span>
@@ -1063,9 +1063,13 @@ clears the box; the post then arrives in {{posts}} for everyone over the live
 stream. Keep it. Without it the form still works as a plain form
 post, which reloads the page.
 
-The server records the visitor's cookie name as the post author. Do not add a
+A board can live under a path, such as /w/NAME/. Write every board URL
+relative, with no leading slash: posts, x/state/KEY, j/KEY. A leading / sends
+the request to the server root and misses this board.
+
+The server records the visitor's identity name as the post author. Do not add a
 name field: the server ignores it. The page can use {{name}} to show the
-visitor's name; the server replaces it with the escaped cookie name. The
+visitor's name; the server replaces it with the escaped name. The
 classes are only hooks for your stylesheet. Style it, move it, wrap it, make
 it strange. Keep the method, action and field names working unless the
 post asks you to break posting.
@@ -1094,9 +1098,10 @@ The live page:
   through bd.save. These attribute names belong to
   Datastar, so do not use a Datastar name for your own data; data-cell and
   data-label are safe.
-- Use @post only for /posts and /x/state/KEY. They answer with nothing; the
+- Use @post only for posts and x/state/KEY. They answer with nothing; the
   new data comes back over the stream to every page at once. Never @get or
-  @post a page like /: the reply would be patched into the document.
+  @post the page itself or an absolute path: the reply would be patched into
+  the document.
 - These ids belong to the page and the live stream. Do not reuse them:
   bd-live, bd-posts, bd-css, bd-busy, bd-busy-ring, bd-state, bd-journal. Do not
   name your own signals shared, mine or tops, or anything that starts with
@@ -1117,15 +1122,15 @@ Shared state:
   everyone the moment anyone writes. Scripts get the beaverdream:state event
   with the values in detail.state; the JSON script tag id="bd-state" is kept
   current too.
-- POST /x/state/KEY applies that key's op for the current visitor. The value
+- POST x/state/KEY applies that key's op for the current visitor. The value
   comes from a value=... query parameter or form field:
-    <button type="button" data-on:click="@post('/x/state/likes')">like</button>
+    <button type="button" data-on:click="@post('x/state/likes')">like</button>
     <span data-text="$shared.likes"></span>
-    <button type="button" data-on:click="@post('/x/state/poll?value=yes')">yes</button>
+    <button type="button" data-on:click="@post('x/state/poll?value=yes')">yes</button>
     <span data-text="$shared.poll.yes || 0"></span>
   A list holds {author, value, at} entries. Add to it with a form that has an
-  input named value and data-on:submit="@post('/x/state/wall', {contentType:
-  'form'}); el.reset()". GET /x/state returns {"schema": ..., "state": ...}.
+  input named value and data-on:submit="@post('x/state/wall', {contentType:
+  'form'}); el.reset()". GET x/state returns {"schema": ..., "state": ...}.
 - Use state only when a post asks for something people can click, vote on or
   leave behind. Do not add widgets just because you can. Shared values survive
   restores; heal and reset clear them. Do not store HTML in it.
@@ -1152,8 +1157,8 @@ Visitor state:
     bd.state.trade('buy_rod').then(function (r) {
       note.textContent = r.ok ? 'bought a rod' : r.reason === 'short' ? 'not enough gold' : r.reason
     })
-  Markup can also send @post('/x/state/coins?add=5') or
-  @post('/x/state/coins?add=' + $catch), but a refused @post shows nothing,
+  Markup can also send @post('x/state/coins?add=5') or
+  @post('x/state/coins?add=' + $catch), but a refused @post shows nothing,
   so a shop button calls bd.state.trade from a script.
 - $mine.KEY (by name, not label) is this visitor's count, kept live; bind
   markup to it and never keep your own copy of a balance. $tops.KEY is the
@@ -1190,7 +1195,9 @@ Saving in this browser:
     if (typeof view.zoom !== 'number' || view.zoom < 0.5 || view.zoom > 4) view.zoom = 1
     function setZoom(z) { view.zoom = z; bd.save('view', view); draw() }
 - A save is this browser's own copy. Other visitors never see it, and another
-  browser starts fresh. Shared things go in state or the journal, and counts
+  browser starts fresh. Saves belong to this world: the runtime keeps a
+  separate store for each world, so the same name elsewhere is a different
+  value. Shared things go in state or the journal, and counts
   that matter (coins, items) in visitor state.
 - A saved value may come from an older page. Check its type and range before
   you use it, as you would a journal payload. Keep a name when you rewrite the

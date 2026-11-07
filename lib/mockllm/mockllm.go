@@ -355,7 +355,7 @@ func walletCalls() []toolCall {
 // list drawn as text.
 const WalletScript = `<div class="purse">
 <p><span data-text="$mine.coins"></span> gold, <span data-text="$mine.hat"></span> hats</p>
-<button type="button" data-on:click="@post('/x/state/coins?add=1')">dig</button>
+<button type="button" data-on:click="@post('x/state/coins?add=1')">dig</button>
 <button type="button" id="buy-hat">buy a hat (10 gold)</button>
 <span id="purse-note"></span>
 <ol id="purse-top"></ol>
@@ -480,8 +480,8 @@ func pickTheme(prompt string) theme {
 
 // calls renders a theme as the edits the webmaster tools expect. The board
 // keeps the {{posts}} placeholder, so the real posts stay in place.
-const postForm = `<form class="postbox" method="post" action="/posts" ` +
-	`data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()">` +
+const postForm = `<form class="postbox" method="post" action="posts" ` +
+	`data-on:submit="@post('posts', {contentType: 'form'}); el.reset()">` +
 	`<p class="postbox-title">post a message</p>` +
 	`<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>` +
 	`<div class="postbox-actions"><span>posting as {{name}}</span>` +

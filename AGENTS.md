@@ -7,10 +7,13 @@ prefer simple, readable code over production hardening.
 ## Ground rules
 
 - Use `tmp/` for scratch files and test output. It is gitignored.
-- `000001_init.sql` is frozen. A schema change is a new numbered migration,
-  because goose will not re-run an applied version and the live board keeps
-  its data. Never edit an applied migration. Reset clears every table a
-  migration adds, and its `sqlite_sequence` row.
+- World migrations and registry migrations are separate sets, in separate
+  folders, because the registry and each world are separate SQLite files.
+  `000001_init.sql` is frozen. A schema change is a new numbered migration in
+  the matching set, because goose will not re-run an applied version and a live
+  world keeps its data. Never edit an applied migration. World reset clears
+  every table a world migration adds, and its `sqlite_sequence` row, in that
+  world file only. The registry is never reset.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`
@@ -27,6 +30,11 @@ prefer simple, readable code over production hardening.
 
 ## Shape of the app
 
+- The registry is one SQLite file (`REGISTRY_PATH`): identities, logins,
+  sessions, invites, roles, daily usage and the `worlds` table. Each world is
+  its own SQLite file under `WORLDS_DIR`, named by the world's immutable random
+  id, never its slug. No foreign key crosses the two files, so a world read
+  handles an identity that is disabled or missing and shows a fallback name.
 - `turns` is the room: one ordered row for every post, every webmaster turn and
   every server event (heal, undo, restore). `id` is the conversation
   order. The `posts` view exposes `kind = 'post'` and `kind = 'reply'` (the
@@ -37,9 +45,14 @@ prefer simple, readable code over production hardening.
   holds the compacted history: the newest row is one message standing in for
   everything through `through_turn_id`. `site_state` holds the model-declared
   shared values, and its schema travels on the version row. `state_holdings`
-  holds what each visitor owns of a visitor counter, and `state_ops` logs every
+  holds what each identity owns of a visitor counter, and `state_ops` logs every
   successful visitor op for a day. `journal` holds the model-declared
   append-only feeds, and their schema travels there too.
+- `lib/registry` owns the registry: schema, migrations, identity, login,
+  session, invite, role, usage and world-row reads and writes. `lib/worlds`
+  owns the world files: creation in three steps, open with `mode=rw`, migration
+  on every open, lazy load and idle unload, deletion, and the crash cleanup for
+  `creating` and `deleting` rows.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `room.go` (the turn type, the room log and
   the change summary), `tools.go` (tool execution and validation), `mutate.go`
@@ -123,7 +136,7 @@ prefer simple, readable code over production hardening.
   Enforce only what keeps the site working as an ever-mutating board: the
   `{{posts}}` placeholder, the form contract in the prompt, the size caps and
   the code-owned shell. Do not add regions, required elements or layout rules.
-  `BaseCSS` styles only code-owned markup (posts, the name link) and the color
+  `BaseCSS` styles only code-owned markup (posts, the account link) and the color
   variables; the seed's layout lives in the seed's own stylesheet.
 - The html must keep the literal `{{posts}}` placeholder exactly once; the
   server substitutes the escaped post list. `cleanHTML` rejects html without
@@ -191,19 +204,20 @@ prefer simple, readable code over production hardening.
   `three` and `three/addons` to three.js 0.187 (vendored in `web/vendor`, so
   pages need no CDN),
   Datastar and the live stream mount, the live script, the `bd-posts`
-  container, the `bd-state` JSON tag, the small `set name` link, and the busy
+  container, the `bd-state` JSON tag, the small account link, and the busy
   spinner. The spinner is
   inline-styled and patched by the stream while a rewrite is queued or
   running, so a model stylesheet cannot move or hide it. The server also
   replaces `{{name}}`
-  in the model's html with the escaped cookie name, and puts the same name
+  in the model's html with the escaped display name, and puts the same name
   on `<html data-name="...">` so model scripts can personalize in the browser.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
   form is a valid outcome.
-- The read side is one Datastar stream per open page, `GET /live`. Commands
-  (`POST /posts`, `/x/state/{key}`, `/j/{key}`, every admin action, the
-  worker) write the database and then publish a topic. Topics are a bitmask:
+- The read side is one Datastar stream per open page, `GET /w/{slug}/live`.
+  Commands (`POST /w/{slug}/posts`, `/w/{slug}/x/state/{key}`,
+  `/w/{slug}/j/{key}`, every admin action, the worker) write the world file and
+  then publish a topic. Topics are a bitmask:
   posts, site, busy, state, journal, and turns for the admin panel. Every
   stream re-reads the parts its page is missing and pushes them; a subscriber
   coalesces a burst into one sync, so the hub never blocks and never drops.
@@ -232,14 +246,15 @@ prefer simple, readable code over production hardening.
   would patch the board into the document. A plain form post still gets 303.
   `/version` stays as a plain JSON read for tools and tests; nothing polls it.
 - Everyone sees the same page. Personalization happens in the browser: the
-  server fills `{{name}}` and `<html data-name>` from the cookie, and the
-  prompt tells the model to branch on `document.documentElement.dataset.name`
-  in a script. There is no per-visitor server state.
+  server fills `{{name}}` and `<html data-name>` from the play session's
+  identity, and the prompt tells the model to branch on
+  `document.documentElement.dataset.name` in a script. There is no per-visitor
+  server state.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
-  serialized and cooled down per browser and key (the visitor cookie, not the
-  name; a write without the cookie falls back to the name, never a fresh id).
+  serialized and cooled down per identity and key (the play session's identity,
+  never a fresh id).
   Do not let visitors create keys or store raw HTML. Reset and heal clear the
   shared values; restores keep them and take the old schema.
 - A counter with `scope: "visitor"` is a whole-number count each visitor owns,
@@ -249,7 +264,7 @@ prefer simple, readable code over production hardening.
   never the global +1, and a recipe trades. A visitor op runs in one
   transaction under `stateMu`: costs must be held, gains stay under `max` and
   the rolling-hour `per_hour`, and any miss rolls back everything and stores
-  nothing. A visitor op without the visitor cookie is refused. Refusals carry
+  nothing. A visitor op without a play session is refused. Refusals carry
   a reason (`short`, `full`, `cap`, `slow`, `gone`, `bad`) and keep their real
   status; Datastar only patches a 200, so success is 204 to Datastar and JSON
   to a fetch. Cheating is accepted: the server keeps counts valid, not
@@ -260,11 +275,11 @@ prefer simple, readable code over production hardening.
   always wins, so a hidden name reused as a shared counter is just that. Only
   reset and the admin's clear key delete holdings, and a clear is a `state`
   event turn. Visitor counters stay out of `$shared`, `bd-state` and
-  `GET /x/state`. Each page gets its own `$mine` and everyone's `$tops`
-  (top 10, `id` = `publicVisitor`, the page's `bd.visitor`), seeded on the
-  first render and pushed by its stream, which reads the visitor cookie
-  without drawing one. Only the stream writes them: an op's answer can be
-  older than a push from another tab. A push sends `null` for a key the
+  `GET /w/{slug}/x/state`. Each page gets its own `$mine` and everyone's `$tops`
+  (top 10, `id` = `publicVisitor`, the page's `bd.visitor`, the identity id),
+  seeded on the first render and pushed by its stream, which reads the play
+  session's identity without drawing a cookie. Only the stream writes them: an
+  op's answer can be older than a push from another tab. A push sends `null` for a key the
   schema dropped, since Datastar merges patches, and a new version pushes
   the state signals too. The top lists are cached per holdings write, so a
   burst of ops runs the query once, not once per stream. `bd.state` in the
@@ -296,9 +311,9 @@ prefer simple, readable code over production hardening.
   before that, because a reload restarts the page script at the spawn point. The
   log is public, so the reducer, not the server, rejects illegal rows.
 - `bd.save(name, value)` and `bd.load(name, fallback)` in the code-owned
-  runtime are the browser store: JSON under `bd:save:` in localStorage, at
-  most `maxSaveLen` characters a name. A save lands in memory at once and
-  reaches storage on a 500 ms timer and on `pagehide` or a hidden tab, so a
+  runtime are the browser store: JSON under `bd:<world-id>:save:` in
+  localStorage, at most `maxSaveLen` characters a name. A save lands in memory
+  at once and reaches storage on a 500 ms timer and on `pagehide` or a hidden tab, so a
   page can save every frame. They never throw: storage that throws keeps the
   memory copy, a stored value that does not parse loads as the fallback, and
   a value that is not JSON or is too long is refused and reported once per
@@ -306,9 +321,11 @@ prefer simple, readable code over production hardening.
   camera, picks, settings) and restore it, unasked; it forbids touching
   localStorage directly. The motion example restores from the viewer's newest
   row, then the save, then the spawn, because the feed keeps only seconds of
-  motion. Saves outlive reset; pages check what they load.
-- The admin data page (`/admin/journal`, labelled "data") shows the shared
-  state first, then every visitor counter, declared or hidden, with its
+  motion. Save names are namespaced by the world id, not the slug, so a reused
+  slug does not load a deleted world's saves. Saves outlive world reset; pages
+  check what they load.
+- The admin data page (`/admin/w/{slug}/journal`, labelled "data") shows the
+  shared state first, then every visitor counter, declared or hidden, with its
   holders and the picked visitor's state ops, then lists every journal key
   that has rows, declared or not, with stats
   from one aggregate query, and browses one key's rows newest first. The site
@@ -326,76 +343,94 @@ prefer simple, readable code over production hardening.
   stream that has seen fewer sends `bd._resync()`, because a clear can leave
   the newest row id where it was. The client reads the feed again on a pushed
   row from an older match it has not read, which covers a stream that was down.
-- A browser error is a turn, not a console line. `/x/err` records one `alert`
-  turn per message per stretch, labelled as visitor-reported, and never
+- A browser error is a turn, not a console line. `/w/{slug}/x/err` records one
+  `alert` turn per message per stretch, labelled as visitor-reported, and never
   triggers a turn, or a script that throws again would loop forever. The
   beacon carries the page's version; an error from a page that is no longer
   current is dropped. Refusals the page did not cause (closed match, 409, 429,
   401) resolve `append` with null and never reach the beacon.
 - The seed page reads like a plain light message board. Do not mention
   rewriting, AI, or the gimmick in its header, form or footer; the first post is
-  the reveal. Keep the seed in `000001_init.sql` and the form example in the
-  system prompt in sync.
-- Identity is one HttpOnly cookie, `beaverdream_name`, set by `/identity`. A
-  first visit gets the code-owned name page, and `GET /identity` opens the same
-  form prefilled so a visitor can set their display name again. Posts use the
-  cookie value as the author. Names are not unique and there are no accounts.
-  The server ignores any author field in model markup.
-- Admin is always password-protected, on its own port. The pages are
-  `/admin`, `/admin/turns`, `/admin/turns/{id}` and `/admin/site`, served only
-  on `ADMIN_PORT` (default: the port after `PORT`, skipping the live reload
-  proxy). The board's port redirects every admin path there, keeping the host
-  or to `ADMIN_URL` when it is set, so a LAN address works too. The admin
-  listener mounts the panel and its assets only and serves no board route.
-  That split is what allows the login cookie: model-written JavaScript never
-  runs on the admin origin, and the
-  browser refuses to hand the board a cross-origin response. The cookie is
-  `beaverdream_admin`, a signed expiry, HttpOnly, SameSite=Strict, host-only,
-  lasting 30 days; a new `ADMIN_PASSWORD` invalidates it. Without it a page
-  renders the password form. A correct password sets the cookie and answers
-  with a 303 back to the same path, so the next request carries the cookie,
-  the page gets its CSRF token, and a reload cannot repost the password.
-  Cookies are scoped by host, not by port, so the board port does receive the
-  cookie; HttpOnly keeps it out of the model's scripts, and the CSRF token
-  keeps a forged action from working.
-- Every cookie-authenticated POST needs the `csrf` field, which is
-  HMAC(ADMIN_PASSWORD, "admin-csrf:" + the signed expiry in the cookie), compared
-  in constant time. It is derived, not stored, and it dies with the login. The
-  panel renders it into every action form, and the live stream renders it into
-  the fragments that carry forms (undo, heal, restore), because that is where
-  those panels come from after load. Only the admin origin can read it. A
-  request authenticated by `X-Admin-Token` skips the check: that token is
-  itself a secret only a script has. Login needs no CSRF (one shared identity,
-  and the password is still required). Never add an `Origin` or `Sec-Fetch-*`
-  check: `Referrer-Policy: no-referrer` makes browsers report `Origin: null`,
-  and plain HTTP on a LAN address sends no fetch metadata at all.
-- Every cookie with the admin's name is tried and any that verifies is used.
-  A page on the board port can plant one ahead of the real login; skipping bad
-  ones keeps that from locking the admin out. Nobody can read or overwrite the
-  real cookie from the board. `X-Admin-Token` still works in a header or form
-  field for scripts. Never a query parameter, and never the token in a page or
-  a URL. Admin pages and actions answer Datastar with `#admin-body` patched in
-  place (a plain request renders the whole page), so no redirect needs a
-  secret. Each page opens its own stream for its own panels. A turn's
-  conversation is stored whole when it finishes (a running turn saves only
-  the prompt and its rounds, for crashes), so the turns page shows the
-  running turn from memory: the prompt and every finished round in full as
-  `Mutator.OnMessage` hears them, and the round being written as
-  `#admin-draft`, which `OnDraft` fills chunk by chunk. A draft publishes
-  `topicDraft` at most every 100 ms and patches only `#admin-draft` and the
-  status card, never the whole inspector; the card names the phase (waiting,
-  thinking, replying, writing a call, running its tools). Board streams do
-  not subscribe to it. The stored turn replaces the live view when it lands,
-  and a held turn that was running gets that one last patch: its mount
-  carries `live=1`, so the patch also lands when the turn finished before the
-  stream connected. `runState` rides on the public
-  `/version` JSON, so its messages and draft never marshal. When
-  `ADMIN_PASSWORD` is empty the server generates one and logs the password.
-- Mutations from posts run in the background through one worker that coalesces
-  a burst into one rewrite; admin mutations stay synchronous so the flash
-  message works. `h.mu` serializes both, the worker takes it before draining
-  pending, and the timeout starts after the lock. Reset therefore cannot run a
-  batch of posts it just deleted. Tests wait for the version or run to land.
+  the reveal. Keep the seed in the world's `000001_init.sql` and the form
+  example in the system prompt in sync.
+- Identity is an account in the registry: one `identities` row and one or more
+  `logins` rows. A password login stores the username as `external_id` and an
+  argon2id hash as `secret_hash`. Display names are separate, not unique. Posts,
+  holdings and journal rows key on `identities.id`; `publicVisitor` is that id
+  itself. The old visitor and name cookies are gone, and the server ignores any
+  author field in model markup.
+- Session cookies are split by scope. The app cookie and the play cookie have
+  different names, both HttpOnly, SameSite=Lax and host-only. An app session
+  lasts `APP_SESSION_TTL` (7 days). A play session lasts `PLAY_SESSION_TTL`,
+  which is 0 by default and means no expiry. Every check reads the registry,
+  then refuses a revoked or expired session or a disabled identity. An app
+  cookie never authorizes a play route and a play cookie never authorizes an
+  app route. Play sessions are minted by the handoff, not by login.
+- Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
+  username is `admin`. The app pages are `/admin` for the lobby, accounts and
+  invites, and `/admin/w/{slug}/...` for one world's turns, site and data. The
+  play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
+  redirect, and no separate admin origin. The app refuses framing
+  (`frame-ancestors 'none'` or `X-Frame-Options: DENY`), so a board cannot frame
+  it.
+- `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
+  server writes an argon2id hash of it into the admin identity's password
+  login, clears `disabled_at`, grants `ADMIN` when missing, and revokes the
+  admin's sessions when the password changed. Compare by verifying the password,
+  not by comparing argon2 hashes. Empty generates a password and logs it. The UI
+  does not change the bootstrap login.
+- Every state-changing app POST that authenticates by cookie needs the `csrf`
+  form field, derived with an HMAC from the session and compared in constant
+  time. The panel renders it into every action form, and the live stream renders
+  it into fragments that carry forms (undo, heal, restore). A request
+  authenticated by an API bearer token skips the check, because a script cannot
+  attach an ambient cookie. Never add an `Origin` or `Sec-Fetch-*` check:
+  `Referrer-Policy: no-referrer` makes browsers report `Origin: null`, and plain
+  HTTP on a LAN address sends no fetch metadata at all.
+- An API token is an admin identity's `sessions` row with `scope = 'api'`, about
+  32 random bytes, stored as a hash and shown once. It is revocable in one
+  update. Send it only as `Authorization: Bearer <token>`, never as a query
+  parameter or a form field. It works on the app port and is refused on the play
+  port. There is no `X-Admin-Token` and no password-as-token.
+- Pressing play is an app POST with CSRF (or a GET that only mints the code). It
+  mints a one-time code bound to the identity and the world, valid for
+  `HANDOFF_TTL`. The play port exchanges the code for a play session, redirects
+  to `/w/{slug}`, and drops the code from the URL. The code is single-use.
+- Without a play session, a board request gets the gate page and `/live`
+  answers 204 so Datastar stops retrying. Revoking an identity revokes its
+  sessions and cancels its open streams through every loaded world's hub, not
+  just one. Revoking one session affects one browser.
+- The daily token budget is charged in model tokens per UTC day. `usage` lives
+  in the registry and is written after the world commit, not in the world
+  finish transaction, because one transaction cannot span two SQLite files. The
+  post check refuses over-budget posts with 429 reason `budget` and stores
+  nothing. A batch splits its tokens evenly across its distinct identities; the
+  global total takes the whole amount. Admin turns are never charged or
+  refused. A running turn may overshoot by one turn per running world.
+  `GET /w/{slug}/x/budget` reports `{used, limit}`. A budget refusal never goes
+  to the error beacon.
+- Admin pages and actions answer Datastar with `#admin-body` patched in place
+  (a plain request renders the whole page), so no redirect needs a secret. Each
+  page opens its own stream for its own panels. A turn's conversation is stored
+  whole when it finishes (a running turn saves only the prompt and its rounds,
+  for crashes), so the turns page shows the running turn from memory: the
+  prompt and every finished round in full as `Mutator.OnMessage` hears them,
+  and the round being written as `#admin-draft`, which `OnDraft` fills chunk by
+  chunk. A draft publishes `topicDraft` at most every 100 ms and patches only
+  `#admin-draft` and the status card, never the whole inspector; the card names
+  the phase (waiting, thinking, replying, writing a call, running its tools).
+  Board streams do not subscribe to it. The stored turn replaces the live view
+  when it lands, and a held turn that was running gets that one last patch: its
+  mount carries `live=1`, so the patch also lands when the turn finished before
+  the stream connected. `runState` rides on the public `/version` JSON, so its
+  messages and draft never marshal.
+- Mutations from posts run in the background through each world's worker, which
+  coalesces a burst into one rewrite; admin mutations stay synchronous so the
+  flash message works. The world's `h.mu` serializes both, the worker takes it
+  before draining pending, and the timeout starts after the lock. Reset therefore
+  cannot run a batch of posts it just deleted. `MODEL_CONCURRENCY` caps turns
+  running at once across every loaded world. Tests wait for the version or run
+  to land.
 - Skills are how-tos the model reads with `load_skill(name)`, registered in
   `skills/skills.go`. A body is only ever a tool result: never in the room
   log, the page or the system prompt. A turn loads each skill once; a second
@@ -416,16 +451,47 @@ prefer simple, readable code over production hardening.
   copied. A crash can leave no stored prompt, so the posts are read back
   from `turns` rather than parsed out of the messages.
 - Heal puts the seed page back by copying it forward as a new row and
-  recording a heal turn. It keeps posts and the webmaster's notes, clears shared
-  state and the journal in the same transaction as that version, takes `h.mu`,
-  and never calls the model. Only the admin panel heals: a quiet board keeps
-  its page however long it sits.
-- Reset is the one destructive action: it keeps the oldest version, deletes
-  every turn (posts, webmaster turns, events, notes) with the compacted
-  summaries, later versions, shared state and visitor holdings, and
-  rewinds the id sequences. It cancels the turn in flight and drops the queue
-  before it takes `h.mu`, so it never waits on a model call and cannot race a
-  mutation. Posts that arrive during the reset stay queued and run after it.
+  recording a heal turn. In that world it keeps posts and the webmaster's notes,
+  clears shared state and the journal in the same transaction as that version,
+  takes `h.mu`, and never calls the model. Only the admin panel heals: a quiet
+  board keeps its page however long it sits.
+- Reset is the one destructive action, and it touches one world file only. It
+  keeps the oldest version, deletes every turn (posts, webmaster turns, events,
+  notes) with the compacted summaries, later versions, shared state and
+  holdings, and rewinds the world's id sequences. The registry is never reset:
+  identities, sessions, invites, roles, usage and other worlds survive, so an
+  old play session still works. It cancels that world's turn in flight and
+  drops its queue before it takes `h.mu`, so it never waits on a model call and
+  cannot race a mutation. Posts that arrive during the reset stay queued and run
+  after it.
+- A world is created in three steps: insert the registry row with
+  `status = 'creating'`, create `<WORLDS_DIR>/<id>.db` and run its migrations,
+  then set `status = 'ready'`. On start, finish or remove rows still `creating`
+  or `deleting` together with their files. A delete sets `status = 'deleting'`,
+  refuses new turns and plays, drains the world's worker and closes its streams,
+  closes the database, removes the file and its `-wal` and `-shm`, then deletes
+  the registry row.
+- Open an existing world with `mode=rw`, never `rwc`, so a request after a
+  delete cannot rebuild an orphan file. Migrations run on every open, each file
+  keeps its own `goose_db_version`, and a world that sat idle catches up when it
+  opens. An idle world has no subscribers, no queued posts and no running turn.
+  Closing it drains the worker and its streams before the database closes.
+  `WORLD_IDLE_TIMEOUT` controls the unload.
+- Open the registry with `_txlock=immediate`, or start each write transaction
+  with a write, because a deferred read-then-write can fail
+  `SQLITE_BUSY_SNAPSHOT` without waiting. Times are text in the existing format
+  (`strftime('%Y-%m-%dT%H:%M:%fZ')`). Ids are 128-bit random hex generated in
+  Go; the registry has no autoincrement ids. World `turns.id` keeps its
+  sequence because it is the conversation order.
+- Invite redemption is one transaction whose first statement is the conditional
+  `UPDATE invites SET uses = uses + 1 ...`; exactly one affected row is
+  required. Then insert the identity, its password login and the first app
+  session. A taken username rolls the use back with it. Failures show one
+  message whether the code is unknown, expired, used up or revoked. `GET` never
+  spends a use. Revoking an invite stops future redemptions only.
+- There is no email, no rate limit and no audit log. Regular application logs
+  only. A public deployment needs separate registrable domains for the app and
+  the play port; ports alone are not an origin boundary.
 
 ## Frontend
 
@@ -478,5 +544,5 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   over Taskfile values, which win over `.env`. OpenCode Go also gets a generated
   `x-opencode-session` header; pin it with `OPENCODE_SESSION_ID`. Reasoning
   models take `OPENAI_REASONING_EFFORT`.
-- The dev server defaults are in `Taskfile.yml`; `PORT=6930`, live reload proxy
-  `6931`.
+- The dev server defaults are in `Taskfile.yml`; `APP_PORT=6930`,
+  `PLAY_PORT=6932`, live reload proxy `6931` targeting the app port.

@@ -6,11 +6,11 @@ dotenv: ['.env']
 
 env:
   HOST: "0.0.0.0"
-  PORT: "6930"
+  APP_PORT: "6930"
+  PLAY_PORT: "6932"
   LIVE_RELOAD_PROXY_HOST: "localhost"
   LIVE_RELOAD_PROXY_BIND: "0.0.0.0"
   LIVE_RELOAD_PROXY_PORT: "6931"
-  DB_MIGRATE_ON_START: "true"
 
 tasks:
   init:
@@ -42,10 +42,12 @@ tasks:
       - bun install
 
   db.migrate:
-    desc: Run goose migrations against the local sqlite database
+    desc: Run the registry migrations (world files migrate when they open)
+    vars:
+      REGISTRY_MIGRATIONS_DIR: '{{.REGISTRY_MIGRATIONS_DIR | default "./db/registry/migrations"}}'
     cmds:
-      - mkdir -p "$(dirname "${DB_PATH:-./data/sqlite.db}")"
-      - go tool goose sqlite3 -dir ./db/migrations "${DB_PATH:-./data/sqlite.db}" up
+      - mkdir -p "$(dirname "${REGISTRY_PATH:-./data/registry.db}")"
+      - go tool goose sqlite3 -dir {{.REGISTRY_MIGRATIONS_DIR}} "${REGISTRY_PATH:-./data/registry.db}" up
 
   dev.mock-llm:
     desc: Run the deterministic mock model on :6701 (leave it running in another terminal)
@@ -149,40 +151,49 @@ tasks:
         --path=. \
         --proxybind=$LIVE_RELOAD_PROXY_BIND \
         --proxyport=$LIVE_RELOAD_PROXY_PORT \
-        --proxy="http://localhost:$PORT" \
+        --proxy="http://localhost:$APP_PORT" \
         --open-browser=false \
         --cmd='./scripts/dev-run.sh'
 
   build.docker.run:
-    desc: Build the docker image and run it (board on PORT 6930, admin on 6932)
-    vars:
-      ADMIN_PORT: "6932"
+    desc: Build the docker image and run it (app on 6930, play on 6932)
     cmds:
       - task: build.docker
       # Bare -e NAME copies the value from this shell, where dotenv has loaded
       # .env, so secrets stay out of the command line and out of the image.
       # OPENAI_BASE_URL falls back to the host's mock model (task dev.mock-llm).
-      # The board's database lives in ./data, the same file a local run uses.
-      # --user runs the container as this user, so the files it writes are
+      # The registry and world files live in ./data, the same files a local run
+      # uses. --user runs the container as this user, so the files it writes are
       # owned by you, not by the image's uid 65532, and SQLite can write them.
       # The logs go through hl -P like task dev. Without hl, they stay raw JSON.
       - |
-        mkdir -p "{{.ROOT_DIR}}/data"
+        mkdir -p "{{.ROOT_DIR}}/data/worlds"
         docker run --rm --name beaverdream \
         --user "$(id -u):$(id -g)" \
         --add-host=host.docker.internal:host-gateway \
-        -e PORT=$PORT \
-        -e ADMIN_PORT={{.ADMIN_PORT}} \
+        -e APP_PORT=$APP_PORT \
+        -e PLAY_PORT=$PLAY_PORT \
+        -e APP_URL \
+        -e PLAY_URL \
+        -e REGISTRY_PATH \
+        -e WORLDS_DIR \
         -e OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://host.docker.internal:6701/v1}" \
         -e OPENAI_MODEL \
         -e OPENAI_API_KEY \
         -e OPENAI_REASONING_EFFORT \
         -e OPENCODE_SESSION_ID \
         -e TURN_MAX_ROUNDS \
+        -e TURN_TIMEOUT \
         -e ADMIN_PASSWORD \
-        -e ADMIN_URL \
-        -p $PORT:$PORT \
-        -p {{.ADMIN_PORT}}:{{.ADMIN_PORT}} \
+        -e APP_SESSION_TTL \
+        -e PLAY_SESSION_TTL \
+        -e HANDOFF_TTL \
+        -e DAILY_TOKENS_IDENTITY \
+        -e DAILY_TOKENS_GLOBAL \
+        -e MODEL_CONCURRENCY \
+        -e WORLD_IDLE_TIMEOUT \
+        -p $APP_PORT:$APP_PORT \
+        -p $PLAY_PORT:$PLAY_PORT \
         -v "{{.ROOT_DIR}}/data:/app/data" \
         beaverdream:latest 2>&1 \
         | { if command -v hl >/dev/null 2>&1; then hl -P; else cat; fi; }

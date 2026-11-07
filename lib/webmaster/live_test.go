@@ -18,6 +18,11 @@ const listeners = {}
 const attrs = { 'data-version': '1', 'data-post': '0' }
 const events = []
 const stateTag = { textContent: '{}' }
+const journalTag = { textContent: '{}' }
+const world = scenario.indexOf('world') === 0
+if (world) {
+  journalTag.textContent = JSON.stringify({ base: '/w/heroes', store: 'bd:abc:' })
+}
 const stored = {}
 let replaced = ''
 let text = null
@@ -48,6 +53,7 @@ global.document = {
   },
   getElementById: (id) => {
     if (id === 'bd-state') return stateTag
+    if (id === 'bd-journal') return journalTag
     if (id === 'bd-posts') return box
     return null
   },
@@ -87,7 +93,18 @@ if (scenario === 'draft') {
   stored['bd:focused'] = '1'
   text = textarea
 }
+if (scenario === 'worlddraft') {
+  stored['bd:abc:draft'] = 'hello'
+  stored['bd:abc:focused'] = '1'
+  stored['bd:draft'] = 'another world'
+  text = textarea
+}
 if (scenario === 'save') {
+  text = textarea
+  textarea.value = 'draft text'
+  posts.push({ id: 'p7', getBoundingClientRect: () => ({ top: 12, bottom: 40 }) })
+}
+if (scenario === 'worldsave') {
   text = textarea
   textarea.value = 'draft text'
   posts.push({ id: 'p7', getBoundingClientRect: () => ({ top: 12, bottom: 40 }) })
@@ -123,7 +140,10 @@ const steps = {
   posts: () => window.bdLive.posts(9, 'prepend', [9, 8]),
   state: () => window.bdLive.state({ likes: 3 }),
   save: () => window.bdLive.reload(5),
-  dedupe: () => window.bdLive.posts(9)
+  dedupe: () => window.bdLive.posts(9),
+  worldreload: () => window.bdLive.reload(5),
+  worlddraft: () => {},
+  worldsave: () => window.bdLive.reload(5)
 }
 steps[scenario]()
 
@@ -301,5 +321,46 @@ func TestLiveScriptDropsDuplicatePosts(t *testing.T) {
 	got := runLiveScript(t, "dedupe")
 	if strings.Join(got.Posts, ",") != "p9,p8,p7" {
 		t.Errorf("posts = %v, want p9,p8,p7", got.Posts)
+	}
+}
+
+// A world page reloads into its own mount path, not the server root.
+func TestLiveScriptUsesTheWorldBaseForReloads(t *testing.T) {
+	got := runLiveScript(t, "worldreload")
+	if got.Replaced != "/w/heroes/?v=5" {
+		t.Fatalf("replaced = %q, want the world's reload URL", got.Replaced)
+	}
+}
+
+// A draft is read and cleared under the world's storage root, never the root
+// board's keys.
+func TestLiveScriptUsesTheWorldStorageForDrafts(t *testing.T) {
+	got := runLiveScript(t, "worlddraft")
+	if got.Text != "hello" {
+		t.Errorf("textarea = %q, want the world's saved draft", got.Text)
+	}
+	if _, ok := got.Stored["bd:abc:draft"]; ok {
+		t.Error("the restored world draft was left in storage")
+	}
+	if got.Stored["bd:draft"] != "another world" {
+		t.Errorf("root draft = %q, want it untouched", got.Stored["bd:draft"])
+	}
+}
+
+// A reload saves the draft and reading position under the world's storage
+// root.
+func TestLiveScriptSavesUnderTheWorldStorage(t *testing.T) {
+	got := runLiveScript(t, "worldsave")
+	if got.Stored["bd:abc:draft"] != "draft text" {
+		t.Errorf("world draft = %q, want the textarea value", got.Stored["bd:abc:draft"])
+	}
+	if !strings.Contains(got.Stored["bd:abc:scroll"], `"id":"p7"`) {
+		t.Errorf("world scroll = %q, want the visible post", got.Stored["bd:abc:scroll"])
+	}
+	if _, ok := got.Stored["bd:draft"]; ok {
+		t.Error("a world draft leaked into the root storage key")
+	}
+	if got.Replaced != "/w/heroes/?v=5" {
+		t.Errorf("replaced = %q, want the world's reload URL", got.Replaced)
 	}
 }

@@ -22,7 +22,8 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 # .dockerignore keeps .env and local data out of this layer
 COPY . .
-RUN mkdir -p /app/data
+# The registry and every world file live under /app/data.
+RUN mkdir -p /app/data/worlds
 
 # Same order as `task build.go`: templ, tailwind, the js bundle, then go build.
 RUN --mount=type=cache,target=/root/.cache/go-build \
@@ -39,9 +40,11 @@ COPY --from=builder --chown=65532:65532 /app/data /app/data
 WORKDIR /app
 USER 65532:65532
 
-# HOST=0.0.0.0 so published ports reach the host. The admin listens on its own
-# port, so ADMIN_PORT is set here and published by build.docker.run.
-ENV HOST=0.0.0.0 PORT=6930 ADMIN_PORT=6932 DB_PATH=/app/data/sqlite.db DB_MIGRATE_ON_START=true
+# HOST=0.0.0.0 so published ports reach the host. Both listeners are
+# published by `task build.docker.run`. The registry and world files sit under
+# /app/data so one volume keeps the whole instance.
+ENV HOST=0.0.0.0 APP_PORT=6930 PLAY_PORT=6932 \
+    REGISTRY_PATH=/app/data/registry.db WORLDS_DIR=/app/data/worlds
 
 EXPOSE 6930 6932
 

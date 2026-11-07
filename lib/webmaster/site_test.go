@@ -26,16 +26,12 @@ func TestThePageSwitchesWithoutATransition(t *testing.T) {
 	}
 }
 
-// The board and the name page carry the beaver icon, so the tab is not blank.
-func TestThePagesCarryTheBeaverIcon(t *testing.T) {
+// The board carries the beaver icon, so the tab is not blank.
+func TestThePageCarriesTheBeaverIcon(t *testing.T) {
 	icon := `<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`
-	for name, doc := range map[string]string{
-		"board": SiteDoc(Site{HTML: PostsPlaceholder}, nil),
-		"name":  IdentityDoc(""),
-	} {
-		if !strings.Contains(doc, icon) {
-			t.Errorf("the %s page is missing %s", name, icon)
-		}
+	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
+	if !strings.Contains(doc, icon) {
+		t.Errorf("the board page is missing %s", icon)
 	}
 }
 
@@ -186,5 +182,103 @@ func TestSiteDocMapsThree(t *testing.T) {
 		`{"three":"/static/three-abc.module.js","three/addons":"/static/three-addons-def.js"}`,
 	) {
 		t.Error("the page ignores the hashed three.js paths")
+	}
+}
+
+// journalConfigJSON reads the code-owned config tag the runtimes share.
+func journalConfigJSON(t *testing.T, doc string) map[string]any {
+	t.Helper()
+	const open = `<script type="application/json" id="bd-journal">`
+	start := strings.Index(doc, open)
+	if start < 0 {
+		t.Fatal("page is missing the journal config tag")
+	}
+	start += len(open)
+	end := strings.Index(doc[start:], `</script>`)
+	if end < 0 {
+		t.Fatal("journal config tag is not closed")
+	}
+	var conf map[string]any
+	if err := json.Unmarshal([]byte(doc[start:start+end]), &conf); err != nil {
+		t.Fatalf("decode journal config: %v", err)
+	}
+	return conf
+}
+
+// The stream, reload and runtime routes live under the world's mount path.
+func TestSiteDocUsesTheWorldBaseForRuntimeRoutes(t *testing.T) {
+	doc := SiteDoc(Site{
+		WorldID:   "w1",
+		WorldSlug: "heroes",
+		BasePath:  "/w/heroes/",
+		HTML:      PostsPlaceholder,
+	}, nil)
+	for _, want := range []string{
+		`data-base="/w/heroes"`,
+		`data-world="w1"`,
+		`data-world-slug="heroes"`,
+		`data-init="@get(&#39;/w/heroes/live&#39;`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the world page is missing %q", want)
+		}
+	}
+	conf := journalConfigJSON(t, doc)
+	if conf["base"] != "/w/heroes" {
+		t.Errorf("runtime base = %v, want /w/heroes", conf["base"])
+	}
+	if conf["store"] != "bd:w1:" {
+		t.Errorf("runtime store = %v, want bd:w1:", conf["store"])
+	}
+}
+
+// A world keeps its saves under the immutable id, so reusing its slug cannot
+// open another world's browser store.
+func TestSiteDocNamespacesStorageByWorldID(t *testing.T) {
+	withSlug := func(id string) map[string]any {
+		return journalConfigJSON(t, SiteDoc(Site{
+			WorldID:   id,
+			WorldSlug: "same",
+			BasePath:  "/w/same",
+			HTML:      PostsPlaceholder,
+		}, nil))
+	}
+	a := withSlug("id-a")
+	b := withSlug("id-b")
+	if a["store"] != "bd:id-a:" || b["store"] != "bd:id-b:" {
+		t.Fatalf("stores = %v and %v, want each world id", a["store"], b["store"])
+	}
+	if a["store"] == b["store"] {
+		t.Error("two worlds that share a slug share a browser store")
+	}
+}
+
+// A board without a world keeps the root routes and storage keys tests use.
+func TestSiteDocKeepsRootDefaults(t *testing.T) {
+	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
+	if !strings.Contains(doc, `data-init="@get(&#39;/live&#39;`) {
+		t.Error("the root board does not open /live")
+	}
+	conf := journalConfigJSON(t, doc)
+	if conf["base"] != "" || conf["store"] != "bd:" {
+		t.Errorf("root runtime config = base %v store %v", conf["base"], conf["store"])
+	}
+	if !strings.Contains(doc, `<a href="/account">account</a>`) {
+		t.Error("the root board does not link to the default account page")
+	}
+}
+
+// The board's footer points at the app account. It never renders the old
+// name form or its route.
+func TestSiteDocLinksToTheAppAccount(t *testing.T) {
+	doc := SiteDoc(Site{
+		HTML:       PostsPlaceholder,
+		AccountURL: `https://app.example/account?x=1&y=2`,
+	}, nil)
+	if !strings.Contains(doc, `<a href="https://app.example/account?x=1&amp;y=2">account</a>`) {
+		t.Errorf("the account link is missing or unescaped: %s", doc)
+	}
+	if strings.Contains(doc, "/identity") || strings.Contains(doc, `name="name"`) {
+		t.Error("the board still carries the old identity form")
 	}
 }

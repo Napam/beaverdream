@@ -10,8 +10,8 @@ hooks directory.
 
 - `task init`: install tools, js dependencies and the git hooks.
 - `task dev`: run the server with live reload and the watchers for CSS, js and
-  SQL. The board is on `6930`. The live reload proxy is on `6931`, so open that
-  one to reload the page after each change.
+  SQL. The app is on `6930`, the boards on `6932`, and the live reload proxy on
+  `6931`. Open the proxy to reload the page after each change.
 - `task dev.mock-llm`: run the fake model on `6701`. Leave it running in its own
   terminal.
 - `task check`: regenerate templ and sqlc code, then run the Go build,
@@ -19,7 +19,9 @@ hooks directory.
   a bundle build.
 - `task fix`: auto-fix formatting and lint in Go and in `web/`.
 - `task build.go`: write `bin/app` with the assets and migrations embedded.
-- `task db.migrate`: run the goose migrations on `DB_PATH` (default `./data/sqlite.db`).
+- `task db.migrate`: run the goose migrations on the registry
+  (`REGISTRY_PATH`, default `./data/registry.db`). World files migrate when they
+  open.
 - `task gen.templ` and `task gen.db`: regenerate code after you change a templ
   file or a SQL query.
 - `task build.docker` and `task build.docker.run`: build the Docker image, or
@@ -42,8 +44,9 @@ stderr through the pipe too:
 ## Tests
 
 `go test ./...` runs the Go tests. They use `lib/mockllm` in place of a real
-model, so they need no key and no network. Run them before you push. There is no
-`task test` target.
+model, so they need no key and no network. Tests create a temporary registry and
+temporary world files, so they never touch `data/`. Run them before you push.
+There is no `task test` target.
 
 ## Git hook
 
@@ -65,6 +68,8 @@ the reply:
   theme's accent, and an edit that misses. The last one shows the retry.
 - `mockprose`: replies in words with no tool call.
 - `mockgame`: ships a small game script.
+- `mockwallet`: declares visitor counters and a recipe, and ships a purse page.
+- `mockreply` and `mocksay`: reply on the board, with or without a line first.
 
 The mock takes a `-delay` flag (default `15ms`) that pauses before each streamed
 chunk. Run it with `go run ./cmd/mockllm -addr localhost:6701 -delay 0` to skip
@@ -72,18 +77,21 @@ the pause.
 
 ## Layout
 
-- `cmd/serve`: the server. It holds `main.go`, the routes and the SQLite setup.
-  `cmd/serve/handlers` holds the HTTP handlers for the board, the live stream
-  and the admin panel.
+- `cmd/serve`: the server. It holds `main.go` and both listeners.
+  `cmd/serve/handlers` holds the HTTP handlers for the app, the boards, the live
+  stream and the admin pages.
 - `cmd/mockllm`: the fake OpenAI-compatible model server.
+- `lib/registry`: the registry database, identities, logins, sessions, invites,
+  roles, usage and the world list.
+- `lib/worlds`: opens, migrates, unloads and deletes world files.
 - `lib/webmaster`: the model loop, its tools, validation and site rendering.
 - `lib/mockllm`: the deterministic model, used by the tests and by
   `task dev.mock-llm`.
 - `lib/env`: reads the environment into one struct. See
   [configuration.md](configuration.md).
 - `lib/hashfs`: content-hashed static files, adapted from benbjohnson/hashfs.
-- `db/`: `migrations/` holds the goose schema, `queries/` holds the sqlc queries,
-  and `generated/` holds the generated Go.
+- `db/`: the goose migration sets (registry and worlds), the sqlc queries, and
+  the generated Go.
 - `web/`: the admin templ pages in `pages/`, the js and ts runtime, tailwind
   input, and `static/` for built assets. `web/lib` is leftover scaffold that no
   page loads.

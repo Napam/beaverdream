@@ -240,6 +240,13 @@ var JournalRuntime = `<script>
   var keys = conf.keys || {}
   var cache = Object.create(null)
 
+  // The world mount path and browser-key root come from the same code-owned
+  // config. A board served under /w/SLUG/ must call its own routes and keep
+  // its saves apart from every other world on this origin.
+  var base = String(conf.base || '').replace(/\/+$/, '')
+  var store = String(conf.store || 'bd:')
+  function url(path) { return base + path }
+
   // A burst of rows must not re-reduce the whole feed for every row, so a
   // draw is deferred to the next frame. A hidden tab parks
   // requestAnimationFrame, so it gets a timer there and still renders titles
@@ -261,9 +268,9 @@ var JournalRuntime = `<script>
         version: Number(document.documentElement.getAttribute('data-version')) || 0
       })
       if (navigator.sendBeacon) {
-        navigator.sendBeacon('/x/err', new Blob([body], { type: 'application/json' }))
+        navigator.sendBeacon(url('/x/err'), new Blob([body], { type: 'application/json' }))
       } else {
-        fetch('/x/err', { method: 'POST', body: body, keepalive: true })
+        fetch(url('/x/err'), { method: 'POST', body: body, keepalive: true })
       }
     } catch (e) {}
   }
@@ -279,7 +286,7 @@ var JournalRuntime = `<script>
   })
 
   function read(key) {
-    return fetch('/j/' + encodeURIComponent(key) + '?since=0', { cache: 'no-store' })
+    return fetch(url('/j/' + encodeURIComponent(key) + '?since=0'), { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('journal read ' + r.status)
         return r.json()
@@ -458,7 +465,7 @@ var JournalRuntime = `<script>
     if (self.stale) return Promise.resolve(null)
     var match = (opts && opts.match) || self.match
     var body = JSON.stringify({ payload: payload, match: match, rules: self.rules })
-    return fetch('/j/' + encodeURIComponent(self.key), {
+    return fetch(url('/j/' + encodeURIComponent(self.key)), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body,
@@ -564,13 +571,13 @@ var JournalRuntime = `<script>
     mine: conf.mine || {},
     tops: conf.tops || {},
     add: function (key, n) {
-      return stateCall('/x/state/' + encodeURIComponent(key) + '?add=' + amount(n))
+      return stateCall(url('/x/state/' + encodeURIComponent(key) + '?add=' + amount(n)))
     },
     spend: function (key, n) {
-      return stateCall('/x/state/' + encodeURIComponent(key) + '?spend=' + amount(n))
+      return stateCall(url('/x/state/' + encodeURIComponent(key) + '?spend=' + amount(n)))
     },
     trade: function (recipe) {
-      return stateCall('/x/state/' + encodeURIComponent(recipe))
+      return stateCall(url('/x/state/' + encodeURIComponent(recipe)))
     }
   }
 
@@ -581,8 +588,9 @@ var JournalRuntime = `<script>
   // throws (private mode, full, blocked) still leaves the memory copy for
   // this tab. A value that is not JSON or is too long is the page's own
   // mistake: it is reported once per name and not kept. A stored value that
-  // does not parse loads as the fallback.
-  var savePrefix = 'bd:save:'
+  // does not parse loads as the fallback. Every name is under the world's
+  // immutable storage root, never the mutable slug.
+  var savePrefix = store + 'save:'
   var saveMax = ` + strconv.Itoa(maxSaveLen) + `
   var saved = Object.create(null)
   var dirty = Object.create(null)

@@ -11,6 +11,7 @@ import (
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/Napam/beaverdream/lib/webmaster/skills"
 	"github.com/Napam/beaverdream/lib/worlds"
 	"github.com/Napam/beaverdream/web/pages"
 	"github.com/a-h/templ"
@@ -48,6 +49,9 @@ func (a *App) AppRouter() *chi.Mux {
 		r.Group(func(ar chi.Router) {
 			ar.Use(a.requireAppAdmin)
 			ar.Get("/admin", a.AdminHome)
+			ar.Get("/admin/invites", a.AdminInvites)
+			ar.Get("/admin/people", a.AdminPeople)
+			ar.Get("/admin/model", a.AdminModel)
 			ar.Post("/admin/worlds", a.CreateWorld)
 			ar.Post("/admin/worlds/{id}/delete", a.DeleteWorld)
 			ar.Post("/admin/invites", a.CreateInvite)
@@ -226,30 +230,54 @@ func (a *App) Logout(w http.ResponseWriter, r *http.Request) {
 func (a *App) InvitePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = pages.AppInvite("").Render(r.Context(), w)
+	_ = pages.AppInvite("", "", "").Render(r.Context(), w)
 }
 
 // RedeemInvite creates an account and a first app session. Every code failure
-// answers the same status and body.
+// answers the same status and body; a bad form value says what is wrong, so a
+// short password does not read as a dead invite.
 func (a *App) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
 	}
 	code := chi.URLParam(r, "code")
+	username := r.FormValue("username")
+	displayName := r.FormValue("display_name")
+	fail := func(message string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = pages.AppInvite(message, username, displayName).Render(r.Context(), w)
+	}
+	cleanName, err := registry.CleanUsername(username)
+	if err != nil {
+		fail("usernames are 3 to 32 characters and start with a letter or digit. " +
+			"dots, dashes and underscores go after that.")
+		return
+	}
+	if err := registry.ValidatePassword(r.FormValue("password")); err != nil {
+		fail("passwords need at least 8 characters.")
+		return
+	}
 	// This public endpoint cannot revoke a cookie session without CSRF. A
 	// successful redemption replaces the cookie but leaves the old session.
 	identity, _, token, err := a.reg.RedeemInvite(
 		r.Context(), code,
-		r.FormValue("username"),
+		cleanName,
 		r.FormValue("password"),
-		r.FormValue("display_name"),
+		displayName,
 	)
 	if err != nil {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = pages.AppInvite("that invite cannot be used").Render(r.Context(), w)
+		switch {
+		case errors.Is(err, registry.ErrUsernameTaken):
+			fail("that username is taken. pick another.")
+		case errors.Is(err, registry.ErrInviteInvalid):
+			fail("that invite cannot be used.")
+		default:
+			a.logger.Error("Failed to redeem an invite", slog.Any("error", err))
+			fail("could not create the account. try again.")
+		}
 		return
 	}
 	a.setAppSession(w, r, token, a.cfg.Config.AppSessionTTL)
@@ -268,17 +296,18 @@ func (a *App) Lobby(w http.ResponseWriter, r *http.Request) {
 	}
 	view := pages.AppView{Name: p.DisplayName, Admin: p.Admin, CSRF: p.CSRFToken}
 	for _, world := range worlds {
-		view.Worlds = append(view.Worlds, appWorld(world))
+		view.Worlds = append(view.Worlds, appWorld(world, r, a.cfg.Config))
 	}
 	a.renderApp(w, r, pages.AppLobby(view))
 }
 
-func appWorld(world registry.World) pages.AppWorld {
+func appWorld(world registry.World, r *http.Request, cfg Config) pages.AppWorld {
 	return pages.AppWorld{
 		ID:        world.ID,
 		Slug:      world.Slug,
 		Status:    world.Status,
 		CreatedAt: world.CreatedAt,
+		Board:     playOrigin(r, cfg) + "/w/" + url.PathEscape(world.Slug) + "/",
 	}
 }
 
@@ -444,13 +473,29 @@ func (a *App) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/account", http.StatusSeeOther)
 }
 
-// AdminHome shows worlds, invites and identities.
+// AdminHome shows the world list, the admin's landing page.
 func (a *App) AdminHome(w http.ResponseWriter, r *http.Request) {
-	a.renderAdmin(w, r, "", "")
+	a.renderAdmin(w, r, pages.AdminWorlds, "", "")
 }
 
-func (a *App) renderAdmin(w http.ResponseWriter, r *http.Request, message, token string) {
-	view, ok := a.adminView(r, message, "", token)
+// AdminInvites shows the invite list and the create form. Creating an invite
+// POSTs to the same path.
+func (a *App) AdminInvites(w http.ResponseWriter, r *http.Request) {
+	a.renderAdmin(w, r, pages.AdminInvites, "", "")
+}
+
+// AdminPeople shows the accounts and their disable buttons.
+func (a *App) AdminPeople(w http.ResponseWriter, r *http.Request) {
+	a.renderAdmin(w, r, pages.AdminPeople, "", "")
+}
+
+// AdminModel shows the skills and tools the webmaster can load and call.
+func (a *App) AdminModel(w http.ResponseWriter, r *http.Request) {
+	a.renderAdmin(w, r, pages.AdminModel, "", "")
+}
+
+func (a *App) renderAdmin(w http.ResponseWriter, r *http.Request, section, message, token string) {
+	view, ok := a.adminView(r, section, message, "", token)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -458,8 +503,13 @@ func (a *App) renderAdmin(w http.ResponseWriter, r *http.Request, message, token
 	a.renderApp(w, r, pages.AppAdmin(view))
 }
 
-func (a *App) renderAdminWith(w http.ResponseWriter, r *http.Request, extra pages.AppView) {
-	view, ok := a.adminView(r, "", extra.NewInviteLink, extra.NewAPIToken)
+func (a *App) renderAdminWith(
+	w http.ResponseWriter,
+	r *http.Request,
+	section string,
+	extra pages.AppView,
+) {
+	view, ok := a.adminView(r, section, "", extra.NewInviteLink, extra.NewAPIToken)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -467,7 +517,10 @@ func (a *App) renderAdminWith(w http.ResponseWriter, r *http.Request, extra page
 	a.renderApp(w, r, pages.AppAdmin(view))
 }
 
-func (a *App) adminView(r *http.Request, message, link, token string) (pages.AppView, bool) {
+func (a *App) adminView(
+	r *http.Request,
+	section, message, link, token string,
+) (pages.AppView, bool) {
 	p := principalFrom(r)
 	if p == nil {
 		return pages.AppView{}, false
@@ -476,6 +529,7 @@ func (a *App) adminView(r *http.Request, message, link, token string) (pages.App
 		Name:          p.DisplayName,
 		Admin:         p.Admin,
 		CSRF:          p.CSRFToken,
+		AdminSection:  section,
 		Error:         message,
 		NewInviteLink: link,
 		NewAPIToken:   token,
@@ -485,7 +539,7 @@ func (a *App) adminView(r *http.Request, message, link, token string) (pages.App
 		a.logger.Error("Failed to list worlds", slog.Any("error", err))
 	}
 	for _, world := range worldRows {
-		view.Worlds = append(view.Worlds, appWorld(world))
+		view.Worlds = append(view.Worlds, appWorld(world, r, a.cfg.Config))
 	}
 	invites, err := a.reg.ListInvites(r.Context(), p.IdentityID)
 	if err != nil {
@@ -499,6 +553,7 @@ func (a *App) adminView(r *http.Request, message, link, token string) (pages.App
 			Uses:      invite.Uses,
 			ExpiresAt: invite.ExpiresAt,
 			Revoked:   invite.RevokedAt != nil,
+			CreatedAt: invite.CreatedAt,
 		})
 	}
 	identities, err := a.reg.ListIdentities(r.Context(), p.IdentityID)
@@ -510,7 +565,24 @@ func (a *App) adminView(r *http.Request, message, link, token string) (pages.App
 			ID:          identity.ID,
 			DisplayName: identity.DisplayName,
 			Disabled:    identity.Disabled(),
+			CreatedAt:   identity.CreatedAt,
 		})
+	}
+	if section == pages.AdminModel {
+		for _, skill := range skills.All {
+			view.Skills = append(view.Skills, pages.AppSkill{
+				Name:    skill.Name,
+				Summary: skill.Summary,
+				Body:    skill.Body,
+			})
+		}
+		for _, tool := range webmaster.Tools() {
+			view.Tools = append(view.Tools, pages.AppTool{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.Parameters,
+			})
+		}
 	}
 	return view, true
 }
@@ -537,11 +609,11 @@ func (a *App) CreateWorld(w http.ResponseWriter, r *http.Request) {
 	world, err := a.worlds.Create(r.Context(), p.IdentityID, slug)
 	switch {
 	case errors.Is(err, registry.ErrWorldExists), errors.Is(err, worlds.ErrInvalidSlug):
-		a.renderAdmin(w, r, "that world name is not available", "")
+		a.renderAdmin(w, r, pages.AdminWorlds, "that world name is not available", "")
 		return
 	case err != nil:
 		a.logger.Error("Failed to create a world", slog.Any("error", err))
-		a.renderAdmin(w, r, "could not create the world", "")
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not create the world", "")
 		return
 	}
 	a.logger.Info("World created",
@@ -564,16 +636,16 @@ func (a *App) DeleteWorld(w http.ResponseWriter, r *http.Request) {
 	// Refuse new plays and turns before the runtime drains.
 	if err := a.reg.SetWorldStatus(r.Context(), world.ID, registry.WorldDeleting); err != nil {
 		a.logger.Error("Failed to mark a world deleting", slog.Any("error", err))
-		a.renderAdmin(w, r, "could not delete the world", "")
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not delete the world", "")
 		return
 	}
 	if !a.evict(r.Context(), world.ID) {
-		a.renderAdmin(w, r, "could not delete the world", "")
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not delete the world", "")
 		return
 	}
 	if err := a.worlds.Delete(r.Context(), p.IdentityID, world.ID); err != nil {
 		a.logger.Error("Failed to delete a world", slog.Any("error", err))
-		a.renderAdmin(w, r, "could not delete the world", "")
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not delete the world", "")
 		return
 	}
 	a.logger.Info(
@@ -604,12 +676,12 @@ func (a *App) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		a.logger.Error("Failed to create an invite", slog.Any("error", err))
-		a.renderAdmin(w, r, "could not create the invite", "")
+		a.renderAdmin(w, r, pages.AdminInvites, "could not create the invite", "")
 		return
 	}
 	view := pages.AppView{NewInviteLink: appOrigin(r, a.cfg.Config) + pages.InvitePath(code)}
 	// Rebuild the rest of the dashboard around the one-time link.
-	a.renderAdminWith(w, r, view)
+	a.renderAdminWith(w, r, pages.AdminInvites, view)
 }
 
 // RevokeInvite stops future redemptions and leaves the identity untouched.
@@ -622,7 +694,7 @@ func (a *App) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 		!errors.Is(err, registry.ErrNotFound) {
 		a.logger.Warn("Failed to revoke an invite", slog.Any("error", err))
 	}
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/invites", http.StatusSeeOther)
 }
 
 // DisableIdentity disables one account and closes its streams in every loaded
@@ -637,5 +709,5 @@ func (a *App) DisableIdentity(w http.ResponseWriter, r *http.Request) {
 		a.logger.Warn("Failed to disable an identity", slog.Any("error", err))
 	}
 	a.cancelIdentityStreams(id)
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/people", http.StatusSeeOther)
 }

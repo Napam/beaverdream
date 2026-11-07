@@ -17,6 +17,11 @@ import (
 // estimates the same way.
 const runesPerToken = 4
 
+// WorldChoice is one entry in the admin header's world switcher.
+type WorldChoice struct {
+	Slug string
+}
+
 // TurnRow is one webmaster turn as the list and the charts read it: the stored
 // row without its conversation, plus sums over its rounds.
 type TurnRow struct {
@@ -881,6 +886,26 @@ func turnTitle(row TurnRow) string {
 
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// adminPageTitle names a world admin page in the browser tab: the world, the
+// panel, then the surface. A page without a world is the instance panel.
+func adminPageTitle(view AdminView) string {
+	label := view.Panel.Page
+	if label == PageJournal {
+		label = "data"
+	}
+	parts := make([]string, 0, 2)
+	if view.World != "" {
+		parts = append(parts, view.World)
+	}
+	if label != "" {
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return "back office · beaverdream"
+	}
+	return strings.Join(parts, " · ") + " · back office · beaverdream"
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }

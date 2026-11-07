@@ -16,6 +16,8 @@ import (
 
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
 	"github.com/Napam/beaverdream/lib/registry"
+	"github.com/Napam/beaverdream/lib/webmaster"
+	"github.com/Napam/beaverdream/lib/webmaster/skills"
 )
 
 func TestInviteGETNeverSpendsAUse(t *testing.T) {
@@ -138,7 +140,7 @@ func TestInvalidInvitesLookTheSame(t *testing.T) {
 		"used": usedCode, "expired": expiredCode,
 	} {
 		resp := b.post(in.appURLFor("/invite/"+code), url.Values{
-			"username": {name}, "password": {"correct horse battery"},
+			"username": {"invitee"}, "password": {"correct horse battery"},
 		})
 		statuses[name] = resp.StatusCode
 		bodies[name] = body(t, resp)
@@ -156,6 +158,64 @@ func TestInvalidInvitesLookTheSame(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+// A bad form value must say what is wrong and cost no use, or a short password
+// reads as a dead invite and the person asks for a new link.
+func TestInviteFormSaysWhyItFailedAndKeepsTheUse(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	_, code, err := in.reg.CreateInvite(context.Background(), in.adminID, registry.InviteParams{
+		Label: "form", MaxUses: 1,
+	})
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	b := in.newBrowser(t)
+	uses := func() int {
+		invites, err := in.reg.ListInvites(context.Background(), in.adminID)
+		if err != nil {
+			t.Fatalf("list invites: %v", err)
+		}
+		return invites[0].Uses
+	}
+
+	short := body(t, b.post(in.appURLFor("/invite/"+code), url.Values{
+		"username": {"mamma"}, "password": {"mamma"}, "display_name": {"Mamma"},
+	}))
+	if !strings.Contains(short, `value="mamma"`) {
+		t.Fatal("the retry form dropped the typed username")
+	}
+	if got := uses(); got != 0 {
+		t.Fatalf("a short password spent %d uses", got)
+	}
+
+	badCode := body(t, b.post(in.appURLFor("/invite/not-a-code"), url.Values{
+		"username": {"mamma"}, "password": {"correct horse battery"}, "display_name": {"Mamma"},
+	}))
+	if short == badCode {
+		t.Fatal("a short password reads exactly like a dead invite")
+	}
+
+	taken := body(t, b.post(in.appURLFor("/invite/"+code), url.Values{
+		"username": {"admin"}, "password": {"correct horse battery"},
+	}))
+	if taken == badCode {
+		t.Fatal("a taken username reads exactly like a dead invite")
+	}
+	if got := uses(); got != 0 {
+		t.Fatalf("a taken username spent %d uses", got)
+	}
+
+	resp := b.post(in.appURLFor("/invite/"+code), url.Values{
+		"username": {"mamma"}, "password": {"correct horse battery"}, "display_name": {"Mamma"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("retry: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	if got := uses(); got != 1 {
+		t.Fatalf("retry left uses = %d, want 1", got)
+	}
+}
 
 func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
@@ -654,6 +714,138 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+// The instance admin is split into sections, and the world pages name their
+// world and offer a way back and across.
+func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+
+	resp := admin.get(in.appURLFor("/admin"))
+	page := body(t, resp)
+	for _, want := range []string{
+		`id="app-admin"`,
+		`href="/admin/invites"`,
+		`href="/admin/people"`,
+		`href="/admin/w/heroes/"`,
+		`action="/admin/worlds"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("worlds page is missing %q", want)
+		}
+	}
+
+	resp = admin.get(in.appURLFor("/admin/invites"))
+	page = body(t, resp)
+	if !strings.Contains(page, `action="/admin/invites"`) {
+		t.Error("invites page is missing its create form")
+	}
+	if !strings.Contains(page, `aria-current="page"`) {
+		t.Error("invites page does not mark the active tab")
+	}
+	if strings.Contains(page, "new world slug") {
+		t.Error("invites page shows the world form")
+	}
+
+	resp = admin.get(in.appURLFor("/admin/people"))
+	page = body(t, resp)
+	if !strings.Contains(page, "signed out everywhere") {
+		t.Error("people page is missing the disable note")
+	}
+	if strings.Contains(page, `action="/admin/invites"`) {
+		t.Error("people page shows the invite form")
+	}
+
+	// A second world turns the breadcrumb into a switcher.
+	if _, err := in.worlds.Create(context.Background(), in.adminID, "second"); err != nil {
+		t.Fatalf("create second world: %v", err)
+	}
+	resp = admin.get(in.appURLFor("/admin/w/heroes/"))
+	page = body(t, resp)
+	for _, want := range []string{
+		`href="/admin"`,
+		`id="admin-world-switcher"`,
+		`value="/admin/w/heroes/"`,
+		`value="/admin/w/second/"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("world admin page is missing %q", want)
+		}
+	}
+}
+
+func TestAdminModelListsEverySkillAndTool(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+
+	page := body(t, admin.get(in.appURLFor("/admin/model")))
+	for _, skill := range skills.All {
+		if !strings.Contains(page, `data-skill="`+skill.Name+`"`) {
+			t.Errorf("model page is missing skill %q", skill.Name)
+		}
+	}
+	registered := webmaster.Tools()
+	if len(registered) == 0 {
+		t.Fatal("no tools are registered")
+	}
+	for _, tool := range registered {
+		if !strings.Contains(page, `data-tool="`+tool.Name+`"`) {
+			t.Errorf("model page is missing tool %q", tool.Name)
+		}
+	}
+	if !strings.Contains(page, `href="/admin/model"`) ||
+		!strings.Contains(page, `aria-current="page"`) {
+		t.Error("model page does not mark its tab")
+	}
+
+	anon := in.newBrowser(t)
+	refused := body(t, anon.get(in.appURLFor("/admin/model")))
+	if strings.Contains(refused, `data-skill=`) {
+		t.Error("an anonymous request read the model page")
+	}
+}
+
+func TestUserPagesShowTheBackOfficeDoorwayOnlyToAdmins(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	page := body(t, admin.get(in.appURLFor("/")))
+	if !strings.Contains(page, `href="/admin"`) {
+		t.Error("the lobby has no way into the back office for an admin")
+	}
+	if strings.Contains(page, `aria-current="page"`) {
+		t.Error("the user lobby marks a tab as current")
+	}
+	if !strings.Contains(page, `href="/admin/w/heroes/"`) {
+		t.Error("the admin's lobby row has no manage link")
+	}
+
+	_, code, err := in.reg.CreateInvite(
+		context.Background(),
+		in.adminID,
+		registry.InviteParams{MaxUses: 1},
+	)
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	player := in.newBrowser(t)
+	resp := player.post(in.appURLFor("/invite/"+code), url.Values{
+		"username": {"player"}, "password": {"correct horse battery"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("redeem: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	page = body(t, player.get(in.appURLFor("/")))
+	if strings.Contains(page, `href="/admin`) {
+		t.Error("a non-admin lobby shows the back office")
+	}
+	if strings.Contains(page, ">manage<") {
+		t.Error("a non-admin lobby shows a manage button")
+	}
+}
+
 func TestDeleteWorldRemovesOnlyThatWorld(t *testing.T) {
 	in := newInstance(t, instanceOptions{budget: registry.Budget{}})
 	admin := in.newBrowser(t)
@@ -1144,14 +1336,14 @@ func TestAdminMintsAnAPITokenThroughTheAccountRoute(t *testing.T) {
 		t.Fatalf("mint: status = %d", resp.StatusCode)
 	}
 	page := body(t, resp)
-	// The token sits in the one-time chip.
-	const start = `break-all">`
+	// The token sits in the one-time flash field.
+	const start = `readonly value="`
 	at := strings.Index(page, start)
 	if at < 0 {
 		t.Fatal("the response does not show the token")
 	}
 	rest := page[at+len(start):]
-	end := strings.Index(rest, "<")
+	end := strings.Index(rest, `"`)
 	token := rest[:end]
 	if len(token) < 64 {
 		t.Fatalf("token = %q", token)

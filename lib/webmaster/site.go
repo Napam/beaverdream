@@ -637,7 +637,12 @@ func SiteDoc(site Site, posts []Post) string {
 	)
 	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
 	b.WriteString(`<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`)
-	b.WriteString(`<title>beaverdream</title>`)
+	b.WriteString(`<title>`)
+	if site.WorldSlug != "" {
+		b.WriteString(html.EscapeString(site.WorldSlug))
+		b.WriteString(" · ")
+	}
+	b.WriteString(`beaverdream</title>`)
 	// The import map must come before every module script, so model scripts
 	// can import "three" and "three/addons" without a URL.
 	b.WriteString(`<script type="importmap">`)

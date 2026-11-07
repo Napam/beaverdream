@@ -106,6 +106,31 @@ func (h *Handlers) servePanel(w http.ResponseWriter, r *http.Request, panel page
 	h.adminDone(w, r, panel, "")
 }
 
+// fillWorldHeader names the world this panel manages and lists every ready
+// world for the switcher, so an admin can move between worlds without going
+// back to the instance page.
+func (h *Handlers) fillWorldHeader(r *http.Request, view *pages.AdminView) {
+	if h.world.Slug == "" {
+		return
+	}
+	view.World = h.world.Slug
+	worlds, err := h.reg.ListReadyWorlds(r.Context())
+	if err != nil {
+		h.logger.Warn("Failed to list worlds for the admin header", slog.Any("error", err))
+		return
+	}
+	found := false
+	for _, world := range worlds {
+		view.Worlds = append(view.Worlds, pages.WorldChoice{Slug: world.Slug})
+		if world.Slug == h.world.Slug {
+			found = true
+		}
+	}
+	if !found {
+		view.Worlds = append(view.Worlds, pages.WorldChoice{Slug: h.world.Slug})
+	}
+}
+
 // errNoTurn is a turn page whose id names no webmaster turn.
 var errNoTurn = errors.New("no such webmaster turn")
 
@@ -121,6 +146,7 @@ func (h *Handlers) adminDone(
 	h.adminHeaders(w)
 	view, err := h.loadAdmin(r.Context(), panel, message)
 	view.Board = playOrigin(r, h.cfg) + h.boardPath()
+	h.fillWorldHeader(r, &view)
 	if p := principalFrom(r); p != nil {
 		view.CSRF = p.CSRFToken
 	}

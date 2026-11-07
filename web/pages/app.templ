@@ -1,13 +1,98 @@
 package pages
 
-import "github.com/Napam/beaverdream"
+import (
+	"strings"
 
-const appCard = "rounded-lg border border-gray-200 bg-white p-5 dark:border-neutral-800 dark:bg-neutral-900"
-const appInput = "w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200"
-const appButton = "cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
-const appMuted = "text-sm text-gray-500 dark:text-neutral-400"
+	"github.com/Napam/beaverdream"
+)
 
-templ appShell(title string, body templ.Component) {
+// The user surface is warm and branded: cream paper, beaver brown, round
+// shapes. The back office keeps the gray admin chrome, so a glance tells the
+// two modes apart.
+const (
+	appUserBg     = "bg-[#fbf5ec] text-[#3b2a20] dark:bg-[#15110e] dark:text-[#ece2d6]"
+	appUserHeader = "border-b border-[#eadbc8] bg-[#fbf5ec]/90 dark:border-[#2b221b] dark:bg-[#15110e]/90"
+	appUserCard   = "rounded-2xl border border-[#eadbc8] bg-[#fffdf9] shadow-[0_1px_2px_rgba(90,60,35,0.06)] dark:border-[#2e241c] dark:bg-[#1e1813]"
+	appUserLabel  = "text-[11px] font-semibold tracking-[0.14em] text-[#a4836a] uppercase dark:text-[#a08a77]"
+	appUserMuted  = "text-sm text-[#8a6f5c] dark:text-[#a6907d]"
+	appUserField  = "text-xs font-medium text-[#7a5b45] dark:text-[#b7a08c]"
+	appUserInput  = "w-full rounded-xl border border-[#e0cdb6] bg-[#fffdf9] px-3 py-2 text-sm text-[#3b2a20] placeholder:text-[#b49a83] focus:border-[#b3703b] focus:outline-none dark:border-[#3a2e25] dark:bg-[#17120e] dark:text-[#ece2d6] dark:placeholder:text-[#7a6555] dark:focus:border-[#c98a52]"
+	appUserButton = "inline-flex cursor-pointer items-center justify-center rounded-full bg-[#a35f2b] px-4 py-2 text-sm font-medium text-white hover:bg-[#8a4f22] disabled:cursor-default disabled:opacity-50 dark:bg-[#d9a066] dark:text-[#241a12] dark:hover:bg-[#e6b07a]"
+	appUserQuiet  = "inline-flex cursor-pointer items-center justify-center rounded-full border border-[#e0cdb6] px-4 py-2 text-sm text-[#7a5b45] hover:border-[#c9a683] hover:text-[#3b2a20] dark:border-[#3a2e25] dark:text-[#c4af9c] dark:hover:text-[#f0e6da]"
+	appUserWarn   = "inline-flex cursor-pointer items-center justify-center rounded-full border border-red-300 px-4 py-2 text-sm text-red-700 hover:bg-red-50 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/30"
+	appUserNav    = "rounded-full px-3 py-1.5 text-sm text-[#7a5b45] hover:bg-[#f1e3d2] hover:text-[#3b2a20] dark:text-[#bda894] dark:hover:bg-[#271f19] dark:hover:text-[#f0e6da]"
+	appUserEmpty  = "rounded-2xl border border-dashed border-[#dcc9b2] px-6 py-10 text-center dark:border-[#33281f]"
+)
+
+// appUserNavClass marks the one signed-in user page the visitor is on.
+func appUserNavClass(current, page string) string {
+	if current == page {
+		return "rounded-full px-3 py-1.5 text-sm font-medium text-[#3b2a20] dark:text-[#f5ece1]"
+	}
+	return appUserNav
+}
+
+// worldTone gives each world a stable warm tile color, derived from the slug.
+func worldTone(slug string) string {
+	sum := 0
+	for _, r := range slug {
+		sum += int(r)
+	}
+	switch sum % 4 {
+	case 0:
+		return "bg-[#f6ddc2] text-[#8a4a1c] dark:bg-[#4a2f1c] dark:text-[#f0c9a4]"
+	case 1:
+		return "bg-[#f8dcd6] text-[#8c4038] dark:bg-[#4a2a27] dark:text-[#f3c4bd]"
+	case 2:
+		return "bg-[#dce7d5] text-[#40582f] dark:bg-[#2b3a26] dark:text-[#c8dfbc]"
+	}
+	return "bg-[#d9e4ee] text-[#33566b] dark:bg-[#263542] dark:text-[#c3d8e8]"
+}
+
+func avatarInitial(value string) string {
+	for _, r := range value {
+		return strings.ToUpper(string(r))
+	}
+	return "?"
+}
+
+// worldGrid stacks each world as a wide door, so one world does not leave a
+// half-empty tile row.
+func worldGrid() string {
+	return "mt-8 flex flex-col gap-3"
+}
+
+// beaverLogo is the drawn mark, at the size the surface needs.
+templ beaverLogo(px int) {
+	<img
+		src={ beaverdream.StaticRootPath("static/assets/beaver.svg") }
+		width={ itoa(px) }
+		height={ itoa(px) }
+		alt=""
+		class="shrink-0 select-none"
+	/>
+}
+
+// userShell is the warm page shell for the lobby, the account and the boards.
+templ userShell(title string, body templ.Component) {
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
+			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
+			@themeScript()
+		</head>
+		<body class={ "min-h-dvh antialiased " + appUserBg }>
+			@body
+		</body>
+	</html>
+}
+
+// adminAppShell is the instance admin's neutral shell: the same 5xl column as
+// a world's admin pages, so the back office stays one surface.
+templ adminAppShell(title string, body templ.Component) {
 	<html lang="en">
 		<head>
 			<meta charset="utf-8"/>
@@ -18,246 +103,621 @@ templ appShell(title string, body templ.Component) {
 			@themeScript()
 		</head>
 		<body class="min-h-dvh bg-gray-100 text-gray-800 antialiased dark:bg-neutral-950 dark:text-neutral-300">
-			<main class="mx-auto flex min-h-dvh w-full max-w-2xl flex-col gap-5 px-4 py-10 sm:px-6">
+			<div class="mx-auto flex min-h-dvh w-full max-w-5xl flex-col gap-6 px-4 pb-16 sm:px-6">
 				@body
-			</main>
+			</div>
+		</body>
+	</html>
+}
+
+// appHeader is the signed-in user chrome. The lobby is the wordmark, so the
+// header carries only the account and the way into the back office.
+templ appHeader(view AppView, section string) {
+	<header class={ "sticky top-0 z-20 backdrop-blur " + appUserHeader }>
+		<div class="mx-auto flex min-h-16 w-full max-w-4xl flex-wrap items-center gap-x-4 gap-y-1 px-4 sm:px-6">
+			<a href="/" class="flex shrink-0 items-center gap-2.5">
+				<span class="flex h-9 w-9 items-center justify-center rounded-xl bg-[#f3ddc4] dark:bg-[#33251a]">
+					@beaverLogo(26)
+				</span>
+				<span class="text-[15px] font-semibold tracking-tight text-[#3b2a20] dark:text-[#f5ece1]">beaverdream</span>
+			</a>
+			<div class="ml-auto flex flex-wrap items-center gap-1">
+				<a
+					href="/account"
+					class={ appUserNavClass(section, "account") }
+					if section == "account" {
+						aria-current="page"
+					}
+				>account</a>
+				if view.Admin {
+					@userAdminLink()
+				}
+				@themeToggle()
+			</div>
+		</div>
+	</header>
+}
+
+// userAdminLink is the one doorway from the warm user pages into the gray back
+// office. It is a pill, never a tab, so the two modes do not blur together.
+templ userAdminLink() {
+	<a
+		href="/admin"
+		class="inline-flex items-center gap-1.5 rounded-full border border-[#dcc4a8] bg-[#fff8ee] px-3 py-1.5 text-xs font-medium text-[#7a4a22] hover:border-[#c79c6b] hover:text-[#5a3415] dark:border-[#3a2e25] dark:bg-[#211a15] dark:text-[#d9b58f] dark:hover:text-[#f0d6b8]"
+	>
+		<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+			<rect x="3" y="4" width="18" height="16" rx="2"></rect>
+			<path d="M3 9h18M9 9v11"></path>
+		</svg>
+		<span class="hidden sm:inline">back office</span>
+		<span class="sm:hidden">admin</span>
+	</a>
+}
+
+// authShell is the signed-out page: the mark, the wordmark, and one card.
+templ authShell(title string, body templ.Component) {
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
+			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
+			@themeScript()
+		</head>
+		<body class={ "min-h-dvh antialiased " + appUserBg }>
+			<div class="relative flex min-h-dvh flex-col items-center px-4 py-10">
+				<div class="absolute top-3 right-3">
+					@themeToggle()
+				</div>
+				<div class="m-auto flex w-full max-w-md flex-col items-center">
+					<div class="mb-7 flex flex-col items-center gap-3">
+						<span class="flex h-20 w-20 items-center justify-center rounded-[1.6rem] bg-[#f3ddc4] shadow-[0_4px_14px_rgba(120,80,45,0.12)] dark:bg-[#33251a]">
+							@beaverLogo(58)
+						</span>
+						<span class="text-lg font-semibold tracking-tight text-[#3b2a20] dark:text-[#f5ece1]">beaverdream</span>
+					</div>
+					<div class="w-full">
+						@body
+					</div>
+				</div>
+			</div>
 		</body>
 	</html>
 }
 
 // AppLogin is the app sign-in page. next is where a success returns.
 templ AppLogin(next string, failed string, action string, datastar string) {
-	@appShell("beaverdream", loginCard(next, failed, action))
+	@authShell("sign in · beaverdream", loginCard(next, failed, action))
 }
 
 templ loginCard(next string, failed string, action string) {
-	<section class={ appCard }>
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream</h1>
-		<p class={ appMuted + " mt-1" }>sign in with your account, or open your invite link.</p>
-		<form method="post" action={ templ.SafeURL(action) } class="mt-4 flex flex-col gap-3">
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">welcome back</h1>
+		<p class={ appUserMuted + " mt-1" }>sign in with your account, or open your invite link.</p>
+		<form method="post" action={ templ.SafeURL(action) } class="mt-5 flex flex-col gap-3">
 			<input type="hidden" name="next" value={ next }/>
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="username">username</label>
-			<input id="username" name="username" autocomplete="username" required class={ appInput }/>
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="password">password</label>
-			<input id="password" name="password" type="password" autocomplete="current-password" required class={ appInput }/>
+			<div>
+				<label class={ appUserField } for="username">username</label>
+				<input id="username" name="username" autocomplete="username" required class={ appUserInput + " mt-1" }/>
+			</div>
+			<div>
+				<label class={ appUserField } for="password">password</label>
+				<input id="password" name="password" type="password" autocomplete="current-password" required class={ appUserInput + " mt-1" }/>
+			</div>
 			if failed != "" {
 				<p class="text-sm text-red-600 dark:text-red-400">{ failed }</p>
 			}
-			<button type="submit" class={ appButton }>sign in</button>
+			<button type="submit" class={ appUserButton + " mt-1 w-full" }>sign in</button>
 		</form>
 	</section>
 }
 
 // AppGate is the play plane's anonymous page.
 templ AppGate(login string) {
-	@appShell("beaverdream", gateCard(login))
+	@authShell("board gate · beaverdream", gateCard(login))
 }
 
 templ gateCard(login string) {
-	<section class={ appCard }>
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream</h1>
-		<p class={ appMuted + " mt-1" }>this board opens from the app. sign in there, then press play.</p>
-		<p class="mt-4"><a class="text-sky-700 hover:underline dark:text-sky-400" href={ templ.SafeURL(login) }>go to the app</a></p>
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">this board opens in the app</h1>
+		<p class={ appUserMuted + " mt-2" }>sign in there, then press play. the board keeps the app's account.</p>
+		<a class={ appUserButton + " mt-5 w-full" } href={ templ.SafeURL(login) }>go to the app</a>
 	</section>
 }
 
-// AppInviteRow is the redemption form. A GET only shows the form.
-templ AppInvite(err string) {
-	@appShell("join beaverdream", inviteCard(err))
+// AppInviteRow is the redemption form. A GET only shows the form. A failed
+// POST keeps what was typed, so a retry does not start over.
+templ AppInvite(err string, username string, displayName string) {
+	@authShell("join · beaverdream", inviteCard(err, username, displayName))
 }
 
-templ inviteCard(err string) {
-	<section class={ appCard }>
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">join beaverdream</h1>
-		<p class={ appMuted + " mt-1" }>pick a username, a password and the name other people see.</p>
-		<form method="post" action="" class="mt-4 flex flex-col gap-3">
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="username">username</label>
-			<input id="username" name="username" autocomplete="username" required class={ appInput }/>
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="password">password</label>
-			<input id="password" name="password" type="password" autocomplete="new-password" required class={ appInput }/>
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="display_name">display name</label>
-			<input id="display_name" name="display_name" class={ appInput }/>
+templ inviteCard(err string, username string, displayName string) {
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">join beaverdream</h1>
+		<p class={ appUserMuted + " mt-1" }>pick a username, a password and the name other people see.</p>
+		<form method="post" action="" class="mt-5 flex flex-col gap-3">
+			<div>
+				<label class={ appUserField } for="username">username</label>
+				<input
+					id="username"
+					name="username"
+					autocomplete="username"
+					value={ username }
+					minlength="3"
+					maxlength="32"
+					pattern="[A-Za-z0-9][A-Za-z0-9._\-]{2,31}"
+					required
+					class={ appUserInput + " mt-1" }
+				/>
+				<p class={ appUserMuted + " mt-1 text-xs" }>3 to 32 characters, starting with a letter or digit.</p>
+			</div>
+			<div>
+				<label class={ appUserField } for="password">password</label>
+				<input
+					id="password"
+					name="password"
+					type="password"
+					autocomplete="new-password"
+					minlength="8"
+					required
+					class={ appUserInput + " mt-1" }
+				/>
+				<p class={ appUserMuted + " mt-1 text-xs" }>at least 8 characters.</p>
+			</div>
+			<div>
+				<label class={ appUserField } for="display_name">display name</label>
+				<input id="display_name" name="display_name" value={ displayName } class={ appUserInput + " mt-1" }/>
+			</div>
 			if err != "" {
 				<p class="text-sm text-red-600 dark:text-red-400">{ err }</p>
 			}
-			<button type="submit" class={ appButton }>create account</button>
+			<button type="submit" class={ appUserButton + " mt-1 w-full" }>create account</button>
 		</form>
 	</section>
 }
 
-// AppLobby lists every ready world with a play button.
+// AppLobby lists every ready world as a card with a play button.
 templ AppLobby(view AppView) {
-	@appShell("beaverdream", lobbyBody(view))
+	@userShell("worlds · beaverdream", lobbyBody(view))
 }
 
 templ lobbyBody(view AppView) {
-	<header class="flex flex-wrap items-center gap-3">
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">worlds</h1>
-		<span class={ appMuted }>signed in as { view.Name }</span>
-		<div class="ml-auto flex items-center gap-3 text-sm">
-			<a class="text-sky-700 hover:underline dark:text-sky-400" href="/account">account</a>
+	<div class="flex min-h-dvh flex-col">
+		@appHeader(view, "worlds")
+		<main class="mx-auto w-full max-w-4xl px-4 pb-16 sm:px-6">
+			<div class="pt-10 sm:pt-14">
+				<h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">hi, { view.Name }.</h1>
+				<p class={ appUserMuted + " mt-2" }>pick a world and step in.</p>
+			</div>
+			if len(view.Worlds) == 0 {
+				<div class={ appUserEmpty + " mt-8 flex flex-col items-center gap-3" }>
+					<span class="flex h-16 w-16 items-center justify-center rounded-3xl bg-[#f3ddc4] dark:bg-[#33251a]">
+						@beaverLogo(44)
+					</span>
+					<p class="text-sm text-[#3b2a20] dark:text-[#ece2d6]">no worlds yet.</p>
+					<p class="text-xs text-[#8a6f5c] dark:text-[#a6907d]">an admin creates the first one.</p>
+				</div>
+			} else {
+				<div class={ worldGrid() }>
+					for _, world := range view.Worlds {
+						@worldCard(view, world)
+					}
+				</div>
+			}
+		</main>
+	</div>
+}
+
+templ worldCard(view AppView, world AppWorld) {
+	<article class={ appUserCard + " flex flex-wrap items-center gap-4 p-4" }>
+		<span class={ "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl font-semibold " + worldTone(world.Slug) }>{ avatarInitial(world.Slug) }</span>
+		<p class="min-w-0 flex-1 truncate font-mono text-base font-semibold text-[#3b2a20] dark:text-[#f5ece1]">{ world.Slug }</p>
+		<div class="flex w-full items-center gap-2 sm:w-auto">
+			<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="min-w-0 flex-1 sm:flex-none">
+				@csrfInput(view.CSRF)
+				<button type="submit" class={ appUserButton + " w-full" }>play</button>
+			</form>
 			if view.Admin {
-				<a class="text-sky-700 hover:underline dark:text-sky-400" href="/admin">admin</a>
+				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/w/" + world.Slug + "/") }>manage</a>
 			}
 		</div>
-	</header>
-	if len(view.Worlds) == 0 {
-		<section class={ appCard }>
-			<p class={ appMuted }>no worlds yet. an admin creates the first one.</p>
-		</section>
-	}
-	for _, world := range view.Worlds {
-		<section class={ appCard }>
-			<div class="flex flex-wrap items-center gap-3">
-				<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">{ world.Slug }</h2>
-				<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="ml-auto">
-					@csrfInput(view.CSRF)
-					<button type="submit" class={ appButton }>play</button>
-				</form>
-			</div>
-		</section>
-	}
+	</article>
 }
 
 // AppAccount edits the display name and mints script tokens.
 templ AppAccount(view AppView) {
-	@appShell("account", accountBody(view))
+	@userShell("account · beaverdream", accountBody(view))
 }
 
 templ accountBody(view AppView) {
-	<header class="flex flex-wrap items-center gap-3">
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">account</h1>
-		<div class="ml-auto flex items-center gap-3 text-sm">
-			<a class="text-sky-700 hover:underline dark:text-sky-400" href="/">worlds</a>
-		</div>
-	</header>
-	<section class={ appCard }>
-		<p class={ appMuted }>signed in as { view.Name }</p>
-		<form method="post" action="/account/name" class="mt-3 flex flex-col gap-3">
-			@csrfInput(view.CSRF)
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="display_name">display name</label>
-			<input id="display_name" name="display_name" value={ view.Name } class={ appInput }/>
-			<button type="submit" class={ appButton }>save name</button>
-		</form>
-	</section>
-	<section class={ appCard }>
-		<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">sessions</h2>
-		<form method="post" action="/account/logout-all" class="mt-3">
-			@csrfInput(view.CSRF)
-			<button type="submit" class={ appButton }>sign out everywhere</button>
-		</form>
-	</section>
-	if view.Admin {
-		<section class={ appCard }>
-			<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">api token</h2>
-			<p class={ appMuted + " mt-1" }>a script token is shown once. send it as an Authorization: Bearer header on the app port.</p>
+	<div class="flex min-h-dvh flex-col">
+		@appHeader(view, "account")
+		<main class="mx-auto w-full max-w-2xl px-4 pb-16 sm:px-6">
+			<div class="pt-10 sm:pt-14">
+				<h1 class="text-3xl font-semibold tracking-tight">account</h1>
+				<p class={ appUserMuted + " mt-2" }>signed in as { view.Name }.</p>
+			</div>
 			if view.NewAPIToken != "" {
-				<p class={ adminChip + " mt-3 break-all" }>{ view.NewAPIToken }</p>
+				<div class="mt-6">
+					@adminFlash("api token · shown once", view.NewAPIToken)
+				</div>
 			}
-			<form method="post" action="/account/tokens" class="mt-3 flex flex-col gap-3">
-				@csrfInput(view.CSRF)
-				<button type="submit" class={ appButton }>create a token</button>
-			</form>
-			<form method="post" action="/account/tokens/revoke" class="mt-3 flex flex-col gap-3">
-				@csrfInput(view.CSRF)
-				<label class="text-xs text-gray-500 dark:text-neutral-400" for="token">revoke a token</label>
-				<input id="token" name="token" class={ appInput }/>
-				<button type="submit" class={ appButton }>revoke</button>
-			</form>
-		</section>
-	}
+			<div class="mt-8 flex flex-col gap-4">
+				<section class={ appUserCard + " p-5" }>
+					<div class="flex items-center gap-3">
+						<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#f3ddc4] text-sm font-semibold text-[#8a4a1c] dark:bg-[#33251a] dark:text-[#f0c9a4]">{ avatarInitial(view.Name) }</span>
+						<p class={ appUserLabel }>profile</p>
+					</div>
+					<form method="post" action="/account/name" class="mt-4 flex flex-col gap-3">
+						@csrfInput(view.CSRF)
+						<div>
+							<label class={ appUserField } for="display_name">display name</label>
+							<input id="display_name" name="display_name" value={ view.Name } class={ appUserInput + " mt-1" }/>
+						</div>
+						<div>
+							<button type="submit" class={ appUserButton }>save name</button>
+						</div>
+					</form>
+				</section>
+				<section class={ appUserCard + " p-5" }>
+					<p class={ appUserLabel }>sessions</p>
+					<p class={ appUserMuted + " mt-1" }>sign out ends this browser. sign out everywhere closes every browser.</p>
+					<div class="mt-4 flex flex-wrap items-center gap-2">
+						<form method="post" action="/logout">
+							@csrfInput(view.CSRF)
+							<button type="submit" class={ appUserQuiet }>sign out</button>
+						</form>
+						<form method="post" action="/account/logout-all">
+							@csrfInput(view.CSRF)
+							<button type="submit" class={ appUserWarn }>sign out everywhere</button>
+						</form>
+					</div>
+				</section>
+				if view.Admin {
+					<section class={ appUserCard + " p-5" }>
+						<p class={ appUserLabel }>api token</p>
+						<p class={ appUserMuted + " mt-1" }>a script token is shown once. send it as an Authorization: Bearer header on the app port.</p>
+						<form method="post" action="/account/tokens" class="mt-4">
+							@csrfInput(view.CSRF)
+							<button type="submit" class={ appUserButton }>create a token</button>
+						</form>
+						<form method="post" action="/account/tokens/revoke" class="mt-5 flex flex-col gap-2 border-t border-[#eadbc8] pt-4 dark:border-[#2e241c]">
+							@csrfInput(view.CSRF)
+							<label class={ appUserField } for="token">revoke a token</label>
+							<input id="token" name="token" placeholder="paste the token" class={ appUserInput }/>
+							<div>
+								<button type="submit" class={ appUserQuiet }>revoke</button>
+							</div>
+						</form>
+					</section>
+				}
+			</div>
+		</main>
+	</div>
 }
 
-// AppAdmin manages worlds, invites and identities.
+// The back office keeps the world admin's gray chrome. These constants are
+// only for the instance admin's sections.
+const (
+	appButton     = "cursor-pointer rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-black disabled:cursor-default disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+	appDanger     = "inline-flex cursor-pointer items-center rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+	appFieldLabel = "text-xs text-gray-500 dark:text-neutral-400"
+	appNavLink    = "rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200"
+	appInlineLink = "text-sm text-gray-600 underline-offset-4 hover:text-gray-900 hover:underline dark:text-neutral-400 dark:hover:text-neutral-200"
+	appEmpty      = "rounded-md border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-gray-500 dark:border-neutral-800 dark:text-neutral-400"
+)
+
+// AppAdmin manages worlds, invites and people. The URL picks one section, so
+// the header's tabs are real pages instead of one long scroll.
 templ AppAdmin(view AppView) {
-	@appShell("beaverdream admin", adminAppBody(view))
+	@adminAppShell(appAdminTitle(view), adminAppBody(view))
 }
 
 templ adminAppBody(view AppView) {
-	<header id="app-admin" class="flex flex-wrap items-center gap-3">
-		<h1 class="text-lg font-semibold tracking-tight text-gray-900 dark:text-neutral-100">admin</h1>
-		<span class={ appMuted }>{ view.Name }</span>
-		<div class="ml-auto flex items-center gap-3 text-sm">
-			<a class="text-sky-700 hover:underline dark:text-sky-400" href="/">worlds</a>
-			<a class="text-sky-700 hover:underline dark:text-sky-400" href="/account">account</a>
+	<div id="app-admin" class="flex flex-col gap-6">
+		@adminAppHeader(view)
+		if view.Error != "" {
+			<p class="rounded-md border border-red-500/40 bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/30 dark:text-red-300">{ view.Error }</p>
+		}
+		if view.NewInviteLink != "" {
+			@adminFlash("invite link · shown once", view.NewInviteLink)
+		}
+		if view.NewAPIToken != "" {
+			@adminFlash("api token · shown once", view.NewAPIToken)
+		}
+		switch view.AdminSection {
+			case AdminInvites:
+				@invitesSection(view)
+			case AdminPeople:
+				@peopleSection(view)
+			case AdminModel:
+				@modelSection(view)
+			default:
+				@worldsSection(view)
+		}
+	</div>
+}
+
+templ adminAppHeader(view AppView) {
+	<header class="sticky top-0 z-20 -mx-4 border-b border-gray-200 bg-gray-100/90 px-4 backdrop-blur sm:-mx-6 sm:px-6 dark:border-neutral-800 dark:bg-neutral-950/90">
+		<div class="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-1">
+			<a href="/admin" class="shrink-0 text-base font-semibold tracking-tight text-gray-900 hover:text-gray-600 dark:text-neutral-100 dark:hover:text-neutral-400">beaverdream admin</a>
+			<nav class="flex shrink-0 gap-1 self-stretch overflow-x-auto text-sm">
+				@adminAppTab(view, AdminWorlds, "/admin", "worlds")
+				@adminAppTab(view, AdminInvites, "/admin/invites", "invites")
+				@adminAppTab(view, AdminPeople, "/admin/people", "people")
+				@adminAppTab(view, AdminModel, "/admin/model", "model")
+			</nav>
+			<div class="ml-auto flex items-center gap-1.5">
+				@themeToggle()
+				<a class={ appNavLink } href="/">lobby</a>
+				<form method="post" action="/logout" class="contents">
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ appNavLink + " cursor-pointer" }>sign out</button>
+				</form>
+			</div>
 		</div>
 	</header>
-	if view.Error != "" {
-		<p class="rounded-md border border-red-500/40 bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/30 dark:text-red-300">{ view.Error }</p>
+}
+
+func adminAppTabClass(current, page string) string {
+	base := "flex items-center border-b-2 px-3 py-3 "
+	if current == page {
+		return base + "border-gray-900 font-medium text-gray-900 dark:border-neutral-100 dark:text-neutral-100"
 	}
-	if view.NewInviteLink != "" {
-		<p class="rounded-md border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 break-all dark:bg-emerald-950/30 dark:text-emerald-300">{ view.NewInviteLink }</p>
+	return base + "border-transparent text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200"
+}
+
+templ adminAppTab(view AppView, section string, path string, label string) {
+	<a
+		href={ templ.SafeURL(path) }
+		class={ adminAppTabClass(view.AdminSection, section) }
+		if view.AdminSection == section {
+			aria-current="page"
+		}
+	>{ label }</a>
+}
+
+// adminFlash shows a value that is only ever shown once: the invite link or a
+// script token. Selecting the field is the copy gesture.
+templ adminFlash(label string, value string) {
+	<section class="rounded-lg border border-emerald-500/40 bg-emerald-50 p-4 dark:bg-emerald-950/30">
+		<p class="text-xs font-semibold tracking-wide text-emerald-800 uppercase dark:text-emerald-300">{ label }</p>
+		<input
+			readonly
+			value={ value }
+			onclick="this.select()"
+			class="mt-2 w-full rounded-md border border-emerald-500/30 bg-white px-3 py-2 font-mono text-xs text-emerald-900 focus:outline-none dark:bg-neutral-950 dark:text-emerald-200"
+		/>
+		<p class="mt-1 text-xs text-emerald-700 dark:text-emerald-400">this is the only time the full value is shown. copy it now.</p>
+	</section>
+}
+
+func worldStatusTone(status string) string {
+	switch status {
+	case "ready":
+		return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+	case "creating":
+		return "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
 	}
-	if view.NewAPIToken != "" {
-		<p class="rounded-md border border-emerald-500/40 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 break-all dark:bg-emerald-950/30 dark:text-emerald-300">{ view.NewAPIToken }</p>
+	return "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300"
+}
+
+func inviteStatusTone(status string) string {
+	switch status {
+	case "open":
+		return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+	case "used up":
+		return "bg-gray-100 text-gray-700 dark:bg-neutral-800 dark:text-neutral-300"
 	}
-	<section class={ appCard }>
-		<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">worlds</h2>
-		<form method="post" action="/admin/worlds" class="mt-3 flex flex-wrap items-end gap-3">
+	return "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300"
+}
+
+templ worldsSection(view AppView) {
+	<section class={ adminCard }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>worlds</p>
+			<p class={ adminMuted }>{ plural(len(view.Worlds), "world") }</p>
+		</div>
+		<form method="post" action="/admin/worlds" class="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
 			@csrfInput(view.CSRF)
-			<label class="flex-1 text-xs text-gray-500 dark:text-neutral-400" for="slug">new world slug</label>
-			<input id="slug" name="slug" class={ appInput + " flex-1" }/>
+			<div class="flex-1">
+				<label class={ appFieldLabel } for="slug">new world slug</label>
+				<input id="slug" name="slug" placeholder="heroes" class={ adminInput + " mt-1" }/>
+			</div>
 			<button type="submit" class={ appButton }>create world</button>
 		</form>
-		<div class="mt-4 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
-			for _, world := range view.Worlds {
-				<div class="flex flex-wrap items-center gap-3 py-2">
-					<span class="font-mono text-sm text-gray-900 dark:text-neutral-100">{ world.Slug }</span>
-					<span class={ appMuted }>{ world.Status }</span>
-					<a class="text-sm text-sky-700 hover:underline dark:text-sky-400" href={ templ.SafeURL("/admin/w/" + world.Slug) }>manage</a>
-					if world.Status == "ready" {
-						<form method="post" action={ templ.SafeURL("/admin/worlds/" + world.ID + "/delete") } class="ml-auto">
-							@csrfInput(view.CSRF)
-							<button type="submit" class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30">delete</button>
-						</form>
-					}
-				</div>
-			}
-		</div>
+		<p class={ adminMuted + " mt-2" }>lowercase letters, digits and dashes. a world gets its own board and its own file.</p>
+		if len(view.Worlds) == 0 {
+			<p class={ appEmpty + " mt-3" }>no worlds yet. create the first one above.</p>
+		} else {
+			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+				for _, world := range view.Worlds {
+					@worldRow(view, world)
+				}
+			</div>
+		}
 	</section>
-	<section class={ appCard }>
-		<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">invites</h2>
-		<form method="post" action="/admin/invites" class="mt-3 flex flex-wrap items-end gap-3">
+}
+
+templ worldRow(view AppView, world AppWorld) {
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
+			<p class="truncate font-mono text-sm text-gray-900 dark:text-neutral-100">{ world.Slug }</p>
+			<p class={ adminMuted + " mt-0.5" }>created { world.CreatedAt.Format("Jan 2, 2006") }</p>
+		</div>
+		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
+		<a class={ adminButton } href={ templ.SafeURL("/admin/w/" + world.Slug + "/") }>manage</a>
+		if world.Status == "ready" {
+			<a class={ appInlineLink } href={ world.Board } target="_blank" rel="noopener">board ↗</a>
+			<form
+				method="post"
+				action={ templ.SafeURL("/admin/worlds/" + world.ID + "/delete") }
+				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Delete " + world.Slug + " and every post, version and feed row in it? This cannot be undone.')") }
+			>
+				@csrfInput(view.CSRF)
+				<button type="submit" class={ appDanger }>delete</button>
+			</form>
+		}
+	</div>
+}
+
+templ invitesSection(view AppView) {
+	<section class={ adminCard }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>invites</p>
+			<p class={ adminMuted }>{ plural(len(view.Invites), "invite") }</p>
+		</div>
+		<form method="post" action="/admin/invites" class="mt-4 grid gap-3 sm:grid-cols-[1fr_6rem_auto] sm:items-end">
 			@csrfInput(view.CSRF)
-			<label class="flex-1 text-xs text-gray-500 dark:text-neutral-400" for="label">label</label>
-			<input id="label" name="label" class={ appInput + " flex-1" }/>
-			<label class="text-xs text-gray-500 dark:text-neutral-400" for="max_uses">uses</label>
-			<input id="max_uses" name="max_uses" type="number" min="1" value="1" class={ appInput + " w-24" }/>
+			<div>
+				<label class={ appFieldLabel } for="label">label</label>
+				<input id="label" name="label" placeholder="for sam" class={ adminInput + " mt-1" }/>
+			</div>
+			<div>
+				<label class={ appFieldLabel } for="max_uses">uses</label>
+				<input id="max_uses" name="max_uses" type="number" min="1" value="1" class={ adminInput + " mt-1" }/>
+			</div>
 			<button type="submit" class={ appButton }>create invite</button>
 		</form>
-		<div class="mt-4 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
-			for _, invite := range view.Invites {
-				<div class="flex flex-wrap items-center gap-3 py-2 text-sm">
-					<span>{ invite.Label }</span>
-					<span class={ appMuted }>{ itoa(invite.Uses) } / { itoa(invite.MaxUses) }</span>
-					if invite.Revoked {
-						<span class={ appMuted }>revoked</span>
-					} else {
-						<form method="post" action={ templ.SafeURL("/admin/invites/" + invite.ID + "/revoke") } class="ml-auto">
-							@csrfInput(view.CSRF)
-							<button type="submit" class="cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800">revoke</button>
-						</form>
-					}
-				</div>
-			}
-		</div>
+		<p class={ adminMuted + " mt-2" }>the link is shown once, right after you create it. send it to one person, or raise uses for a group.</p>
+		if len(view.Invites) == 0 {
+			<p class={ appEmpty + " mt-3" }>no invites yet. create one above.</p>
+		} else {
+			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+				for _, invite := range view.Invites {
+					@inviteRow(view, invite)
+				}
+			</div>
+		}
 	</section>
-	<section class={ appCard }>
-		<h2 class="text-base font-semibold text-gray-900 dark:text-neutral-100">identities</h2>
-		<div class="mt-4 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
-			for _, identity := range view.Identities {
-				<div class="flex flex-wrap items-center gap-3 py-2 text-sm">
-					<span>{ identity.DisplayName }</span>
-					if identity.Disabled {
-						<span class={ appMuted }>disabled</span>
-					} else {
-						<form method="post" action={ templ.SafeURL("/admin/identities/" + identity.ID + "/disable") } class="ml-auto">
-							@csrfInput(view.CSRF)
-							<button type="submit" class="cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800">disable</button>
-						</form>
-					}
-				</div>
-			}
+}
+
+templ inviteRow(view AppView, invite AppInviteRow) {
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
+			<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">
+				if invite.Label != "" {
+					{ invite.Label }
+				} else {
+					<span class={ adminMuted }>untitled invite</span>
+				}
+			</p>
+			<p class={ adminMuted + " mt-0.5" }>
+				{ itoa(invite.Uses) } / { itoa(invite.MaxUses) } used · created { invite.CreatedAt.Format("Jan 2, 2006") }
+				if invite.ExpiresAt != nil {
+					· expires { invite.ExpiresAt.Format("Jan 2, 2006") }
+				}
+			</p>
 		</div>
+		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + inviteStatusTone(invite.Status()) }>{ invite.Status() }</span>
+		if !invite.Revoked {
+			<form method="post" action={ templ.SafeURL("/admin/invites/" + invite.ID + "/revoke") }>
+				@csrfInput(view.CSRF)
+				<button type="submit" class={ adminButton }>revoke</button>
+			</form>
+		}
+	</div>
+}
+
+templ peopleSection(view AppView) {
+	<section class={ adminCard }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>people</p>
+			<p class={ adminMuted }>{ plural(len(view.Identities), "account") }</p>
+		</div>
+		<p class={ adminMuted + " mt-2" }>disabling an account signs it out everywhere and closes its open boards.</p>
+		if len(view.Identities) == 0 {
+			<p class={ appEmpty + " mt-3" }>no accounts yet. send someone an invite.</p>
+		} else {
+			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+				for _, identity := range view.Identities {
+					@personRow(view, identity)
+				}
+			</div>
+		}
 	</section>
+}
+
+templ personRow(view AppView, identity AppIdentity) {
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
+			<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">{ identity.DisplayName }</p>
+			<p class={ adminMuted + " mt-0.5" }>joined { identity.CreatedAt.Format("Jan 2, 2006") }</p>
+		</div>
+		if identity.Disabled {
+			<span class="inline-flex rounded-sm bg-gray-100 px-1.5 py-px text-[11px] font-medium text-gray-700 dark:bg-neutral-800 dark:text-neutral-300">disabled</span>
+		} else {
+			<form
+				method="post"
+				action={ templ.SafeURL("/admin/identities/" + identity.ID + "/disable") }
+				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Disable this account? They are signed out everywhere and cannot sign in again.')") }
+			>
+				@csrfInput(view.CSRF)
+				<button type="submit" class={ adminButton }>disable</button>
+			</form>
+		}
+	</div>
+}
+
+// modelSection shows the model contract: the skills it can load and the tools
+// it can call. Both lists come from the same definitions the requests use.
+templ modelSection(view AppView) {
+	<section class={ adminCard }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>skills</p>
+			<p class={ adminMuted }>{ plural(len(view.Skills), "skill") }</p>
+		</div>
+		<p class={ adminMuted + " mt-2" }>the model reads one with <span class="font-mono">load_skill</span> before it builds that kind of thing. a body comes back as a tool result, so it never reaches the page or the room log.</p>
+		if len(view.Skills) == 0 {
+			<p class={ appEmpty + " mt-3" }>no skills are registered.</p>
+		} else {
+			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+				for _, skill := range view.Skills {
+					@skillRow(skill)
+				}
+			</div>
+		}
+	</section>
+	<section class={ adminCard }>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<p class={ adminLabel }>tools</p>
+			<p class={ adminMuted }>{ plural(len(view.Tools), "tool") }</p>
+		</div>
+		<p class={ adminMuted + " mt-2" }>every completion sends <span class="font-mono">tool_choice: required</span>. <span class="font-mono">done</span> is the only way to end a turn with words.</p>
+		if len(view.Tools) == 0 {
+			<p class={ appEmpty + " mt-3" }>no tools are registered.</p>
+		} else {
+			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+				for _, tool := range view.Tools {
+					@toolRow(tool)
+				}
+			</div>
+		}
+	</section>
+}
+
+templ skillRow(skill AppSkill) {
+	<div class="py-3" data-skill={ skill.Name }>
+		<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+			<p class="font-mono text-sm text-gray-900 dark:text-neutral-100">{ skill.Name }</p>
+			<p class={ adminMuted + " min-w-0 flex-1" }>{ skill.Summary }</p>
+		</div>
+		<details class="mt-2">
+			<summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200">read the body</summary>
+			<pre class="mt-2 max-h-96 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap text-gray-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300">{ skill.Body }</pre>
+		</details>
+	</div>
+}
+
+templ toolRow(tool AppTool) {
+	<div class="py-3" data-tool={ tool.Name }>
+		<p class="font-mono text-sm text-gray-900 dark:text-neutral-100">{ tool.Name }</p>
+		<p class={ adminMuted + " mt-0.5 break-words" }>{ tool.Description }</p>
+		<details class="mt-2">
+			<summary class="cursor-pointer text-xs text-gray-500 hover:text-gray-900 dark:text-neutral-500 dark:hover:text-neutral-200">parameters</summary>
+			<pre class="mt-2 max-h-96 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-gray-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-300">{ tool.Parameters }</pre>
+		</details>
+	</div>
 }

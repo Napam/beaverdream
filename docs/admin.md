@@ -16,10 +16,22 @@ The admin lives on the app port, `APP_PORT` (default `6930`), not a separate
 admin port. The play port never serves an admin page. That keeps the model's
 scripts off the origin that holds the app session.
 
-- `/admin`: the overview, accounts, invites and the world list.
+- `/admin`: the world list and the create form.
+- `/admin/invites`: invite creation and the current invites.
+- `/admin/people`: the accounts, with a disable button.
+- `/admin/model`: the registered skills and the tools the webmaster can call,
+  read from the same definitions the model requests use. Skill bodies open in
+  place; tool parameter schemas are shown as JSON.
 - `/admin/w/{slug}/...`: one world's turns, site tools and data page.
   `/admin/w/{slug}/turns`, `/admin/w/{slug}/site` and
   `/admin/w/{slug}/journal` are the main ones.
+- The header links back to the back office (`/admin`) and to the world's board.
+  On a world page, the world name in the breadcrumb is a switcher when there
+  is more than one world.
+- The user pages are the warm surface: the lobby, the account, sign-in and the
+  invite form. An admin gets a **back office** pill there that opens `/admin`.
+  The back office keeps the neutral gray chrome, and its header links back to
+  the lobby.
 
 There is no `ADMIN_PORT`, no separate admin hostname, and no board redirect to
 an admin port.

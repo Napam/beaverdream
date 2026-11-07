@@ -229,6 +229,10 @@ type AdminView struct {
 	Panel Panel
 	Site  sqlc.SiteVersion
 	Live  LiveView
+	// World is the slug this panel manages, and Worlds is every ready world
+	// for the header switcher. Empty on the root panel.
+	World  string
+	Worlds []WorldChoice
 	// States, Journal and Browse are the data page: the shared values, a
 	// card per journal key, and the rows of the picked key.
 	States         []StateView
@@ -290,7 +294,7 @@ templ AdminPage(view AdminView, datastar string) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>beaverdream admin</title>
+			<title>{ adminPageTitle(view) }</title>
 			<link rel="icon" type="image/svg+xml" href={ beaverdream.StaticRootPath("static/assets/beaver.svg") }/>
 			<link rel="stylesheet" id="tailwindcss" href={ beaverdream.StaticRootPath("static/tailwind.css") }/>
 			@themeScript()
@@ -315,15 +319,26 @@ templ AdminBody(view AdminView) {
 	<div id="admin-body" class="flex flex-col gap-6">
 		<div id={ "admin-stream-" + view.Panel.Page + "-" + i64(view.Panel.Turn) } hidden data-init={ view.Stream }></div>
 		<header class="sticky top-0 z-20 -mx-4 bg-gray-100/90 backdrop-blur sm:-mx-6 dark:bg-neutral-950/90">
-			<div class="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-1 px-4 sm:px-6">
-				<h1 class="shrink-0 text-base font-semibold tracking-tight text-gray-900 dark:text-neutral-100">beaverdream admin</h1>
-				<nav class="flex shrink-0 gap-1 self-stretch text-sm">
+			<div class="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-1 px-4 sm:px-6">
+				<div class="flex min-w-0 shrink-0 items-baseline gap-1.5">
+					<a href="/admin" title="all worlds" class="shrink-0 text-base font-semibold tracking-tight text-gray-900 hover:text-gray-600 dark:text-neutral-100 dark:hover:text-neutral-400">beaverdream admin</a>
+					if view.World != "" {
+						<span class="text-gray-300 dark:text-neutral-700">/</span>
+						if len(view.Worlds) > 1 {
+							@worldSwitcher(view)
+						} else {
+							<span class="max-w-40 truncate font-mono text-sm text-gray-600 dark:text-neutral-400">{ view.World }</span>
+						}
+					}
+				</div>
+				<nav class="flex shrink-0 gap-1 self-stretch overflow-x-auto text-sm">
 					@navLink(view.Panel, PageOverview, view.Panel.Action(""), "overview")
 					@navLink(view.Panel, PageTurns, view.Panel.Action("/turns"), "turns")
 					@navLink(view.Panel, PageSite, view.Panel.Action("/site"), "site")
 					@navLink(view.Panel, PageJournal, view.Panel.Action("/journal"), "data")
 				</nav>
 				<div class="ml-auto flex items-center gap-1.5">
+					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href="/admin">← back office</a>
 					@themeToggle()
 					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
 					<form method="post" action="/logout" class="contents">
@@ -366,6 +381,23 @@ func navClass(current Panel, page string) string {
 
 templ navLink(current Panel, page string, path string, label string) {
 	<a href={ templ.SafeURL(path) } data-on:click={ navTo(path) } class={ navClass(current, page) }>{ label }</a>
+}
+
+// worldSwitcher jumps between worlds without going back to the instance page.
+// Only shown when there is somewhere else to go.
+templ worldSwitcher(view AdminView) {
+	if len(view.Worlds) > 1 {
+		<label class="sr-only" for="admin-world-switcher">world</label>
+		<select
+			id="admin-world-switcher"
+			onchange="if (this.value) location.href = this.value;"
+			class="max-w-40 cursor-pointer rounded-md border border-gray-300 bg-white px-2 py-0.5 font-mono text-sm text-gray-700 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300"
+		>
+			for _, world := range view.Worlds {
+				<option value={ "/admin/w/" + world.Slug + "/" } selected?={ world.Slug == view.World }>{ world.Slug }</option>
+			}
+		</select>
+	}
 }
 
 // overviewPage is the glance, top to bottom: talk to the webmaster, how

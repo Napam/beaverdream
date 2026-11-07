@@ -241,7 +241,7 @@ var JournalRuntime = `<script>
   var cache = Object.create(null)
 
   // The world mount path and browser-key root come from the same code-owned
-  // config. A board served under /w/SLUG/ must call its own routes and keep
+  // config. A board served under /worlds/SLUG/ must call its own routes and keep
   // its saves apart from every other world on this origin.
   var base = String(conf.base || '').replace(/\/+$/, '')
   var store = String(conf.store || 'bd:')
@@ -268,9 +268,9 @@ var JournalRuntime = `<script>
         version: Number(document.documentElement.getAttribute('data-version')) || 0
       })
       if (navigator.sendBeacon) {
-        navigator.sendBeacon(url('/x/err'), new Blob([body], { type: 'application/json' }))
+        navigator.sendBeacon(url('/errors'), new Blob([body], { type: 'application/json' }))
       } else {
-        fetch(url('/x/err'), { method: 'POST', body: body, keepalive: true })
+        fetch(url('/errors'), { method: 'POST', body: body, keepalive: true })
       }
     } catch (e) {}
   }
@@ -286,7 +286,7 @@ var JournalRuntime = `<script>
   })
 
   function read(key) {
-    return fetch(url('/j/' + encodeURIComponent(key) + '?since=0'), { cache: 'no-store' })
+    return fetch(url('/journal/' + encodeURIComponent(key) + '?since=0'), { cache: 'no-store' })
       .then(function (r) {
         if (!r.ok) throw new Error('journal read ' + r.status)
         return r.json()
@@ -465,7 +465,7 @@ var JournalRuntime = `<script>
     if (self.stale) return Promise.resolve(null)
     var match = (opts && opts.match) || self.match
     var body = JSON.stringify({ payload: payload, match: match, rules: self.rules })
-    return fetch(url('/j/' + encodeURIComponent(self.key)), {
+    return fetch(url('/journal/' + encodeURIComponent(self.key)), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body,
@@ -571,13 +571,13 @@ var JournalRuntime = `<script>
     mine: conf.mine || {},
     tops: conf.tops || {},
     add: function (key, n) {
-      return stateCall(url('/x/state/' + encodeURIComponent(key) + '?add=' + amount(n)))
+      return stateCall(url('/state/' + encodeURIComponent(key) + '?add=' + amount(n)))
     },
     spend: function (key, n) {
-      return stateCall(url('/x/state/' + encodeURIComponent(key) + '?spend=' + amount(n)))
+      return stateCall(url('/state/' + encodeURIComponent(key) + '?spend=' + amount(n)))
     },
     trade: function (recipe) {
-      return stateCall(url('/x/state/' + encodeURIComponent(recipe)))
+      return stateCall(url('/state/' + encodeURIComponent(recipe)))
     }
   }
 

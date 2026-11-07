@@ -120,7 +120,7 @@ func newInstance(t *testing.T, opts instanceOptions) *instance {
 	appPort := strconvPort(t, appLn.Addr())
 	playPort := strconvPort(t, playLn.Addr())
 
-	app := handlers.NewApp(logger, reg, manager, func() *webmaster.Mutator {
+	app := handlers.NewApp(logger, reg, manager, func() *webmaster.ChangesetRunner {
 		return webmaster.New(client, "mock-model", 3, "")
 	}, handlers.AppConfig{
 		Config: handlers.Config{
@@ -265,7 +265,7 @@ func (b *browser) login(in *instance, username, password string) *http.Response 
 func (b *browser) play(in *instance, slug string) (string, string) {
 	b.t.Helper()
 	csrf := b.csrf(in, "/")
-	resp := b.post(in.appURLFor("/w/"+slug+"/play"), url.Values{"csrf": {csrf}})
+	resp := b.post(in.appURLFor("/worlds/"+slug+"/play"), url.Values{"csrf": {csrf}})
 	if resp.StatusCode != http.StatusSeeOther {
 		b.t.Fatalf("play %s: status = %d, body %s", slug, resp.StatusCode, body(b.t, resp))
 	}

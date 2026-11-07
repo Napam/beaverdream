@@ -48,7 +48,7 @@ type reply struct {
 // so the admin panel can follow a long round; the turn only acts on the whole
 // reply. A stream that adds nothing for longer than the idle limit is cut and
 // comes back as Stalled with no error.
-func (m *Mutator) complete(
+func (m *ChangesetRunner) complete(
 	ctx context.Context,
 	params openai.ChatCompletionNewParams,
 	round int,

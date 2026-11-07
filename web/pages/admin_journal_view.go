@@ -68,11 +68,11 @@ func SortJournalKeys(keys []JournalKeyView) {
 }
 
 // journalPath is the journal page with a selection.
-func journalPath(base, feed string, match int64, visitor string, before int64) string {
+func journalPath(base, key string, match int64, visitor string, before int64) string {
 	return Panel{
 		Base:    base,
 		Page:    PageJournal,
-		Feed:    feed,
+		Key:     key,
 		Match:   match,
 		Visitor: visitor,
 		Before:  before,
@@ -132,7 +132,7 @@ func payloadText(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-// holderPath keeps the page's feed selection and picks a visitor, or drops
+// holderPath keeps the page's key selection and picks a visitor, or drops
 // the pick when visitor is empty.
 func holderPath(p Panel, visitor string) string {
 	p.Page = PageJournal
@@ -149,7 +149,7 @@ func holdingsClearConfirm(key string) string {
 // holdingsClearAction is where a visitor counter's clear form posts. The key
 // is a lowercase name, so it is safe in a path and a script string.
 func holdingsClearAction(key string, p Panel) string {
-	return p.Action("/state/"+key+"/clear") + p.query()
+	return p.Action("/holdings/"+key+"/clear") + p.query()
 }
 
 func signed(n int64) string {

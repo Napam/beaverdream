@@ -44,7 +44,7 @@ func (a *App) AppRouter() *chi.Mux {
 		r.Post("/account/logout-all", a.LogoutAll)
 		r.Post("/account/tokens", a.CreateAPIToken)
 		r.Post("/account/tokens/revoke", a.RevokeAPIToken)
-		r.Post("/w/{slug}/play", a.PlayHandoff)
+		r.Post("/worlds/{slug}/play", a.PlayHandoff)
 
 		r.Group(func(ar chi.Router) {
 			ar.Use(a.requireAppAdmin)
@@ -53,13 +53,13 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Get("/admin/people", a.AdminPeople)
 			ar.Get("/admin/model", a.AdminModel)
 			ar.Post("/admin/worlds", a.CreateWorld)
-			ar.Post("/admin/worlds/{id}/delete", a.DeleteWorld)
+			ar.Post("/admin/worlds/{slug}/delete", a.DeleteWorld)
 			ar.Post("/admin/invites", a.CreateInvite)
 			ar.Post("/admin/invites/{id}/revoke", a.RevokeInvite)
 			ar.Post("/admin/identities/{id}/disable", a.DisableIdentity)
-			ar.Get("/admin/w/{slug}", a.AdminWorldRoot)
+			ar.Get("/admin/worlds/{slug}", a.AdminWorldRoot)
 
-			ar.Route("/admin/w/{slug}", func(wr chi.Router) {
+			ar.Route("/admin/worlds/{slug}", func(wr chi.Router) {
 				wr.Use(a.withWorldSlug)
 				wr.Get("/", a.worldAdmin((*Handlers).Admin))
 				wr.Get("/turns", a.worldAdmin((*Handlers).AdminTurns))
@@ -68,15 +68,15 @@ func (a *App) AppRouter() *chi.Mux {
 				wr.Get("/journal", a.worldAdmin((*Handlers).AdminJournal))
 				wr.Post("/journal", a.worldAdmin((*Handlers).AdminJournal))
 				wr.Post("/journal/{key}/clear", a.worldAdmin((*Handlers).ClearJournal))
-				wr.Post("/state/{key}/clear", a.worldAdmin((*Handlers).ClearHoldings))
+				wr.Post("/holdings/{key}/clear", a.worldAdmin((*Handlers).ClearHoldings))
 				wr.Get("/live", a.worldAdmin((*Handlers).AdminLive))
-				wr.Post("/mutate", a.worldAdmin((*Handlers).AdminMutate))
+				wr.Post("/changeset", a.worldAdmin((*Handlers).AdminChangeset))
 				wr.Post("/retry/{id}", a.worldAdmin((*Handlers).RetryTurn))
 				wr.Post("/stop/{id}", a.worldAdmin((*Handlers).StopTurn))
 				wr.Post("/undo", a.worldAdmin((*Handlers).UndoLast))
-				wr.Post("/heal", a.worldAdmin((*Handlers).HealBoard))
+				wr.Post("/heal", a.worldAdmin((*Handlers).HealSite))
 				wr.Post("/versions/{id}/restore", a.worldAdmin((*Handlers).RestoreVersion))
-				wr.Post("/reset", a.worldAdmin((*Handlers).ResetBoard))
+				wr.Post("/reset", a.worldAdmin((*Handlers).ResetWorld))
 			})
 		})
 	})
@@ -84,8 +84,8 @@ func (a *App) AppRouter() *chi.Mux {
 	return router
 }
 
-// PlayRouter is the board plane. It mounts no login, invite, lobby or admin
-// route, and every board path lives under one world's slug.
+// PlayRouter is the play plane. It mounts no login, invite, lobby or admin
+// route, and every play path lives under one world's slug.
 func (a *App) PlayRouter() *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
@@ -97,24 +97,24 @@ func (a *App) PlayRouter() *chi.Mux {
 
 	router.Group(func(r chi.Router) {
 		r.Use(a.requirePlay)
-		r.Get("/w/{slug}", a.RedirectWorld)
-		r.Route("/w/{slug}", func(wr chi.Router) {
+		r.Get("/worlds/{slug}", a.RedirectWorld)
+		r.Route("/worlds/{slug}", func(wr chi.Router) {
 			wr.Use(a.withWorldSlug)
-			wr.Get("/", a.worldBoard((*Handlers).Index))
-			wr.Get("/live", a.worldBoard((*Handlers).Live))
-			wr.Post("/posts", a.worldBoard((*Handlers).CreatePost))
-			wr.Get("/version", a.worldBoard((*Handlers).Version))
-			wr.Get("/x/state", a.worldBoard((*Handlers).State))
-			wr.Post("/x/state/{key}", a.worldBoard((*Handlers).SetState))
-			wr.Get("/j/{key}", a.worldBoard((*Handlers).JournalRead))
-			wr.Post("/j/{key}", a.worldBoard((*Handlers).JournalAppend))
-			wr.Post("/x/err", a.worldBoard((*Handlers).ClientError))
-			wr.Get("/x/budget", a.worldBoard((*Handlers).Budget))
+			wr.Get("/", a.worldPlay((*Handlers).Index))
+			wr.Get("/live", a.worldPlay((*Handlers).Live))
+			wr.Post("/posts", a.worldPlay((*Handlers).CreatePost))
+			wr.Get("/version", a.worldPlay((*Handlers).Version))
+			wr.Get("/state", a.worldPlay((*Handlers).State))
+			wr.Post("/state/{key}", a.worldPlay((*Handlers).SetState))
+			wr.Get("/journal/{key}", a.worldPlay((*Handlers).JournalRead))
+			wr.Post("/journal/{key}", a.worldPlay((*Handlers).JournalAppend))
+			wr.Post("/errors", a.worldPlay((*Handlers).ClientError))
+			wr.Get("/budget", a.worldPlay((*Handlers).Budget))
 		})
 	})
 
 	// Any other play path is the gate when anonymous and a 404 when signed
-	// in; nothing falls through to a code-owned board at the root.
+	// in; nothing falls through to a code-owned page at the root.
 	router.NotFound(a.playNotFound)
 	return router
 }
@@ -124,8 +124,8 @@ func (a *App) playNotFound(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// A board path still gets the gate; an app-only path is simply not here.
-	if strings.HasPrefix(r.URL.Path, "/w/") {
+	// A world path still gets the gate; an app-only path is simply not here.
+	if strings.HasPrefix(r.URL.Path, "/worlds/") {
 		a.gate(w, r)
 		return
 	}
@@ -136,8 +136,8 @@ func favicon(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, webmaster.FaviconPath, http.StatusMovedPermanently)
 }
 
-// worldBoard adapts a world handler to an HTTP handler.
-func (a *App) worldBoard(fn func(*Handlers, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+// worldPlay adapts a world handler to an HTTP handler.
+func (a *App) worldPlay(fn func(*Handlers, http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := a.worldHandler(r)
 		if h == nil {
@@ -149,7 +149,7 @@ func (a *App) worldBoard(fn func(*Handlers, http.ResponseWriter, *http.Request))
 }
 
 func (a *App) worldAdmin(fn func(*Handlers, http.ResponseWriter, *http.Request)) http.HandlerFunc {
-	return a.worldBoard(fn)
+	return a.worldPlay(fn)
 }
 
 func (a *App) worldHandler(r *http.Request) *Handlers {
@@ -307,7 +307,7 @@ func appWorld(world registry.World, r *http.Request, cfg Config) pages.AppWorld 
 		Slug:      world.Slug,
 		Status:    world.Status,
 		CreatedAt: world.CreatedAt,
-		Board:     playOrigin(r, cfg) + "/w/" + url.PathEscape(world.Slug) + "/",
+		BoardURL:  playOrigin(r, cfg) + "/worlds/" + url.PathEscape(world.Slug) + "/",
 	}
 }
 
@@ -358,24 +358,24 @@ func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 		slog.String("identity_id", identity.ID),
 		slog.String("world_id", worldID),
 	)
-	http.Redirect(w, r, "/w/"+url.PathEscape(world.Slug)+"/", http.StatusSeeOther)
+	http.Redirect(w, r, "/worlds/"+url.PathEscape(world.Slug)+"/", http.StatusSeeOther)
 }
 
 // AdminWorldRoot sends the world admin mount to its trailing-slash page.
 func (a *App) AdminWorldRoot(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
-	target := "/admin/w/" + url.PathEscape(slug) + "/"
+	target := "/admin/worlds/" + url.PathEscape(slug) + "/"
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
-// RedirectWorld sends /w/{slug} to the trailing-slash board so relative model
-// links resolve inside the world.
+// RedirectWorld sends /worlds/{slug} to the trailing-slash page so relative
+// model links resolve inside the world.
 func (a *App) RedirectWorld(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
-	http.Redirect(w, r, "/w/"+url.PathEscape(slug)+"/", http.StatusMovedPermanently)
+	http.Redirect(w, r, "/worlds/"+url.PathEscape(slug)+"/", http.StatusMovedPermanently)
 }
 
 // Account is the app account page.
@@ -627,8 +627,8 @@ func (a *App) DeleteWorld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r)
-	id := chi.URLParam(r, "id")
-	world, err := a.reg.GetWorld(r.Context(), id)
+	slug := chi.URLParam(r, "slug")
+	world, err := a.reg.GetWorldBySlug(r.Context(), slug)
 	if err != nil {
 		http.NotFound(w, r)
 		return

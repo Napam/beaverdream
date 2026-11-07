@@ -98,7 +98,7 @@ func setupWithModel(
 		},
 		DB:      dbConn,
 		Queries: queries,
-		Mutator: webmaster.New(client, "mock-model", 3, ""),
+		Runner:  webmaster.New(client, "mock-model", 3, ""),
 		Config:  cfg,
 	})
 	t.Cleanup(h.Close)
@@ -209,7 +209,7 @@ func stateForm(
 	name string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/x/state/"+key, strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/state/"+key, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	if name != "" {
@@ -221,7 +221,7 @@ func stateForm(
 	return rec
 }
 
-// waitFor polls until fn is true. Mutations run in the background now, so
+// waitFor polls until fn is true. Changesets run in the background now, so
 // tests have to wait for the version or run to land.
 func waitFor(t *testing.T, what string, fn func() bool) {
 	t.Helper()
@@ -251,8 +251,8 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/w/test/" {
-		t.Errorf("Location = %q, want /w/test/ so the page stays at the top", got)
+	if got := rec.Header().Get("Location"); got != "/worlds/test/" {
+		t.Errorf("Location = %q, want /worlds/test/ so the page stays at the top", got)
 	}
 
 	posts, err := queries.ListPosts(ctx)
@@ -285,7 +285,7 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 		t.Errorf("new html lost the placeholder: %q", after.Html)
 	}
 
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 		t.Errorf("status = %q, want changed", runs[0].Status)
 	}
 	if runs[0].ID <= latest.ID {
-		t.Error("the webmaster turn did not come after the post it answered")
+		t.Error("the changeset did not come after the post it answered")
 	}
 	if !runs[0].VersionID.Valid {
 		t.Error("the turn is not linked to the version it produced")
@@ -315,7 +315,7 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 		t.Fatalf("first status = %d", first.Code)
 	}
 	waitFor(t, "the first rewrite", func() bool {
-		runs, err := queries.ListWebmasterTurns(ctx, 10)
+		runs, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(runs) == 1
 	})
 
@@ -332,7 +332,7 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -341,11 +341,11 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 	}
 }
 
-func TestAdminMutateDoesNotCreatePost(t *testing.T) {
+func TestAdminChangesetDoesNotCreatePost(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -441,8 +441,8 @@ func TestCreatePostWithoutIdentitySendsVisitorToTheGate(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/w/test/" {
-		t.Errorf("Location = %q, want /w/test/", got)
+	if got := rec.Header().Get("Location"); got != "/worlds/test/" {
+		t.Errorf("Location = %q, want /worlds/test/", got)
 	}
 
 	posts, err := queries.ListPosts(context.Background())
@@ -594,7 +594,7 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 	}
 
 	read := httptest.NewRecorder()
-	h.State(read, httptest.NewRequest(http.MethodGet, "/x/state", nil))
+	h.State(read, httptest.NewRequest(http.MethodGet, "/state", nil))
 	if read.Code != http.StatusOK {
 		t.Fatalf("state status = %d", read.Code)
 	}
@@ -662,11 +662,11 @@ func TestResetClearsSharedState(t *testing.T) {
 		t.Fatalf("vote status = %d", rec.Code)
 	}
 
-	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	reset := postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{})
 	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
-	rows, err := queries.ListSiteState(ctx)
+	rows, err := queries.ListSharedState(ctx)
 	if err != nil {
 		t.Fatalf("list state: %v", err)
 	}
@@ -684,18 +684,18 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("mutate status = %d", rec.Code)
+		t.Fatalf("runChangeset status = %d", rec.Code)
 	}
 	changed, err := queries.CurrentSite(ctx)
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
 	if changed.ID <= seed.ID {
-		t.Fatalf("mutation did not create a version: %d", changed.ID)
+		t.Fatalf("changeset did not create a version: %d", changed.ID)
 	}
 
 	undo := postAdmin(t, h.UndoLast, "/admin/undo", url.Values{})
@@ -714,7 +714,7 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 	}
 }
 
-func TestHealBoardReturnsToTheSeed(t *testing.T) {
+func TestHealSiteReturnsToTheSeed(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -722,28 +722,28 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("mutate status = %d", rec.Code)
+		t.Fatalf("runChangeset status = %d", rec.Code)
 	}
 	changed, err := queries.CurrentSite(ctx)
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
 	if changed.Css == seed.Css {
-		t.Fatal("the mutation did not change the site")
+		t.Fatal("the changeset did not change the site")
 	}
 
-	if err := queries.UpsertSiteState(ctx, sqlc.UpsertSiteStateParams{
+	if err := queries.UpsertSharedState(ctx, sqlc.UpsertSharedStateParams{
 		Key:   "votes",
 		Value: "7",
 	}); err != nil {
 		t.Fatalf("upsert state: %v", err)
 	}
 
-	heal := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	heal := postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
 	if heal.Code != http.StatusOK {
 		t.Fatalf("heal status = %d", heal.Code)
 	}
@@ -764,7 +764,7 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 	if len(posts) != 0 {
 		t.Errorf("heal changed the posts: %d", len(posts))
 	}
-	state, err := queries.ListSiteState(ctx)
+	state, err := queries.ListSharedState(ctx)
 	if err != nil {
 		t.Fatalf("list state: %v", err)
 	}
@@ -772,7 +772,7 @@ func TestHealBoardReturnsToTheSeed(t *testing.T) {
 		t.Errorf("heal kept stale shared state: %+v", state)
 	}
 
-	again := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	again := postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
 	if again.Code != http.StatusOK {
 		t.Fatalf("second heal status = %d", again.Code)
 	}
@@ -806,7 +806,7 @@ func TestUndoLastAtTheSeedDoesNothing(t *testing.T) {
 	}
 }
 
-func TestResetBoardClearsPostsAndHistory(t *testing.T) {
+func TestResetWorldClearsPostsAndHistory(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -822,7 +822,7 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 		return err == nil && site.ID > 1
 	})
 
-	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	reset := postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{})
 	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d, want 200", reset.Code)
 	}
@@ -842,16 +842,16 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	if site.ID != 1 {
 		t.Errorf("current version = %d, want the seed at 1", site.ID)
 	}
-	if !strings.Contains(site.Html, "a small message board") {
-		t.Errorf("current version is not the seed: %q", site.Html)
+	if site.TurnID.Valid {
+		t.Errorf("current version belongs to turn %d, want the seed", site.TurnID.Int64)
 	}
 
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
 	if len(runs) != 0 {
-		t.Errorf("mutation history survived the reset: %d", len(runs))
+		t.Errorf("changeset history survived the reset: %d", len(runs))
 	}
 
 	next, err := queries.CreateSiteVersion(ctx, sqlc.CreateSiteVersionParams{
@@ -874,7 +874,7 @@ func TestResetBoardClearsPostsAndHistory(t *testing.T) {
 	}
 }
 
-func TestResetBoardRequiresToken(t *testing.T) {
+func TestResetWorldRequiresToken(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -885,7 +885,7 @@ func TestResetBoardRequiresToken(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 
-	rec := postForm(t, h.ResetBoard, "/admin/reset", url.Values{})
+	rec := postForm(t, h.ResetWorld, "/admin/reset", url.Values{})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
 	}
@@ -925,7 +925,7 @@ func TestModelFailureLeavesSiteAlone(t *testing.T) {
 	}
 
 	waitFor(t, "the failed run", func() bool {
-		runs, err := queries.ListWebmasterTurns(ctx, 10)
+		runs, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(runs) == 1 && runs[0].Status == "error"
 	})
 
@@ -934,10 +934,10 @@ func TestModelFailureLeavesSiteAlone(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 	if after.ID != before.ID {
-		t.Fatalf("version advanced on a failed mutation: %d -> %d", before.ID, after.ID)
+		t.Fatalf("version advanced on a failed changeset: %d -> %d", before.ID, after.ID)
 	}
 
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list runs: %v", err)
 	}
@@ -963,7 +963,7 @@ func TestSecondTurnReadsTheFirst(t *testing.T) {
 		return err == nil && site.ID > 1
 	})
 
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}
@@ -981,11 +981,11 @@ func TestSecondTurnReadsTheFirst(t *testing.T) {
 		t.Fatalf("second post status = %d", second.Code)
 	}
 	waitFor(t, "the second rewrite", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		turns, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(turns) == 2 && turns[0].Status == "changed"
 	})
 
-	turns, err = queries.ListWebmasterTurns(ctx, 10)
+	turns, err = queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}
@@ -1020,10 +1020,10 @@ func TestHealRecordsATurn(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
-	rec := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	rec := postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("heal status = %d", rec.Code)
 	}
@@ -1061,7 +1061,7 @@ func TestNoopTurnIsKeptAndLeavesThePage(t *testing.T) {
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop please"}})
 
 	waitFor(t, "the kept turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		turns, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(turns) == 1 && turns[0].Status == "kept"
 	})
 	after, err := queries.CurrentSite(ctx)
@@ -1095,11 +1095,11 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("admin mutate status = %d", rec.Code)
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
 	}
 
 	summary, err := queries.GetLatestSummary(ctx)
@@ -1113,10 +1113,10 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		t.Error("summary is empty")
 	}
 
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"mocknoop"},
 	})
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("list turns: %v %+v", err, turns)
 	}
@@ -1160,7 +1160,7 @@ func TestCompactionLeavesQueuedPostsOut(t *testing.T) {
 	}
 	h.HoldPost(createdPostRow(queued))
 
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	summary, err := queries.GetLatestSummary(ctx)
@@ -1215,11 +1215,11 @@ func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(turns) != 1 || turns[0].Status != "changed" {
 		t.Fatalf("turn did not land: %v %+v", err, turns)
 	}
@@ -1267,7 +1267,7 @@ func TestSlowSummaryDoesNotDelayTheVersion(t *testing.T) {
 		site, err := queries.CurrentSite(ctx)
 		return err == nil && site.ID == 2
 	})
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(turns) != 1 || turns[0].Status != "changed" {
 		t.Fatalf("turn is not finished while the summary runs: %v %+v", err, turns)
 	}
@@ -1290,11 +1290,11 @@ func TestCompactionTriggersOnTokenEstimate(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("admin mutate status = %d", rec.Code)
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
 	}
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
 		t.Fatalf("token estimate did not trigger compaction: %v", err)
@@ -1313,14 +1313,14 @@ func TestResetClearsCompactedMemory(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
 		t.Fatalf("no summary before reset: %v", err)
 	}
 
-	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	reset := postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{})
 	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
@@ -1347,11 +1347,11 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("admin mutate status = %d", rec.Code)
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
 	}
 
 	summary, err := queries.GetLatestSummary(ctx)
@@ -1381,11 +1381,11 @@ func TestRoomLogKeepsEveryTurnBelowTheBackstop(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"mocknoop"},
 	})
 
-	turns, err := queries.ListWebmasterTurns(ctx, 1)
+	turns, err := queries.ListChangesets(ctx, 1)
 	if err != nil || len(turns) != 1 {
 		t.Fatalf("list turns: %v %+v", err, turns)
 	}
@@ -1409,13 +1409,13 @@ func TestFailedTurnKeepsThePreviousNotes(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := queries.CreateTurn(ctx, sqlc.CreateTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: "webmaster",
 		Body:   "seed turn",
 	}); err != nil {
 		t.Fatalf("create turn: %v", err)
 	}
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(turns) != 1 {
 		t.Fatalf("list turns: %v %+v", err, turns)
 	}
@@ -1431,7 +1431,7 @@ func TestFailedTurnKeepsThePreviousNotes(t *testing.T) {
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockfail"}})
 	waitFor(t, "the failed turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		turns, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(turns) == 2 && turns[0].Status == "error"
 	})
 
@@ -1459,7 +1459,7 @@ func TestResetDropsAQueuedPostThatReusedItsID(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 
-	reset := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+	reset := postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{})
 	if reset.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", reset.Code)
 	}
@@ -1478,7 +1478,7 @@ func TestResetDropsAQueuedPostThatReusedItsID(t *testing.T) {
 	h.QueuePost(sqlc.Post(stale))
 	h.RunPending()
 
-	turns, err := queries.ListWebmasterTurns(ctx, 10)
+	turns, err := queries.ListChangesets(ctx, 10)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}
@@ -1503,7 +1503,7 @@ func TestRunPendingAnswersAStoredPost(t *testing.T) {
 	h.RunPending()
 
 	waitFor(t, "the rewrite", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 10)
+		turns, err := queries.ListChangesets(ctx, 10)
 		return err == nil && len(turns) == 1
 	})
 }
@@ -1525,11 +1525,11 @@ func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	rec := postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{
+	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("admin mutate status = %d", rec.Code)
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
 	}
 	if summary, err := queries.GetLatestSummary(ctx); err == nil {
 		t.Errorf("compacted although the page fills the budget: %+v", summary)
@@ -1556,7 +1556,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 		t.Fatalf("create version: %v", err)
 	}
 	appendJournal(t, h.JournalAppend, "moves", `{"cell":4}`, 0, visitorA)
-	if err := queries.UpsertSiteState(ctx, sqlc.UpsertSiteStateParams{
+	if err := queries.UpsertSharedState(ctx, sqlc.UpsertSharedStateParams{
 		Key:   "taps",
 		Value: "7",
 	}); err != nil {
@@ -1624,7 +1624,7 @@ func TestResetCancelsTheRunningTurn(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{})
+		postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{})
 	}()
 	select {
 	case <-done:
@@ -1664,7 +1664,7 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 	ctx := context.Background()
 
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: "admin",
 		Body:   "mockedit please",
 	})
@@ -1697,7 +1697,7 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 		t.Fatalf("version = %d, want it past %d", after.ID, before.ID)
 	}
 
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("turns = %d, err = %v, want the failed turn and its retry", len(runs), err)
 	}
@@ -1716,10 +1716,10 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 		h.AdminTurn(rec, withURLParam(req, "id", strconv.FormatInt(id, 10)))
 		return rec.Body.String()
 	}
-	if !strings.Contains(page(turn.ID), "/admin/w/test/retry/"+id) {
+	if !strings.Contains(page(turn.ID), "/admin/worlds/test/retry/"+id) {
 		t.Error("the errored turn has no retry button")
 	}
-	if strings.Contains(page(runs[0].ID), "/admin/w/test/retry/") {
+	if strings.Contains(page(runs[0].ID), "/admin/worlds/test/retry/") {
 		t.Error("a turn that did not error offers a retry")
 	}
 }
@@ -1737,7 +1737,7 @@ func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: "dave",
 	})
 	if err != nil {
@@ -1773,7 +1773,7 @@ func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
 		t.Fatalf("version = %d, want it past %d", after.ID, before.ID)
 	}
 
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("turns = %d, err = %v", len(runs), err)
 	}
@@ -1804,7 +1804,7 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: "dave",
 	})
 	if err != nil {
@@ -1826,7 +1826,7 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 	); rec.Code != http.StatusOK {
 		t.Fatalf("first retry: status = %d", rec.Code)
 	}
-	runs, err := queries.ListWebmasterTurns(ctx, 10)
+	runs, err := queries.ListChangesets(ctx, 10)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("turns = %d, err = %v", len(runs), err)
 	}
@@ -1847,7 +1847,7 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 		t.Fatalf("second retry: status = %d", rec.Code)
 	}
 
-	runs, err = queries.ListWebmasterTurns(ctx, 10)
+	runs, err = queries.ListChangesets(ctx, 10)
 	if err != nil || len(runs) != 3 {
 		t.Fatalf("turns = %d, err = %v, want the failed retry and its retry", len(runs), err)
 	}

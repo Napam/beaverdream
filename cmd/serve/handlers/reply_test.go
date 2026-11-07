@@ -3,7 +3,9 @@ package handlers_test
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -76,10 +78,10 @@ func TestReplyReachesTheBoardAfterPostsDuringTheRun(t *testing.T) {
 	// The next turn answers the post that arrived mid-run. Its trigger range
 	// covers the reply's id too, and the reply must not count as a trigger.
 	waitFor(t, "the second turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 2)
+		turns, err := queries.ListChangesets(ctx, 2)
 		return err == nil && len(turns) == 2 && turns[0].Status != "running"
 	})
-	turns, _ := queries.ListWebmasterTurns(ctx, 1)
+	turns, _ := queries.ListChangesets(ctx, 1)
 	triggers, err := queries.ListPostsForTurn(ctx, turns[0].ID)
 	if err != nil {
 		t.Fatalf("posts for turn: %v", err)
@@ -121,7 +123,7 @@ func TestSayReachesTheBoardBeforeTheTurnEnds(t *testing.T) {
 
 	stop()
 	waitFor(t, "the turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 	posts, err := queries.ListPosts(ctx)
@@ -142,13 +144,63 @@ func TestSayReachesTheBoardBeforeTheTurnEnds(t *testing.T) {
 	}
 }
 
+// A reply is signed Naps, and a reply stored under the old author still
+// renders as a reply rather than a visitor post.
+func TestReplyAuthorIsNapsAndLegacyRowsStillRender(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"hello mockreply"}})
+	waitFor(t, "the turn", func() bool {
+		turns, err := queries.ListChangesets(ctx, 1)
+		return err == nil && len(turns) == 1 && turns[0].Status != "running"
+	})
+	posts, err := queries.ListPosts(ctx)
+	if err != nil {
+		t.Fatalf("list posts: %v", err)
+	}
+	var reply string
+	for _, post := range posts {
+		if post.Kind == webmaster.TurnReply {
+			reply = post.Author
+		}
+	}
+	if reply != "Naps" {
+		t.Fatalf("reply author = %q, want Naps", reply)
+	}
+
+	// A world from before the rename still holds replies authored "webmaster".
+	if err := h.ExecForTest(
+		ctx,
+		`INSERT INTO turns (kind, author, body) VALUES ('reply', 'webmaster', 'from the old page')`,
+	); err != nil {
+		t.Fatalf("store a legacy reply: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = withIdentity(req, "dave")
+	rec := httptest.NewRecorder()
+	h.Index(rec, req)
+	page := rec.Body.String()
+	if !strings.Contains(page, `<span class="post-author">Naps</span>`) {
+		t.Error("the board does not sign the new reply Naps")
+	}
+	if !strings.Contains(page, "from the old page") ||
+		!strings.Contains(page, `data-kind="reply"`) ||
+		!strings.Contains(page, "post-webmaster") {
+		t.Error("the legacy reply no longer renders as a reply")
+	}
+	if strings.Contains(page, `<span class="post-author">webmaster</span>`) {
+		t.Error("the legacy reply shows the role word instead of the current name")
+	}
+}
+
 // A turn without a reply posts nothing.
 func TestNoReplyPostsNothing(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"hello mocknoop"}})
 	waitFor(t, "the turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 	posts, err := queries.ListPosts(ctx)

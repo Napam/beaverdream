@@ -2,13 +2,16 @@
 
 <img src="web/assets/beaver.svg" width="240" alt="a beaver dreaming">
 
-Nobody designed this message board. It got that way one post at a time.
+Nobody designed this world. It got that way one post at a time.
 
-beaverdream hosts worlds. Each world is a message board whose site a model
-rewrites after every post: colors, layout, scripts, even the post form it hands
-you. Everyone in a world sees the same page. Someone asks for a dark terminal
-look, and the next page is dark for all of them. Only the admin panel can put an
-old version back.
+beaverdream is a world builder. Each world starts as a plain page with a
+message board, and a model, the webmaster, rewrites it after every post:
+colors, layout, scripts, even the form it hands you. A world can become a game,
+a shop, a city, a tool, or anything else a page can be.
+
+Everyone in a world sees the same page. Someone asks for a dark terminal look,
+and the next page is dark for all of them. Someone starts a treehouse, and
+everyone gets a treehouse. Only the admin panel can put an old version back.
 
 People join with an invite and sign in with a username and password. The admin
 creates worlds and can delete them. Each world is its own SQLite file, like a
@@ -16,7 +19,7 @@ Minecraft save.
 
 Model-written scripts run in every player's browser, so keep it on a network
 you trust. A public deployment needs separate registrable domains for the app
-and the boards.
+and the worlds.
 
 ## Play with friends on your LAN
 
@@ -33,7 +36,7 @@ bun and Task are on your `PATH`. `mise.toml` pins the versions.
 ```sh
 task init           # install tools, js deps and git hooks
 task dev.mock-llm   # terminal 1: a fake model on port 6701, no key needed
-task dev            # terminal 2: the app on 6930, boards on 6932
+task dev            # terminal 2: the app on 6930, worlds on 6932
 ```
 
 Open http://localhost:6930. The log prints the generated admin password. Sign
@@ -74,7 +77,7 @@ and tune the daily token budgets in `.env`. More in
 
 - [docs/README.md](docs/README.md): index of the docs and work-in-progress notes.
 - [Worlds and invites](docs/worlds.md): accounts, invites, worlds and budgets.
-- [LAN play](docs/lan-play.md): share a board with friends on your network.
+- [LAN play](docs/lan-play.md): share a world with friends on your network.
 - [Configuration](docs/configuration.md): every environment variable, and how to
   run the binary.
 - [Admin panel](docs/admin.md): the bootstrap password, sessions and the admin

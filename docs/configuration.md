@@ -32,16 +32,16 @@ migrated automatically on first open.
   sets `0.0.0.0`, so other devices can connect.
 - `APP_PORT` (default `6930`): the management plane. Login, account, API
   tokens, invites, the lobby and every admin page.
-- `PLAY_PORT` (default `6932`): the boards. Each world serves under
-  `/w/{slug}`, including its live stream, posts, state and journal. It never
-  serves login, invites or admin.
+- `PLAY_PORT` (default `6932`): the worlds. Each world serves under
+  `/worlds/{slug}`, including its live stream, posts, state and journal. It
+  never serves login, invites or admin.
 - `TLS_CERT_FILE`, `TLS_KEY_FILE` (default unset): serve HTTPS on both
   listeners. Set both or neither. Browsers use HTTP/2 only over TLS, so every
   open tab shares one connection. Without them the server speaks HTTP/1.1 and
   accepts h2c from a proxy that terminates TLS.
 
 Cookies ignore ports. On `localhost` the app and play listeners share a host,
-so a board script can send a request to the app port with the app cookie
+so a page script can send a request to the app port with the app cookie
 attached. The app's CSRF token and its refusal to be framed are what keep that
 from changing state. Strong isolation needs two different sites, which means
 two registrable domains. Test on two real domains before a public deployment.
@@ -50,7 +50,7 @@ two registrable domains. Test on two real domains before a public deployment.
 
 - `APP_URL` (default empty): public origin of the app, such as
   `https://app.example.com`. Trailing slashes are trimmed.
-- `PLAY_URL` (default empty): public origin of the boards, such as
+- `PLAY_URL` (default empty): public origin of the worlds, such as
   `https://play.example.com`. Trailing slashes are trimmed.
 
 Leave them empty on a LAN: the server builds the play link from the request
@@ -88,7 +88,7 @@ files. Never copy a live `.db` file: the WAL may hold recent writes.
 - `PLAY_SESSION_TTL` (default `0`): how long a play session lasts. `0` means no
   expiry.
 - `HANDOFF_TTL` (default `1m`): lifetime of the one-time code that moves a
-  browser from the app port to a board.
+  browser from the app port to a world.
 - `MODEL_CONCURRENCY` (default `1`): model turns running at once across every
   loaded world.
 - `WORLD_IDLE_TIMEOUT` (default `15m`): close a world with no subscribers, no
@@ -158,7 +158,7 @@ prompt and `LLM_MAX_OUTPUT_TOKENS`.
 
 - The admin is an identity with the `ADMIN` role, not a separate password
   cookie. Its username is `admin`. Log in on the app port. Admin pages are
-  `/admin` and, per world, `/admin/w/{slug}/...`.
+  `/admin` and, per world, `/admin/worlds/{slug}/...`.
 - API tokens are created in the account page. Send one only as
   `Authorization: Bearer <token>` on the app port. It is refused on the play
   port. The old `X-Admin-Token` header and password-as-token are gone.
@@ -176,6 +176,6 @@ These come from the Taskfile. The server does not need them.
 
 ## Removed
 
-The old single-board settings are gone, with no aliases: `PORT`, `ADMIN_PORT`,
+The old single-world settings are gone, with no aliases: `PORT`, `ADMIN_PORT`,
 `ADMIN_URL`, `DB_PATH`, `DB_MIGRATE_ON_START`, `AUTH`, `DAILY_TOKENS_MEMBER`
 and `X-Admin-Token`. The visitor and name cookies are replaced by identities.

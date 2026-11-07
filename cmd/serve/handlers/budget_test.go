@@ -22,7 +22,7 @@ func TestUsageIsChargedAfterACommittedTurn(t *testing.T) {
 	ctx := context.Background()
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit charge me"}})
 	waitFor(t, "the turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 	used, global, err := h.RegistryForTest().UsageOn(ctx, "dave", time.Now().UTC())
@@ -108,7 +108,7 @@ func TestBudgetRefusalStoresNothing(t *testing.T) {
 	if after.ID != before.ID {
 		t.Errorf("refused post wrote version %d", after.ID)
 	}
-	if turns, _ := queries.ListWebmasterTurns(ctx, 10); len(turns) != 0 {
+	if turns, _ := queries.ListChangesets(ctx, 10); len(turns) != 0 {
 		t.Errorf("refused post started a turn")
 	}
 }
@@ -147,7 +147,7 @@ func TestRetryChargingPolicy(t *testing.T) {
 
 	// Admin instruction retry: no usage row.
 	adminTurn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind: webmaster.TurnWebmaster, Author: "admin", Body: "mockedit admin retry",
+		Kind: webmaster.TurnChangeset, Author: "admin", Body: "mockedit admin retry",
 	})
 	if err != nil {
 		t.Fatalf("start admin turn: %v", err)
@@ -176,7 +176,7 @@ func TestRetryChargingPolicy(t *testing.T) {
 	}
 	_ = post
 	postTurn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind: webmaster.TurnWebmaster, Author: "id-post",
+		Kind: webmaster.TurnChangeset, Author: "id-post",
 	})
 	if err != nil {
 		t.Fatalf("start post turn: %v", err)
@@ -226,7 +226,7 @@ func TestBudgetRefusalTransport(t *testing.T) {
 		t.Fatalf("plain status = %d, want 429", rec.Code)
 	}
 	page := rec.Body.String()
-	if !strings.Contains(page, "keep my words") || !strings.Contains(page, "/w/test/posts") {
+	if !strings.Contains(page, "keep my words") || !strings.Contains(page, "/worlds/test/posts") {
 		t.Errorf("plain refusal lost the draft: %s", page)
 	}
 

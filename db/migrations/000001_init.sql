@@ -1,18 +1,19 @@
 -- +goose Up
--- The whole world schema in one file. beaverdream starts as a plain message
--- board: no posts, a light seed design, and empty model-declared state.
+-- The whole world schema in one file. beaverdream starts as a plain page with
+-- a message board: no posts, a light seed design, and empty model-declared
+-- state.
 --
 -- turns is the room. Everything anyone says lives here in one order: visitor
--- posts, the webmaster's turns, and the server events that move the page
+-- posts, the webmaster's changesets, and the server events that move the page
 -- without the model. turn.id is the conversation order, and the page a turn
 -- produced hangs off that turn.
 CREATE TABLE turns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  -- post, webmaster, reply, heal, undo, restore, journal, state, alert
+  -- post, changeset, reply, heal, undo, restore, journal, state, alert
   kind TEXT NOT NULL,
   author TEXT NOT NULL DEFAULT '',
-  -- What prompted a webmaster turn (an admin instruction, empty for posts),
-  -- or the text of a server event. Never rendered on the board.
+  -- What prompted a changeset (an admin instruction, empty for posts), or
+  -- the text of a server event. Never rendered on the board.
   body TEXT NOT NULL DEFAULT '',
   -- The webmaster's own sentence from done. Read back to it next turn.
   said TEXT NOT NULL DEFAULT '',
@@ -86,9 +87,9 @@ CREATE TABLE room_summaries (
 CREATE INDEX room_summaries_through ON room_summaries (through_turn_id);
 
 -- The model can declare a tiny shared state schema: counters, lists and
--- choices. The page reads and writes it through /x/state. Values are JSON
--- text, never HTML.
-CREATE TABLE site_state (
+-- choices. The page reads and writes it through /state. Values are JSON text,
+-- never HTML.
+CREATE TABLE shared_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -156,8 +157,8 @@ CREATE TABLE journal (
 
 CREATE INDEX journal_key_id ON journal (key, id);
 
--- The seed is a plain light board: a title, a simple post form, and an empty
--- thread. The model takes it from here. Its layout lives in its own
+-- The seed is a plain light board: a title, one lede, a simple post form, and
+-- an empty thread. The model takes it from here. Its layout lives in its own
 -- stylesheet, not in the base, so a rewrite starts from nothing it did not
 -- write. The form posts through Datastar, so the page stays put and the post
 -- arrives over the live stream; without Datastar it is still a plain form post.
@@ -170,6 +171,7 @@ a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 h1{font-size:1.7em;line-height:1.25;letter-spacing:-.02em;margin:0 0 .4em}
 .tagline{color:var(--muted);margin:0 0 1.25em;font-size:.95em}
+.lede{color:var(--muted);max-width:34em;margin:0 0 1.25em;line-height:1.5}
 main{margin-top:1.25em}
 .colophon{margin-top:2em;padding-top:.8em;border-top:1px solid var(--border);color:var(--muted);font-size:.8em}
 .postbox{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:.9em;display:flex;flex-direction:column;gap:.55em;margin:0 0 1.5em}
@@ -179,17 +181,18 @@ main{margin-top:1.25em}
 .postbox-actions{display:flex;align-items:center;justify-content:space-between;gap:1em;color:var(--muted);font-size:.8em}
 .postbox button{background:var(--accent);color:#fff;border:0;border-radius:3px;padding:.5em 1em;font:inherit;font-weight:600;cursor:pointer}
 .postbox button:hover{filter:brightness(1.08)}',
-    '<h1>beaverdream</h1><p class="tagline">a small message board</p>' ||
+    '<h1>beaverdream</h1><p class="tagline">a world you build together</p>' ||
       '<main>' ||
+      '<p class="lede">everyone here sees the same page. Naps is the webmaster. say what this place should become, or just talk.</p>' ||
       '<form class="postbox" method="post" action="posts" data-on:submit="@post(''posts'', {contentType: ''form''}); el.reset()">' ||
-      '<p class="postbox-title">post a message</p>' ||
-      '<textarea name="body" required maxlength="2000" rows="3" placeholder="say something" aria-label="message"></textarea>' ||
+      '<p class="postbox-title">say something</p>' ||
+      '<textarea name="body" required maxlength="2000" rows="3" placeholder="a hello, a request, anything" aria-label="post"></textarea>' ||
       '<div class="postbox-actions"><span>posting as {{name}}</span>' ||
       '<button type="submit">post</button></div>' ||
       '</form>' ||
       '<div class="thread">{{posts}}</div>' ||
       '</main>' ||
-      '<footer class="colophon">beaverdream</footer>'
+      '<footer class="colophon">one page, everyone in it</footer>'
   );
 
 -- +goose Down
@@ -203,7 +206,7 @@ DROP TABLE IF EXISTS journal;
 
 DROP TABLE IF EXISTS room_summaries;
 
-DROP TABLE IF EXISTS site_state;
+DROP TABLE IF EXISTS shared_state;
 
 DROP TABLE IF EXISTS site_versions;
 

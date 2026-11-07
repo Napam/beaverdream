@@ -90,11 +90,11 @@ const (
 
 // Room and memory.
 
-// Turn kinds. Posts and webmaster turns alternate; the rest are events the
-// server writes so the webmaster's memory matches the page.
+// Turn kinds. Posts and changesets alternate; the rest are events the server
+// writes so the webmaster's memory matches the page.
 const (
 	TurnPost      = "post"
-	TurnWebmaster = "webmaster"
+	TurnChangeset = "changeset"
 	// TurnReply is the webmaster's answer on the board, written by the
 	// finish transaction of the turn that said it.
 	TurnReply   = "reply"

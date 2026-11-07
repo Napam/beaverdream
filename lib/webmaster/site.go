@@ -18,14 +18,14 @@ import (
 const PostsPlaceholder = "{{posts}}"
 
 // Site is one version of the page: the body markup and a stylesheet.
-// StateSchema and State belong to the model-declared shared state, not to the
+// StateSchema and Shared belong to the model-declared shared state, not to the
 // version row itself.
 type Site struct {
 	Version       int64
 	CSS           string
 	HTML          string
 	StateSchema   string
-	State         map[string]json.RawMessage
+	Shared        map[string]json.RawMessage
 	JournalSchema string
 	Journal       map[string]JournalState
 	// JournalRulesUsed is the highest rules number stored under each key
@@ -55,7 +55,7 @@ type Site struct {
 	// never used as a storage key.
 	WorldSlug string
 	// BasePath is where the board is mounted, without a trailing slash, for
-	// example "/w/heroes". Empty mounts it at the root.
+	// example "/worlds/heroes". Empty mounts it at the root.
 	BasePath string
 	// AccountURL is the app's account page. Empty uses "/account". The app
 	// owns sign-in, so the board only links to it.
@@ -120,7 +120,8 @@ type Post struct {
 	// Author is the display name shown on the board.
 	Author string
 	// AuthorID is the stable identity id the page scripts see as
-	// data-author. It stays distinct when two people share a display name.
+	// data-author-id. It stays distinct when two people share a display
+	// name.
 	AuthorID string
 	Body     string
 	When     string
@@ -189,7 +190,7 @@ func RenderPosts(posts []Post) string {
 		}
 		fmt.Fprintf(
 			&b,
-			`<article class="%s" id="p%d" data-id="%d" data-kind="%s" data-author="%s" data-when="%s">`+
+			`<article class="%s" id="p%d" data-id="%d" data-kind="%s" data-author="%s" data-author-id="%s" data-when="%s">`+
 				`<div class="post-head">`+
 				`<span class="post-author">%s</span>`+
 				`<time class="post-when">%s</time>`+
@@ -199,6 +200,7 @@ func RenderPosts(posts []Post) string {
 			p.ID,
 			p.ID,
 			kind,
+			html.EscapeString(authorID),
 			html.EscapeString(authorID),
 			html.EscapeString(p.When),
 			html.EscapeString(author),
@@ -328,7 +330,7 @@ func visitorSignals(site Site) (map[string]int64, json.RawMessage) {
 // $tops. Only _bd goes to /live; the leading underscore keeps it out of every
 // @post the model writes.
 func liveMount(site Site, newestPost int64) string {
-	state := site.State
+	state := site.Shared
 	if state == nil {
 		state = map[string]json.RawMessage{}
 	}
@@ -380,7 +382,7 @@ const liveScript = `<script>
   var restored = false
 
   // The journal config carries the world mount path and storage root. Both
-  // runtimes read them from one code-owned tag, so a page under /w/SLUG/
+  // runtimes read them from one code-owned tag, so a page under /worlds/SLUG/
   // reaches its own routes and storage.
   var conf = {}
   var confTag = document.getElementById('bd-journal')
@@ -670,8 +672,8 @@ func SiteDoc(site Site, posts []Post) string {
 	// the same reason as the live script.
 	b.WriteString(liveMount(site, newest))
 	b.WriteString(BusyIndicator(false))
-	if site.StateSchema != "" || len(site.State) > 0 {
-		state := site.State
+	if site.StateSchema != "" || len(site.Shared) > 0 {
+		state := site.Shared
 		if state == nil {
 			state = map[string]json.RawMessage{}
 		}

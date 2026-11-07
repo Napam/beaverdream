@@ -31,7 +31,7 @@ func TestResetLeavesOnlyTheSeed(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO site_versions (html, turn_id) VALUES ('{{posts}}', 1)`,
 		`INSERT INTO room_summaries (through_turn_id, text) VALUES (1, 'gist')`,
-		`INSERT INTO site_state (key, value) VALUES ('likes', '3')`,
+		`INSERT INTO shared_state (key, value) VALUES ('likes', '3')`,
 		`INSERT INTO journal (key, payload) VALUES ('moves', '{}')`,
 		`INSERT INTO state_holdings (visitor, key, amount, name) VALUES ('v', 'coins', 3, 'dave')`,
 		`INSERT INTO state_ops (op_id, visitor, op, source, key, delta)
@@ -41,7 +41,7 @@ func TestResetLeavesOnlyTheSeed(t *testing.T) {
 			t.Fatalf("seed %q: %v", query, err)
 		}
 	}
-	if rec := postAdmin(t, h.ResetBoard, "/admin/reset", url.Values{}); rec.Code != http.StatusOK {
+	if rec := postAdmin(t, h.ResetWorld, "/admin/reset", url.Values{}); rec.Code != http.StatusOK {
 		t.Fatalf("reset status = %d", rec.Code)
 	}
 
@@ -113,7 +113,7 @@ func stateOp(t *testing.T, h *handlers.Handlers, path, visitor string) (int, opR
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	req.Header.Set("Accept", "application/json")
 	req = handlers.WithTestPrincipal(req, visitor, "dave", false, true)
-	key, _, _ := strings.Cut(strings.TrimPrefix(req.URL.Path, "/x/state/"), "?")
+	key, _, _ := strings.Cut(strings.TrimPrefix(req.URL.Path, "/state/"), "?")
 	req = withURLParam(req, "key", key)
 	rec := httptest.NewRecorder()
 	h.SetState(rec, req)
@@ -142,21 +142,21 @@ func TestVisitorCountersAddSpendAndRefuse(t *testing.T) {
 	h.NoStateCooldown()
 	declareState(t, queries, walletSchema)
 
-	if got := wantOp(t, h, "/x/state/coins?add=5", visitorA, ""); got.Mine["coins"] != 5 {
+	if got := wantOp(t, h, "/state/coins?add=5", visitorA, ""); got.Mine["coins"] != 5 {
 		t.Fatalf("mine after add = %v, want 5 coins", got.Mine)
 	}
-	wantOp(t, h, "/x/state/coins?spend=7", visitorA, "short")
-	if got := wantOp(t, h, "/x/state/coins?spend=5", visitorA, ""); got.Mine["coins"] != 0 {
+	wantOp(t, h, "/state/coins?spend=7", visitorA, "short")
+	if got := wantOp(t, h, "/state/coins?spend=5", visitorA, ""); got.Mine["coins"] != 0 {
 		t.Fatalf("mine after spend = %v, want 0 coins", got.Mine)
 	}
-	wantOp(t, h, "/x/state/coins?add=0", visitorA, "bad")
-	wantOp(t, h, "/x/state/coins?add=1.5", visitorA, "bad")
-	wantOp(t, h, "/x/state/coins?add=1&spend=1", visitorA, "bad")
-	wantOp(t, h, "/x/state/coins", visitorA, "bad")
-	wantOp(t, h, "/x/state/fish?add=1", visitorA, "gone")
+	wantOp(t, h, "/state/coins?add=0", visitorA, "bad")
+	wantOp(t, h, "/state/coins?add=1.5", visitorA, "bad")
+	wantOp(t, h, "/state/coins?add=1&spend=1", visitorA, "bad")
+	wantOp(t, h, "/state/coins", visitorA, "bad")
+	wantOp(t, h, "/state/fish?add=1", visitorA, "gone")
 
-	wantOp(t, h, "/x/state/coins?add=3", visitorB, "")
-	if got := wantOp(t, h, "/x/state/coins?add=1", visitorA, ""); got.Mine["coins"] != 1 {
+	wantOp(t, h, "/state/coins?add=3", visitorB, "")
+	if got := wantOp(t, h, "/state/coins?add=1", visitorA, ""); got.Mine["coins"] != 1 {
 		t.Fatalf("visitor A holds %v, want only their own coin", got.Mine)
 	}
 }
@@ -166,14 +166,14 @@ func TestVisitorCountersKeepTheirHourBudget(t *testing.T) {
 	h.NoStateCooldown()
 	declareState(t, queries, walletSchema)
 
-	wantOp(t, h, "/x/state/coins?add=60", visitorA, "")
-	wantOp(t, h, "/x/state/coins?add=50", visitorA, "cap")
-	wantOp(t, h, "/x/state/coins?add=40", visitorA, "")
+	wantOp(t, h, "/state/coins?add=60", visitorA, "")
+	wantOp(t, h, "/state/coins?add=50", visitorA, "cap")
+	wantOp(t, h, "/state/coins?add=40", visitorA, "")
 	// Spending does not give the budget back.
-	wantOp(t, h, "/x/state/coins?spend=100", visitorA, "")
-	wantOp(t, h, "/x/state/coins?add=1", visitorA, "cap")
+	wantOp(t, h, "/state/coins?spend=100", visitorA, "")
+	wantOp(t, h, "/state/coins?add=1", visitorA, "cap")
 	// Each visitor has their own budget.
-	wantOp(t, h, "/x/state/coins?add=100", visitorB, "")
+	wantOp(t, h, "/state/coins?add=100", visitorB, "")
 }
 
 // A trade either moves every count or none. The third rod passes its cost
@@ -183,19 +183,19 @@ func TestTradeIsAllOrNothing(t *testing.T) {
 	h.NoStateCooldown()
 	declareState(t, queries, walletSchema)
 
-	wantOp(t, h, "/x/state/buy_rod", visitorA, "short")
-	wantOp(t, h, "/x/state/coins?add=100", visitorA, "")
-	wantOp(t, h, "/x/state/buy_rod", visitorA, "")
-	got := wantOp(t, h, "/x/state/buy_rod", visitorA, "")
+	wantOp(t, h, "/state/buy_rod", visitorA, "short")
+	wantOp(t, h, "/state/coins?add=100", visitorA, "")
+	wantOp(t, h, "/state/buy_rod", visitorA, "")
+	got := wantOp(t, h, "/state/buy_rod", visitorA, "")
 	if got.Mine["coins"] != 40 || got.Mine["rod"] != 2 {
 		t.Fatalf("after two trades = %v, want 40 coins and 2 rods", got.Mine)
 	}
-	wantOp(t, h, "/x/state/buy_rod", visitorA, "full")
-	got = wantOp(t, h, "/x/state/coins?add=0", visitorA, "bad")
+	wantOp(t, h, "/state/buy_rod", visitorA, "full")
+	got = wantOp(t, h, "/state/coins?add=0", visitorA, "bad")
 	if got.Mine != nil {
 		t.Fatalf("a refusal carried holdings: %+v", got)
 	}
-	if got := wantOp(t, h, "/x/state/coins?spend=40", visitorA, ""); got.Mine["rod"] != 2 {
+	if got := wantOp(t, h, "/state/coins?spend=40", visitorA, ""); got.Mine["rod"] != 2 {
 		t.Fatalf("the refused trade moved something: %v", got.Mine)
 	}
 }
@@ -209,27 +209,27 @@ func TestTradeGainsCountAgainstTheHourBudget(t *testing.T) {
 		"gem": {"op": "counter", "scope": "visitor", "per_hour": 1},
 		"buy_gem": {"op": "recipe", "cost": {"coins": 1}, "gain": {"gem": 1}}
 	}`)
-	wantOp(t, h, "/x/state/coins?add=5", visitorA, "")
-	wantOp(t, h, "/x/state/buy_gem", visitorA, "")
-	wantOp(t, h, "/x/state/buy_gem", visitorA, "cap")
+	wantOp(t, h, "/state/coins?add=5", visitorA, "")
+	wantOp(t, h, "/state/buy_gem", visitorA, "")
+	wantOp(t, h, "/state/buy_gem", visitorA, "cap")
 }
 
 // Visitor counters are not shared values: they never take the global +1 and
-// never show in $shared, bd-state or GET /x/state.
+// never show in $shared, bd-state or GET /state.
 func TestVisitorKeysStayOutOfSharedValues(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
 
-	rec := datastarPost(t, h.SetState, "/x/state/coins", nil, "dave")
+	rec := datastarPost(t, h.SetState, "/state/coins", nil, "dave")
 	if rec.Code < 400 {
 		t.Fatalf("a bare post to a visitor counter: status = %d, want a refusal", rec.Code)
 	}
-	rec = datastarPost(t, h.SetState, "/x/state/visits", nil, "dave")
+	rec = datastarPost(t, h.SetState, "/state/visits", nil, "dave")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("the global counter: status = %d, want 204", rec.Code)
 	}
 
-	get := httptest.NewRequest(http.MethodGet, "/x/state", nil)
+	get := httptest.NewRequest(http.MethodGet, "/state", nil)
 	got := httptest.NewRecorder()
 	h.State(got, get)
 	var body struct {
@@ -252,11 +252,11 @@ func TestStateCooldownKeysOnTheBrowser(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
 
-	wantOp(t, h, "/x/state/coins?add=1", visitorA, "")
+	wantOp(t, h, "/state/coins?add=1", visitorA, "")
 	for range 5 {
-		wantOp(t, h, "/x/state/coins?add=1", visitorA, "slow")
+		wantOp(t, h, "/state/coins?add=1", visitorA, "slow")
 	}
-	wantOp(t, h, "/x/state/coins?add=1", visitorB, "")
+	wantOp(t, h, "/state/coins?add=1", visitorB, "")
 
 	counts, err := h.TableCountsForTest(context.Background())
 	if err != nil {
@@ -276,12 +276,12 @@ func TestHoldingsOutliveTheirKey(t *testing.T) {
 	global := declareState(t, queries, `{"coins": {"op": "counter"}}`)
 	wallet := declareState(t, queries, walletSchema)
 
-	wantOp(t, h, "/x/state/coins?add=7", visitorA, "")
+	wantOp(t, h, "/state/coins?add=7", visitorA, "")
 
-	if rec := postAdmin(t, h.HealBoard, "/admin/heal", url.Values{}); rec.Code != http.StatusOK {
+	if rec := postAdmin(t, h.HealSite, "/admin/heal", url.Values{}); rec.Code != http.StatusOK {
 		t.Fatalf("heal status = %d", rec.Code)
 	}
-	wantOp(t, h, "/x/state/coins?add=1", visitorA, "gone")
+	wantOp(t, h, "/state/coins?add=1", visitorA, "gone")
 
 	restore := func(id int64) {
 		t.Helper()
@@ -294,7 +294,7 @@ func TestHoldingsOutliveTheirKey(t *testing.T) {
 	if rec := datastarPost(
 		t,
 		h.SetState,
-		"/x/state/coins",
+		"/state/coins",
 		nil,
 		"dave",
 	); rec.Code != http.StatusNoContent {
@@ -302,7 +302,7 @@ func TestHoldingsOutliveTheirKey(t *testing.T) {
 	}
 
 	restore(wallet.ID)
-	if got := wantOp(t, h, "/x/state/coins?add=1", visitorA, ""); got.Mine["coins"] != 8 {
+	if got := wantOp(t, h, "/state/coins?add=1", visitorA, ""); got.Mine["coins"] != 8 {
 		t.Fatalf("coins after coming back = %v, want 8", got.Mine)
 	}
 }
@@ -327,7 +327,7 @@ func TestLiveStreamPushesOnlyThisVisitorsHoldings(t *testing.T) {
 	a.next(t, []string{`"mine":{"coins":0,"rod":0}`})
 	b.next(t, []string{`"mine":{"coins":0,"rod":0}`})
 
-	wantOp(t, h, "/x/state/coins?add=5", visitorA, "")
+	wantOp(t, h, "/state/coins?add=5", visitorA, "")
 	a.next(t, []string{`"mine":{"coins":5,"rod":0}`, `"amount":5`})
 	b.next(t, []string{`"tops":`, `"amount":5`}, `"mine":`)
 }
@@ -337,7 +337,7 @@ func TestLiveStreamPushesOnlyThisVisitorsHoldings(t *testing.T) {
 func TestFirstRenderSeedsTheVisitorsHoldings(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
-	wantOp(t, h, "/x/state/coins?add=5", visitorA, "")
+	wantOp(t, h, "/state/coins?add=5", visitorA, "")
 	if err := h.ExecForTest(context.Background(), `DELETE FROM state_ops`); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -383,15 +383,15 @@ func TestClearHoldingsDeletesOneKeyAndRecordsAnEvent(t *testing.T) {
 	h.NoStateCooldown()
 	ctx := context.Background()
 	declareState(t, queries, walletSchema)
-	wantOp(t, h, "/x/state/coins?add=50", visitorA, "")
-	wantOp(t, h, "/x/state/buy_rod", visitorA, "")
-	wantOp(t, h, "/x/state/coins?add=5", visitorB, "")
+	wantOp(t, h, "/state/coins?add=50", visitorA, "")
+	wantOp(t, h, "/state/buy_rod", visitorA, "")
+	wantOp(t, h, "/state/coins?add=5", visitorB, "")
 
 	clear := func() {
 		t.Helper()
 		rec := postAdmin(t, func(w http.ResponseWriter, r *http.Request) {
 			h.ClearHoldings(w, withURLParam(r, "key", "coins"))
-		}, "/admin/state/coins/clear", url.Values{})
+		}, "/admin/holdings/coins/clear", url.Values{})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("clear status = %d", rec.Code)
 		}
@@ -406,7 +406,7 @@ func TestClearHoldingsDeletesOneKeyAndRecordsAnEvent(t *testing.T) {
 		t.Fatalf("totals = %+v, want only the rod left", totals)
 	}
 	// The cleared key's ops are gone too, so its hour budget starts over.
-	wantOp(t, h, "/x/state/coins?add=100", visitorA, "")
+	wantOp(t, h, "/state/coins?add=100", visitorA, "")
 
 	clear()
 	log, err := queries.ListRoomLog(
@@ -425,8 +425,8 @@ func TestClearHoldingsDeletesOneKeyAndRecordsAnEvent(t *testing.T) {
 	if events != 2 {
 		t.Fatalf("state event turns = %d, want one per clear that removed something", events)
 	}
-	if turns, err := queries.ListWebmasterTurns(ctx, 10); err != nil || len(turns) != 0 {
-		t.Fatalf("webmaster turns = %d (%v), want none", len(turns), err)
+	if turns, err := queries.ListChangesets(ctx, 10); err != nil || len(turns) != 0 {
+		t.Fatalf("changesets = %d (%v), want none", len(turns), err)
 	}
 
 	// The data page lists the declared counters and a picked visitor's ops.
@@ -453,12 +453,12 @@ func TestModelDeclaredWalletWorksEndToEnd(t *testing.T) {
 		return err == nil && site.ID > 1
 	})
 
-	wantOp(t, h, "/x/state/buy_hat", visitorA, "short")
-	wantOp(t, h, "/x/state/coins?add=10", visitorA, "")
+	wantOp(t, h, "/state/buy_hat", visitorA, "short")
+	wantOp(t, h, "/state/coins?add=10", visitorA, "")
 	if got := wantOp(
 		t,
 		h,
-		"/x/state/buy_hat",
+		"/state/buy_hat",
 		visitorA,
 		"",
 	); got.Mine["hat"] != 1 ||
@@ -473,14 +473,14 @@ func TestStateWritesWithoutTheVisitorCookie(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
 
-	rec := datastarPost(t, h.SetState, "/x/state/coins", url.Values{"add": {"5"}}, "")
+	rec := datastarPost(t, h.SetState, "/state/coins", url.Values{"add": {"5"}}, "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a visitor op without a play session: status = %d, want 401", rec.Code)
 	}
 	if rec := datastarPost(
 		t,
 		h.SetState,
-		"/x/state/visits",
+		"/state/visits",
 		nil,
 		"dave",
 	); rec.Code != http.StatusNoContent {
@@ -489,7 +489,7 @@ func TestStateWritesWithoutTheVisitorCookie(t *testing.T) {
 	if rec := datastarPost(
 		t,
 		h.SetState,
-		"/x/state/visits",
+		"/state/visits",
 		nil,
 		"dave",
 	); rec.Code != http.StatusTooManyRequests {
@@ -512,8 +512,8 @@ func TestStateOpIDsGroupATradeAndNeverRepeat(t *testing.T) {
 	ctx := context.Background()
 	declareState(t, queries, walletSchema)
 
-	wantOp(t, h, "/x/state/coins?add=60", visitorA, "")
-	wantOp(t, h, "/x/state/buy_rod", visitorA, "")
+	wantOp(t, h, "/state/coins?add=60", visitorA, "")
+	wantOp(t, h, "/state/buy_rod", visitorA, "")
 	ids, err := h.StateOpIDsForTest(ctx)
 	if err != nil {
 		t.Fatalf("op ids: %v", err)
@@ -525,7 +525,7 @@ func TestStateOpIDsGroupATradeAndNeverRepeat(t *testing.T) {
 	if err := h.ExecForTest(ctx, `DELETE FROM state_ops`); err != nil {
 		t.Fatalf("prune: %v", err)
 	}
-	wantOp(t, h, "/x/state/coins?add=1", visitorA, "")
+	wantOp(t, h, "/state/coins?add=1", visitorA, "")
 	later, err := h.StateOpIDsForTest(ctx)
 	if err != nil {
 		t.Fatalf("op ids: %v", err)
@@ -535,13 +535,13 @@ func TestStateOpIDsGroupATradeAndNeverRepeat(t *testing.T) {
 	}
 }
 
-// GET /x/state is the shared half only: no visitor counters, no recipes.
+// GET /state is the shared half only: no visitor counters, no recipes.
 func TestStateReadListsOnlySharedKeys(t *testing.T) {
 	h, queries := setup(t)
 	declareState(t, queries, walletSchema)
 
 	rec := httptest.NewRecorder()
-	h.State(rec, httptest.NewRequest(http.MethodGet, "/x/state", nil))
+	h.State(rec, httptest.NewRequest(http.MethodGet, "/state", nil))
 	var body struct {
 		Schema map[string]json.RawMessage `json:"schema"`
 	}
@@ -560,12 +560,12 @@ func TestClearingZeroBalancesRecordsNoEvent(t *testing.T) {
 	h.NoStateCooldown()
 	ctx := context.Background()
 	declareState(t, queries, walletSchema)
-	wantOp(t, h, "/x/state/coins?add=5", visitorA, "")
-	wantOp(t, h, "/x/state/coins?spend=5", visitorA, "")
+	wantOp(t, h, "/state/coins?add=5", visitorA, "")
+	wantOp(t, h, "/state/coins?spend=5", visitorA, "")
 
 	rec := postAdmin(t, func(w http.ResponseWriter, r *http.Request) {
 		h.ClearHoldings(w, withURLParam(r, "key", "coins"))
-	}, "/admin/state/coins/clear", url.Values{})
+	}, "/admin/holdings/coins/clear", url.Values{})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear status = %d", rec.Code)
 	}
@@ -606,9 +606,9 @@ func TestLiveStreamDropsKeysTheSchemaNoLongerDeclares(t *testing.T) {
 		}
 	}
 	restore(wallet.ID)
-	wantOp(t, h, "/x/state/coins?add=5", visitorA, "")
-	wantOp(t, h, "/x/state/coins?add=40", visitorB, "")
-	wantOp(t, h, "/x/state/buy_rod", visitorB, "")
+	wantOp(t, h, "/state/coins?add=5", visitorA, "")
+	wantOp(t, h, "/state/coins?add=40", visitorB, "")
+	wantOp(t, h, "/state/buy_rod", visitorB, "")
 
 	site, err := queries.CurrentSite(context.Background())
 	if err != nil {
@@ -630,7 +630,7 @@ func TestLiveStreamDropsKeysTheSchemaNoLongerDeclares(t *testing.T) {
 
 	rec := postAdmin(t, func(w http.ResponseWriter, r *http.Request) {
 		h.ClearHoldings(w, withURLParam(r, "key", "coins"))
-	}, "/admin/state/coins/clear", url.Values{})
+	}, "/admin/holdings/coins/clear", url.Values{})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("clear status = %d", rec.Code)
 	}

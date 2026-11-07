@@ -14,7 +14,7 @@ type Env struct {
 	// AppPort is the management plane: login, account, API tokens, invites,
 	// the lobby and every admin page.
 	AppPort string
-	// PlayPort serves the boards under /w/{slug}. It never serves login,
+	// PlayPort serves the worlds under /worlds/{slug}. It never serves login,
 	// invites or admin.
 	PlayPort string
 	// AppURL and PlayURL are the public origins when a proxy or two hosts
@@ -71,8 +71,8 @@ type Env struct {
 	// Reasoning effort for models that support it: minimal, low, medium,
 	// high, xhigh. Empty leaves the provider default.
 	OpenAIReasoningEffort string
-	// Tool rounds per mutation before the loop gives up.
-	MutationRounds int
+	// Tool rounds per changeset before the loop gives up.
+	ChangesetRounds int
 
 	// For logging purposes only. Not needed in production, so they're optional.
 	LiveReloadHost string
@@ -111,7 +111,7 @@ func Load() *Env {
 		OpenAIAPIKey:          loadAPIKey(),
 		OpencodeSessionID:     os.Getenv("OPENCODE_SESSION_ID"),
 		OpenAIReasoningEffort: os.Getenv("OPENAI_REASONING_EFFORT"),
-		MutationRounds:        GetEnvInt("TURN_MAX_ROUNDS", 25),
+		ChangesetRounds:       GetEnvInt("TURN_MAX_ROUNDS", 25),
 		LiveReloadHost:        os.Getenv("LIVE_RELOAD_PROXY_HOST"),
 		LiveReloadPort:        os.Getenv("LIVE_RELOAD_PROXY_PORT"),
 	}

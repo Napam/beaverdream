@@ -10,7 +10,7 @@ hooks directory.
 
 - `task init`: install tools, js dependencies and the git hooks.
 - `task dev`: run the server with live reload and the watchers for CSS, js and
-  SQL. The app is on `6930`, the boards on `6932`, and the live reload proxy on
+  SQL. The app is on `6930`, the worlds on `6932`, and the live reload proxy on
   `6931`. Open the proxy to reload the page after each change.
 - `task dev.mock-llm`: run the fake model on `6701`. Leave it running in its own
   terminal.
@@ -78,7 +78,7 @@ the pause.
 ## Layout
 
 - `cmd/serve`: the server. It holds `main.go` and both listeners.
-  `cmd/serve/handlers` holds the HTTP handlers for the app, the boards, the live
+  `cmd/serve/handlers` holds the HTTP handlers for the app, the worlds, the live
   stream and the admin pages.
 - `cmd/mockllm`: the fake OpenAI-compatible model server.
 - `lib/registry`: the registry database, identities, logins, sessions, invites,

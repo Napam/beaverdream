@@ -34,12 +34,12 @@ generated at random, Datastar signals, and anything else that lives only in JS
 memory.
 
 The system prompt forbids `localStorage`, `sessionStorage` and cookies
-(`lib/webmaster/mutate.go:1133`). The journal is the intended store.
+(`lib/webmaster/changeset.go`). The journal is the intended store.
 
 ## What was really at risk before the change
 
 **The primary cause was the prompt's own example.** The journal example in the
-system prompt (`mutate.go`) was the pattern models copied for motion. In it:
+system prompt (`changeset.go`) was the pattern models copied for motion. In it:
 
 - `me`, the visitor's own position, was a plain page variable. Nothing set it
   from the journal. `render` filled only `pos`, the other players.
@@ -59,7 +59,7 @@ row. A page that followed the example lost the position on every reload,
 whether or not the row survived the trim.
 
 The prompt did say that a markup change reloads every tab and that signals
-reset on reload (`mutate.go`). It did not say that script state starts over,
+reset on reload (`changeset.go`). It did not say that script state starts over,
 or that the page must restore the player from the journal. Step 1 added both.
 
 Secondary risks, once the restore works:
@@ -101,7 +101,7 @@ Secondary risks, once the restore works:
 - No before-reload flush event. The newest row is at most about 60 ms old, and
   a fetch started during unload is unreliable (`append` has no `keepalive`).
 - The world seed and layout are a constant in the page's script. The model sees
-  the page every turn, so it carries across reloads and mutations without
+  the page every turn, so it carries across reloads and changesets without
   storage.
 - A standing-still visitor stays in the window by sending on the timer, or by
   writing a slow presence key at about 1 Hz. No server change for that.
@@ -113,7 +113,7 @@ Secondary risks, once the restore works:
 
 ### 1. Fix the example and the prompt (primary, no runtime code) (done)
 
-The motion half of the example in `journalPrompt` (`mutate.go`) now has this
+The motion half of the example in `journalPrompt` (`changeset.go`) now has this
 shape:
 
 ```js
@@ -190,7 +190,7 @@ the empty-world flash still matters on a VPS after step 4.
   tag with `json.Marshal`, like `bd-state`. Skip a key that would push the total
   past 64 KB; it fetches as today. Never put rows in an attribute.
 - Read the cursor before the rows. `MaxJournalID` is read at `pages.go:59`,
-  after `siteWithState` at `pages.go:53`. Move it first, so a row written
+  after `siteWithShared` at `pages.go:53`. Move it first, so a row written
   between the reads is in the snapshot and in the stream, and `seen` drops the
   duplicate. Do not use the embedded rows' max id as the cursor; the cursor is
   global across keys.
@@ -246,8 +246,8 @@ the visitor, and the runtime comment near `journal.go:213`.
 - A softer rules-bump default.
 - WebGL rebuild cost. Giving the shell `background: var(--bg)` would cut the
   white flash.
-- `<link rel=preload>` for `/j`, an ETag on `/j`, and a cache keyed by version
-  and cursor: the cursor moves with every motion row.
+- `<link rel=preload>` for `/journal`, an ETag on `/journal`, and a cache keyed
+  by version and cursor: the cursor moves with every motion row.
 
 ## Risks
 
@@ -299,8 +299,8 @@ returns the newest 1000 in ascending order.
 For the embed, if built: a gap test (appends during many `GET /`, snapshot plus
 pushed rows hold every id), a late `start` test (rows pushed before `start()`
 are kept, no duplicates), filter, trim, escaping (`"</script><!--"`
-round-trips), cap (an oversized key is absent and `/j` still serves it), and a
-stale-embed test (rematch, closed match and `_resync` fetch).
+round-trips), cap (an oversized key is absent and `/journal` still serves it),
+and a stale-embed test (rematch, closed match and `_resync` fetch).
 
 ## Order
 

@@ -8,11 +8,11 @@ import (
 	"github.com/Napam/beaverdream/web/pages"
 )
 
-// ResetBoard returns the board to the state the first migrations created: one
-// seed version, no posts, and no mutation history. It keeps the oldest
+// ResetWorld returns the world to the state the first migrations created: one
+// seed version, no posts, and no changeset history. It keeps the oldest
 // version instead of reinserting it, so the seed content lives in one place.
-// The next mutation becomes version 2.
-func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
+// The next changeset becomes version 2.
+func (h *Handlers) ResetWorld(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
@@ -25,7 +25,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 	h.stopWork()
 	defer h.resumeWork()
 
-	// Serialize with mutations so a rewrite cannot land in the middle of the
+	// Serialize with changesets so a rewrite cannot land in the middle of the
 	// reset or write a version that references a deleted post. The panel is
 	// rendered after both locks are released, so a slow admin client does not
 	// block posts or state writes.
@@ -69,7 +69,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 			// foreign-key pragma being on for every connection.
 			{`DELETE FROM site_versions WHERE id > ?`, []any{seedID.Int64}},
 			{`UPDATE site_versions SET turn_id = NULL WHERE id = ?`, []any{seedID.Int64}},
-			{`DELETE FROM site_state`, nil},
+			{`DELETE FROM shared_state`, nil},
 			{`DELETE FROM journal`, nil},
 			{`DELETE FROM state_holdings`, nil},
 			{`DELETE FROM state_ops`, nil},
@@ -90,7 +90,7 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, statement := range statements {
 			if _, err := tx.ExecContext(ctx, statement.query, statement.args...); err != nil {
-				h.logger.Error("Failed to reset the board", slog.Any("error", err))
+				h.logger.Error("Failed to reset the world", slog.Any("error", err))
 				http.Error(w, "Could not reset", http.StatusInternalServerError)
 				return "", false
 			}
@@ -104,8 +104,8 @@ func (h *Handlers) ResetBoard(w http.ResponseWriter, r *http.Request) {
 
 		h.holdingsChanged()
 		h.resetLive(seedID.Int64)
-		h.logger.Info("Board reset", slog.Int64("seed_version", seedID.Int64))
-		return "board reset to the original version", true
+		h.logger.Info("World reset", slog.Int64("seed_version", seedID.Int64))
+		return "world reset to the original version", true
 	}()
 	if ok {
 		h.adminDone(w, r, h.panel(pages.PageSite), message)

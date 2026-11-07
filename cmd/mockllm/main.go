@@ -1,5 +1,5 @@
 // Command mockllm is a deterministic OpenAI-compatible server for local
-// development. Point OPENAI_BASE_URL at it and the board mutates without a real
+// development. Point OPENAI_BASE_URL at it and the site changes without a real
 // model: mentions of "matrix", "pink" or "brutalist" pick a canned theme.
 // Streamed replies arrive in small chunks with a pause between them, so the
 // admin panel shows a turn being written.

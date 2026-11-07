@@ -51,7 +51,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 		converted[i], converted[j] = converted[j], converted[i]
 	}
 
-	docSite := h.siteWithState(r.Context(), site)
+	docSite := h.siteWithShared(r.Context(), site)
 	docSite.Name = p.DisplayName
 	docSite.WorldID = h.world.ID
 	docSite.WorldSlug = h.world.Slug
@@ -150,7 +150,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mutateInBackground(createdPost(post))
+	h.queuePost(createdPost(post))
 	h.postDone(w, r)
 }
 

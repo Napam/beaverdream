@@ -56,7 +56,7 @@ func TestReviewAPITokenRevokeClosesItsStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest("GET", in.appURLFor("/admin/w/heroes/live?page=overview"), nil)
+	req, _ := http.NewRequest("GET", in.appURLFor("/admin/worlds/heroes/live?page=overview"), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -67,7 +67,11 @@ func TestReviewAPITokenRevokeClosesItsStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherReq, _ := http.NewRequest("GET", in.appURLFor("/admin/w/heroes/live?page=overview"), nil)
+	otherReq, _ := http.NewRequest(
+		"GET",
+		in.appURLFor("/admin/worlds/heroes/live?page=overview"),
+		nil,
+	)
 	otherReq.Header.Set("Authorization", "Bearer "+otherToken)
 	other, err := http.DefaultClient.Do(otherReq)
 	if err != nil {
@@ -128,18 +132,18 @@ func TestReviewDeleteDuringOpenDoesNotRecreateWorld(t *testing.T) {
 		logger,
 		in.reg,
 		mgr,
-		func() *webmaster.Mutator { return webmaster.New(openAIForReview(in), "mock-model", 3, "") },
+		func() *webmaster.ChangesetRunner { return webmaster.New(openAIForReview(in), "mock-model", 3, "") },
 		handlers.AppConfig{},
 	)
 	defer app.Close()
 	_, api, _ := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
 	router := app.AppRouter()
-	req := httptest.NewRequest("GET", "/admin/w/heroes/", nil)
+	req := httptest.NewRequest("GET", "/admin/worlds/heroes/", nil)
 	req.Header.Set("Authorization", "Bearer "+api)
 	done := make(chan struct{})
 	go func() { router.ServeHTTP(httptest.NewRecorder(), req); close(done) }()
 	<-block.entered
-	del := httptest.NewRequest("POST", "/admin/worlds/"+in.heroesID+"/delete", nil)
+	del := httptest.NewRequest("POST", "/admin/worlds/heroes/delete", nil)
 	del.Header.Set("Authorization", "Bearer "+api)
 	rec := httptest.NewRecorder()
 	deleted := make(chan struct{})
@@ -169,7 +173,7 @@ func TestReviewDisableWhileWorldLoadsClosesStream(t *testing.T) {
 	_, play, _ := in.reg.NewSession(context.Background(), id.ID, sess.LoginID, registry.ScopePlay)
 	entered, release := make(chan struct{}), make(chan struct{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := handlers.NewApp(logger, in.reg, in.worlds, func() *webmaster.Mutator {
+	app := handlers.NewApp(logger, in.reg, in.worlds, func() *webmaster.ChangesetRunner {
 		close(entered)
 		<-release
 		return webmaster.New(openAIForReview(in), "mock-model", 3, "")
@@ -177,7 +181,7 @@ func TestReviewDisableWhileWorldLoadsClosesStream(t *testing.T) {
 	defer app.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req := httptest.NewRequest("GET", "/w/heroes/live", nil).WithContext(ctx)
+	req := httptest.NewRequest("GET", "/worlds/heroes/live", nil).WithContext(ctx)
 	req.AddCookie(&http.Cookie{Name: handlers.PlayCookieName, Value: play})
 	done := make(chan struct{})
 	go func() { app.PlayRouter().ServeHTTP(httptest.NewRecorder(), req); close(done) }()
@@ -211,7 +215,7 @@ func TestReviewWorldPanelSignoutFormWorks(t *testing.T) {
 			token = c.Value
 		}
 	}
-	page := body(t, b.get(in.appURLFor("/admin/w/heroes/")))
+	page := body(t, b.get(in.appURLFor("/admin/worlds/heroes/")))
 	marker := `action="/logout"`
 	if !strings.Contains(page, marker) {
 		t.Fatal("expected rendered logout action missing")
@@ -303,14 +307,14 @@ func TestReviewCanceledDeleteCanBeRetried(t *testing.T) {
 	)
 	_, api, _ := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
 	pinned := &reviewPinnedBody{entered: make(chan struct{}), release: make(chan struct{})}
-	post := httptest.NewRequest("POST", "/w/heroes/posts", pinned)
+	post := httptest.NewRequest("POST", "/worlds/heroes/posts", pinned)
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	post.AddCookie(&http.Cookie{Name: handlers.PlayCookieName, Value: play})
 	posted := make(chan struct{})
 	go func() { in.app.PlayRouter().ServeHTTP(httptest.NewRecorder(), post); close(posted) }()
 	<-pinned.entered
 	ctx, cancel := context.WithCancel(context.Background())
-	del := httptest.NewRequest("POST", "/admin/worlds/"+in.heroesID+"/delete", nil).WithContext(ctx)
+	del := httptest.NewRequest("POST", "/admin/worlds/heroes/delete", nil).WithContext(ctx)
 	del.Header.Set("Authorization", "Bearer "+api)
 	deleted := make(chan struct{})
 	go func() { in.app.AppRouter().ServeHTTP(httptest.NewRecorder(), del); close(deleted) }()
@@ -324,7 +328,7 @@ func TestReviewCanceledDeleteCanBeRetried(t *testing.T) {
 	<-posted
 	retryCtx, retryCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer retryCancel()
-	retry := httptest.NewRequest("POST", "/admin/worlds/"+in.heroesID+"/delete", nil).
+	retry := httptest.NewRequest("POST", "/admin/worlds/heroes/delete", nil).
 		WithContext(retryCtx)
 	retry.Header.Set("Authorization", "Bearer "+api)
 	rec := httptest.NewRecorder()
@@ -346,13 +350,13 @@ func TestReviewAdminRevokedWhileWorldLoads(t *testing.T) {
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	app := handlers.NewApp(logger, in.reg, in.worlds, func() *webmaster.Mutator {
+	app := handlers.NewApp(logger, in.reg, in.worlds, func() *webmaster.ChangesetRunner {
 		close(entered)
 		<-release
 		return webmaster.New(openAIForReview(in), "mock-model", 3, "")
 	}, handlers.AppConfig{})
 	defer app.Close()
-	req := httptest.NewRequest("GET", "/admin/w/heroes/live?page=overview", nil)
+	req := httptest.NewRequest("GET", "/admin/worlds/heroes/live?page=overview", nil)
 	req.Header.Set("Authorization", "Bearer "+api)
 	done := make(chan struct{})
 	rec := httptest.NewRecorder()
@@ -381,14 +385,14 @@ func TestReviewCloseWaitsForLoadingWorld(t *testing.T) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mgr := worlds.NewManager(in.reg, in.worlds.Dir(), block, logger)
-	app := handlers.NewApp(logger, in.reg, mgr, func() *webmaster.Mutator {
+	app := handlers.NewApp(logger, in.reg, mgr, func() *webmaster.ChangesetRunner {
 		return webmaster.New(openAIForReview(in), "mock-model", 3, "")
 	}, handlers.AppConfig{})
 	_, api, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("GET", "/admin/w/heroes/", nil)
+	req := httptest.NewRequest("GET", "/admin/worlds/heroes/", nil)
 	req.Header.Set("Authorization", "Bearer "+api)
 	opened := make(chan struct{})
 	go func() { app.AppRouter().ServeHTTP(httptest.NewRecorder(), req); close(opened) }()

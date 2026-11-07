@@ -14,9 +14,9 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-// scriptedMutator answers each completion with the next list of tool calls,
+// scriptedChangesetRunner answers each completion with the next list of tool calls,
 // given as name and JSON arguments pairs.
-func scriptedMutator(t *testing.T, script ...[][2]string) (*Mutator, *int) {
+func scriptedChangesetRunner(t *testing.T, script ...[][2]string) (*ChangesetRunner, *int) {
 	t.Helper()
 	calls := 0
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
@@ -57,22 +57,22 @@ func scriptedMutator(t *testing.T, script ...[][2]string) (*Mutator, *int) {
 
 // An edit that leaves a comment open hides the posts. The model hears why
 // once, and calling done again keeps the page: hiding posts can be the joke.
-func TestMutatePausesOnceWhenAnEditHidesThePosts(t *testing.T) {
-	m, calls := scriptedMutator(t,
+func TestRunPausesOnceWhenAnEditHidesThePosts(t *testing.T) {
+	m, calls := scriptedChangesetRunner(t,
 		[][2]string{
 			{"edit", `{"target":"html","old":"<main>","new":"<!-- oops<main>"}`},
 			{"done", `{"reason":"a comment"}`},
 		},
 		[][2]string{{"done", `{"reason":"meant it"}`}},
 	)
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: "<h1>beaverdream</h1><main>" + PostsPlaceholder + "</main>"},
 		Room{},
 		Post{Author: "dave", Body: "hide everything"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if *calls != 2 || !res.Done || !res.Changed || res.Reason != "meant it" {
 		t.Fatalf(
@@ -94,19 +94,19 @@ func TestMutatePausesOnceWhenAnEditHidesThePosts(t *testing.T) {
 
 // A page that already hid its posts before the turn is not this turn's
 // accident, so done ends the turn at once.
-func TestMutateDoesNotPauseForAnAlreadyHiddenBoard(t *testing.T) {
-	m, calls := scriptedMutator(t, [][2]string{
+func TestRunDoesNotPauseForAnAlreadyHiddenBoard(t *testing.T) {
+	m, calls := scriptedChangesetRunner(t, [][2]string{
 		{"edit", `{"target":"css","old":"","new":"h1{color:red}"}`},
 		{"done", `{"reason":"red"}`},
 	})
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: "<h1>beaverdream</h1><!--<main>" + PostsPlaceholder + "</main>"},
 		Room{},
 		Post{Author: "dave", Body: "red"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if *calls != 1 || !res.Done {
 		t.Fatalf("calls %d, done %v", *calls, res.Done)

@@ -45,7 +45,7 @@ func TestPinnedStreamAfterDrainStarts(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				app := NewApp(logger, reg, manager, func() *webmaster.Mutator {
+				app := NewApp(logger, reg, manager, func() *webmaster.ChangesetRunner {
 					return webmaster.New(openai.NewClient(), "mock-model", 3, "")
 				}, AppConfig{})
 				if shutdown == "delete" {

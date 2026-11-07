@@ -66,7 +66,7 @@ reserved, so a new game can reuse common names. Hidden keys come from
 `SELECT DISTINCT key FROM state_holdings` that the current schema does not
 declare as visitor keys; no extra table.
 
-## Tables (migration 000002)
+## Tables (world migration)
 
 ```sql
 -- +goose Up
@@ -104,9 +104,9 @@ created_at > ?`. Totals are `SUM(amount)` per key; nothing stores a supply.
 
 | Call | HTTP | Does |
 |---|---|---|
-| `@post('/x/state/coins?add=5')` | 204 | add, capped |
-| `@post('/x/state/coins?spend=5')` | 204 | spend, never below 0 |
-| `@post('/x/state/buy_rod')` | 204 | recipe |
+| `@post('state/coins?add=5')` | 204 | add, capped |
+| `@post('state/coins?spend=5')` | 204 | spend, never below 0 |
+| `@post('state/buy_rod')` | 204 | recipe |
 | `bd.state.add('coins', 5)` | fetch, JSON | same, resolves `{ ok, mine }` or `{ ok: false, reason }` |
 | `bd.state.spend('coins', 5)` | fetch, JSON | same |
 | `bd.state.trade('buy_rod')` | fetch, JSON | same |
@@ -152,7 +152,7 @@ Each visitor op:
 
 ## Stream and first render
 
-- `$shared`, `bd-state` and `GET /x/state` carry global keys only.
+- `$shared`, `bd-state` and `GET /worlds/{slug}/state` carry global keys only.
   `stateValues` skips visitor keys and recipes.
 - `$mine`: this visitor's holdings for every declared visitor key, 0 when
   none.
@@ -192,8 +192,8 @@ Reset deletes `state_holdings` and `state_ops`, and adds `state_ops` to the
   cosmetic, hidden names come back when declared again. Also: counts are
   whole numbers; one write per key per 250 ms; a recipe has one price, so
   rising prices are several recipes; nothing ticks on the server, so a
-  timer runs only while a tab is open and two tabs tick twice. Fix the line at
-  `mutate.go:989`: heal clears global state and keeps visitor holdings.
+  timer runs only while a tab is open and two tabs tick twice. Fix the line in
+  `changeset.go`: heal clears global state and keeps visitor holdings.
 - The tool description names the new fields and `op: "recipe"`.
 
 No new skill in v1. Add one if pages get it wrong.
@@ -207,16 +207,18 @@ the same transaction, under `stateMu`.
 
 ## AGENTS.md
 
-- Migrations: 000001 is frozen. Schema changes are new numbered migrations.
-  Never edit an applied one. Reset clears every table a migration adds and
-  its `sqlite_sequence` row.
+- Migrations: pre-production, each database keeps one migration file
+  (`000001_init.sql`) edited in place. It freezes at the first production
+  deploy; after that schema changes are new numbered migrations. Never edit an
+  applied one. Reset clears every table a migration adds and its
+  `sqlite_sequence` row.
 - Shared state paragraph: visitor scope, recipes, permanence, heal keeps
   holdings, `$mine` and `$tops`, cooldown by visitor.
 
 ## Build order and tests
 
-1. Migration 000002, sqlc queries, reset statements, AGENTS.md rule.
-   - an existing db at version 1 migrates to 2 with its data kept
+1. The world migration, sqlc queries, reset statements, AGENTS.md rule.
+   - a world file opens with its data kept
    - reset leaves every non-seed table empty
 2. Schema: `StateKey` gains `Scope`, `Label`, `PerHour`, `Cost`, `Gain`;
    validation and clamps; hidden keys for the prompt.
@@ -227,7 +229,7 @@ the same transaction, under `stateMu`.
    - caps, max, never negative
    - a trade whose gain hits `max` after its cost passed changes nothing
    - a visitor key never gets the global `+1`; `stateValues` and
-     `GET /x/state` leave visitor keys out
+     `GET /worlds/{slug}/state` leave visitor keys out
    - a refusal loop is throttled and stores nothing
    - heal keeps holdings; restore of an old global `coins` leaves holdings
 4. Stream and runtime: `$mine`, `$tops`, `liveMount` seeds, `bd.state`.
@@ -240,4 +242,4 @@ the same transaction, under `stateMu`.
    real data, not wording.
 6. Admin panel and clear key.
 7. Mock model keyword `mockwallet` that declares a visitor key and a recipe,
-   so the dev board shows it end to end.
+   so the dev world shows it end to end.

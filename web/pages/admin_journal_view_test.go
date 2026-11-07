@@ -38,11 +38,11 @@ func TestFeedFillAndRulesNote(t *testing.T) {
 
 // The selection is in the URL, so a link keeps it and the stream renders it.
 func TestJournalPanelPathCarriesTheSelection(t *testing.T) {
-	p := Panel{Page: PageJournal, Feed: "moves", Match: 2, Visitor: "aaaaaaaaaaaaaaaa", Before: 40}
-	if got, want := p.Path(), "/admin/journal?before=40&feed=moves&match=2&visitor=aaaaaaaaaaaaaaaa"; got != want {
+	p := Panel{Page: PageJournal, Key: "moves", Match: 2, Visitor: "aaaaaaaaaaaaaaaa", Before: 40}
+	if got, want := p.Path(), "/admin/journal?before=40&key=moves&match=2&visitor=aaaaaaaaaaaaaaaa"; got != want {
 		t.Errorf("path = %q, want %q", got, want)
 	}
-	if got, want := p.LivePath(), "/admin/live?page=journal&before=40&feed=moves&match=2&visitor=aaaaaaaaaaaaaaaa"; got != want {
+	if got, want := p.LivePath(), "/admin/live?page=journal&before=40&key=moves&match=2&visitor=aaaaaaaaaaaaaaaa"; got != want {
 		t.Errorf("live path = %q, want %q", got, want)
 	}
 	if got := (Panel{Page: PageJournal}).Path(); got != "/admin/journal" {

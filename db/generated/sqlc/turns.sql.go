@@ -16,7 +16,7 @@ SELECT
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status = 'changed'
   AND id > COALESCE(
     (
@@ -38,18 +38,18 @@ func (q *Queries) CountChangedSinceHeal(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-const countWebmasterTurnsSince = `-- name: CountWebmasterTurnsSince :one
+const countChangesetsSince = `-- name: CountChangesetsSince :one
 SELECT
   count(*)
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND created_at >= ?
 `
 
-func (q *Queries) CountWebmasterTurnsSince(ctx context.Context, createdAt string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countWebmasterTurnsSince, createdAt)
+func (q *Queries) CountChangesetsSince(ctx context.Context, createdAt string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countChangesetsSince, createdAt)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -98,13 +98,13 @@ const createReply = `-- name: CreateReply :one
 INSERT INTO
   turns (kind, author, body)
 VALUES
-  ('reply', 'webmaster', ?)
+  ('reply', 'Naps', ?)
 RETURNING
   id
 `
 
-// The webmaster's words on the board: done's reply, written in its turn's
-// finish transaction so it takes the newest id, or a say while the turn runs.
+// Naps's words on the board: done's reply, written in its turn's finish
+// transaction so it takes the newest id, or a say while the turn runs.
 func (q *Queries) CreateReply(ctx context.Context, body string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, createReply, body)
 	var id int64
@@ -153,7 +153,7 @@ SET
   status = 'error',
   error_text = 'interrupted by a restart'
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status = 'running'
 `
 
@@ -226,6 +226,55 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) error {
 	return err
 }
 
+const getChangeset = `-- name: GetChangeset :one
+SELECT
+  t.id, t.kind, t.author, t.body, t.said, t.changes, t.notes, t.status, t.error_text, t.messages, t.duration_ms, t.created_at,
+  v.id AS version_id
+FROM
+  turns t
+  LEFT JOIN site_versions v ON v.turn_id = t.id
+WHERE
+  t.kind = 'changeset'
+  AND t.id = ?
+`
+
+type GetChangesetRow struct {
+	ID         int64
+	Kind       string
+	Author     string
+	Body       string
+	Said       string
+	Changes    string
+	Notes      string
+	Status     string
+	ErrorText  string
+	Messages   string
+	DurationMs int64
+	CreatedAt  string
+	VersionID  sql.NullInt64
+}
+
+func (q *Queries) GetChangeset(ctx context.Context, id int64) (GetChangesetRow, error) {
+	row := q.db.QueryRowContext(ctx, getChangeset, id)
+	var i GetChangesetRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Author,
+		&i.Body,
+		&i.Said,
+		&i.Changes,
+		&i.Notes,
+		&i.Status,
+		&i.ErrorText,
+		&i.Messages,
+		&i.DurationMs,
+		&i.CreatedAt,
+		&i.VersionID,
+	)
+	return i, err
+}
+
 const getPost = `-- name: GetPost :one
 SELECT
   id, author, body, created_at, kind
@@ -248,62 +297,13 @@ func (q *Queries) GetPost(ctx context.Context, id int64) (Post, error) {
 	return i, err
 }
 
-const getWebmasterTurn = `-- name: GetWebmasterTurn :one
-SELECT
-  t.id, t.kind, t.author, t.body, t.said, t.changes, t.notes, t.status, t.error_text, t.messages, t.duration_ms, t.created_at,
-  v.id AS version_id
-FROM
-  turns t
-  LEFT JOIN site_versions v ON v.turn_id = t.id
-WHERE
-  t.kind = 'webmaster'
-  AND t.id = ?
-`
-
-type GetWebmasterTurnRow struct {
-	ID         int64
-	Kind       string
-	Author     string
-	Body       string
-	Said       string
-	Changes    string
-	Notes      string
-	Status     string
-	ErrorText  string
-	Messages   string
-	DurationMs int64
-	CreatedAt  string
-	VersionID  sql.NullInt64
-}
-
-func (q *Queries) GetWebmasterTurn(ctx context.Context, id int64) (GetWebmasterTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getWebmasterTurn, id)
-	var i GetWebmasterTurnRow
-	err := row.Scan(
-		&i.ID,
-		&i.Kind,
-		&i.Author,
-		&i.Body,
-		&i.Said,
-		&i.Changes,
-		&i.Notes,
-		&i.Status,
-		&i.ErrorText,
-		&i.Messages,
-		&i.DurationMs,
-		&i.CreatedAt,
-		&i.VersionID,
-	)
-	return i, err
-}
-
 const latestNotes = `-- name: LatestNotes :one
 SELECT
   notes
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status != 'running'
 ORDER BY
   id DESC
@@ -330,6 +330,74 @@ func (q *Queries) LatestPostID(ctx context.Context) (int64, error) {
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const listChangesets = `-- name: ListChangesets :many
+SELECT
+  t.id, t.kind, t.author, t.body, t.said, t.changes, t.notes, t.status, t.error_text, t.messages, t.duration_ms, t.created_at,
+  v.id AS version_id
+FROM
+  turns t
+  LEFT JOIN site_versions v ON v.turn_id = t.id
+WHERE
+  t.kind = 'changeset'
+ORDER BY
+  t.id DESC
+LIMIT
+  ?
+`
+
+type ListChangesetsRow struct {
+	ID         int64
+	Kind       string
+	Author     string
+	Body       string
+	Said       string
+	Changes    string
+	Notes      string
+	Status     string
+	ErrorText  string
+	Messages   string
+	DurationMs int64
+	CreatedAt  string
+	VersionID  sql.NullInt64
+}
+
+func (q *Queries) ListChangesets(ctx context.Context, limit int64) ([]ListChangesetsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listChangesets, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChangesetsRow
+	for rows.Next() {
+		var i ListChangesetsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Author,
+			&i.Body,
+			&i.Said,
+			&i.Changes,
+			&i.Notes,
+			&i.Status,
+			&i.ErrorText,
+			&i.Messages,
+			&i.DurationMs,
+			&i.CreatedAt,
+			&i.VersionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listPosts = `-- name: ListPosts :many
@@ -434,7 +502,7 @@ WHERE
       FROM
         turns t
       WHERE
-        t.kind = 'webmaster'
+        t.kind = 'changeset'
         AND t.id < ?1
     ),
     0
@@ -443,8 +511,8 @@ ORDER BY
   p.id ASC
 `
 
-// The posts a webmaster turn answered: the ones between it and the webmaster
-// turn before it, which is the range the worker coalesced into that turn.
+// The posts a changeset answered: the ones between it and the changeset
+// before it, which is the range the worker coalesced into that turn.
 // Replies are the webmaster's own words, never a trigger.
 func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, error) {
 	rows, err := q.db.QueryContext(ctx, listPostsForTurn, turnID)
@@ -532,7 +600,7 @@ WHERE
   t.id > ?
   AND t.id < ?
   AND NOT (
-    t.kind = 'webmaster'
+    t.kind = 'changeset'
     AND t.status IN ('running', 'error')
   )
 ORDER BY
@@ -592,87 +660,19 @@ func (q *Queries) ListRoomLog(ctx context.Context, arg ListRoomLogParams) ([]Lis
 	return items, nil
 }
 
-const listWebmasterTurns = `-- name: ListWebmasterTurns :many
-SELECT
-  t.id, t.kind, t.author, t.body, t.said, t.changes, t.notes, t.status, t.error_text, t.messages, t.duration_ms, t.created_at,
-  v.id AS version_id
-FROM
-  turns t
-  LEFT JOIN site_versions v ON v.turn_id = t.id
-WHERE
-  t.kind = 'webmaster'
-ORDER BY
-  t.id DESC
-LIMIT
-  ?
-`
-
-type ListWebmasterTurnsRow struct {
-	ID         int64
-	Kind       string
-	Author     string
-	Body       string
-	Said       string
-	Changes    string
-	Notes      string
-	Status     string
-	ErrorText  string
-	Messages   string
-	DurationMs int64
-	CreatedAt  string
-	VersionID  sql.NullInt64
-}
-
-func (q *Queries) ListWebmasterTurns(ctx context.Context, limit int64) ([]ListWebmasterTurnsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listWebmasterTurns, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListWebmasterTurnsRow
-	for rows.Next() {
-		var i ListWebmasterTurnsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Kind,
-			&i.Author,
-			&i.Body,
-			&i.Said,
-			&i.Changes,
-			&i.Notes,
-			&i.Status,
-			&i.ErrorText,
-			&i.Messages,
-			&i.DurationMs,
-			&i.CreatedAt,
-			&i.VersionID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const previousWebmasterTurnID = `-- name: PreviousWebmasterTurnID :one
+const previousChangesetID = `-- name: PreviousChangesetID :one
 SELECT
   CAST(COALESCE(MAX(id), 0) AS INTEGER)
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND id < ?
 `
 
-// The webmaster turn before this one, or 0 when there is none.
-func (q *Queries) PreviousWebmasterTurnID(ctx context.Context, id int64) (int64, error) {
-	row := q.db.QueryRowContext(ctx, previousWebmasterTurnID, id)
+// The changeset before this one, or 0 when there is none.
+func (q *Queries) PreviousChangesetID(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, previousChangesetID, id)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -716,7 +716,7 @@ VALUES
         FROM
           turns
         WHERE
-          kind = 'webmaster'
+          kind = 'changeset'
           AND status != 'running'
         ORDER BY
           id DESC

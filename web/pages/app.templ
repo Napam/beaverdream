@@ -215,13 +215,13 @@ templ loginCard(next string, failed string, action string) {
 
 // AppGate is the play plane's anonymous page.
 templ AppGate(login string) {
-	@authShell("board gate · beaverdream", gateCard(login))
+	@authShell("world gate · beaverdream", gateCard(login))
 }
 
 templ gateCard(login string) {
 	<section class={ appUserCard + " p-6" }>
-		<h1 class="text-xl font-semibold tracking-tight">this board opens in the app</h1>
-		<p class={ appUserMuted + " mt-2" }>sign in there, then press play. the board keeps the app's account.</p>
+		<h1 class="text-xl font-semibold tracking-tight">this world opens in the app</h1>
+		<p class={ appUserMuted + " mt-2" }>sign in there, then press play. the world keeps the app's account.</p>
 		<a class={ appUserButton + " mt-5 w-full" } href={ templ.SafeURL(login) }>go to the app</a>
 	</section>
 }
@@ -319,7 +319,7 @@ templ worldCard(view AppView, world AppWorld) {
 				<button type="submit" class={ appUserButton + " w-full" }>play</button>
 			</form>
 			if view.Admin {
-				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/w/" + world.Slug + "/") }>manage</a>
+				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
 			}
 		</div>
 	</article>
@@ -528,7 +528,7 @@ templ worldsSection(view AppView) {
 			</div>
 			<button type="submit" class={ appButton }>create world</button>
 		</form>
-		<p class={ adminMuted + " mt-2" }>lowercase letters, digits and dashes. a world gets its own board and its own file.</p>
+		<p class={ adminMuted + " mt-2" }>lowercase letters, digits and dashes. a world gets its own page and its own file.</p>
 		if len(view.Worlds) == 0 {
 			<p class={ appEmpty + " mt-3" }>no worlds yet. create the first one above.</p>
 		} else {
@@ -548,13 +548,13 @@ templ worldRow(view AppView, world AppWorld) {
 			<p class={ adminMuted + " mt-0.5" }>created { world.CreatedAt.Format("Jan 2, 2006") }</p>
 		</div>
 		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
-		<a class={ adminButton } href={ templ.SafeURL("/admin/w/" + world.Slug + "/") }>manage</a>
+		<a class={ adminButton } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
 		if world.Status == "ready" {
-			<a class={ appInlineLink } href={ world.Board } target="_blank" rel="noopener">board ↗</a>
+			<a class={ appInlineLink } href={ world.BoardURL } target="_blank" rel="noopener">open world ↗</a>
 			<form
 				method="post"
-				action={ templ.SafeURL("/admin/worlds/" + world.ID + "/delete") }
-				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Delete " + world.Slug + " and every post, version and feed row in it? This cannot be undone.')") }
+				action={ templ.SafeURL("/admin/worlds/" + world.Slug + "/delete") }
+				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Delete " + world.Slug + " and every post, version and journal row in it? This cannot be undone.')") }
 			>
 				@csrfInput(view.CSRF)
 				<button type="submit" class={ appDanger }>delete</button>

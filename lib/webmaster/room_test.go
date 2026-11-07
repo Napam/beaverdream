@@ -10,11 +10,11 @@ func TestRenderLogShowsTheWebmastersOwnTurns(t *testing.T) {
 	log := []Turn{
 		{ID: 1, Kind: TurnPost, Author: "dave", Body: "make it pink"},
 		{
-			ID: 2, Kind: TurnWebmaster, Said: "pink, as asked.",
+			ID: 2, Kind: TurnChangeset, Said: "pink, as asked.",
 			Changes: "stylesheet; html", VersionID: 2,
 		},
 		{ID: 3, Kind: TurnPost, Author: "kit", Body: "ugly"},
-		{ID: 4, Kind: TurnWebmaster, Said: "kit is wrong.", Status: "kept"},
+		{ID: 4, Kind: TurnChangeset, Said: "kit is wrong.", Status: "kept"},
 	}
 
 	got := RenderLog(log, nil)
@@ -39,7 +39,7 @@ func TestRenderLogShowsRepliesWhole(t *testing.T) {
 	long := strings.Repeat("dams hold water. ", 30)
 	log := []Turn{
 		{ID: 1, Kind: TurnPost, Author: "dave", Body: "why dams?"},
-		{ID: 2, Kind: TurnWebmaster, Said: "answered dave", Status: "kept"},
+		{ID: 2, Kind: TurnChangeset, Said: "answered dave", Status: "kept"},
 		{ID: 3, Kind: TurnReply, Author: "webmaster", Body: long},
 	}
 	got := RenderLog(log, nil)

@@ -77,7 +77,7 @@ func TestThePageOpensTheLiveStream(t *testing.T) {
 		Version:       4,
 		HTML:          `<main>{{posts}}</main>`,
 		StateSchema:   `{"likes":{"op":"counter"}}`,
-		State:         map[string]json.RawMessage{"likes": json.RawMessage("2")},
+		Shared:        map[string]json.RawMessage{"likes": json.RawMessage("2")},
 		JournalCursor: 12,
 	}, []Post{{ID: 9, Author: "a", Body: "hi"}})
 	for _, want := range []string{
@@ -210,22 +210,22 @@ func TestSiteDocUsesTheWorldBaseForRuntimeRoutes(t *testing.T) {
 	doc := SiteDoc(Site{
 		WorldID:   "w1",
 		WorldSlug: "heroes",
-		BasePath:  "/w/heroes/",
+		BasePath:  "/worlds/heroes/",
 		HTML:      PostsPlaceholder,
 	}, nil)
 	for _, want := range []string{
-		`data-base="/w/heroes"`,
+		`data-base="/worlds/heroes"`,
 		`data-world="w1"`,
 		`data-world-slug="heroes"`,
-		`data-init="@get(&#39;/w/heroes/live&#39;`,
+		`data-init="@get(&#39;/worlds/heroes/live&#39;`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("the world page is missing %q", want)
 		}
 	}
 	conf := journalConfigJSON(t, doc)
-	if conf["base"] != "/w/heroes" {
-		t.Errorf("runtime base = %v, want /w/heroes", conf["base"])
+	if conf["base"] != "/worlds/heroes" {
+		t.Errorf("runtime base = %v, want /worlds/heroes", conf["base"])
 	}
 	if conf["store"] != "bd:w1:" {
 		t.Errorf("runtime store = %v, want bd:w1:", conf["store"])
@@ -239,7 +239,7 @@ func TestSiteDocNamespacesStorageByWorldID(t *testing.T) {
 		return journalConfigJSON(t, SiteDoc(Site{
 			WorldID:   id,
 			WorldSlug: "same",
-			BasePath:  "/w/same",
+			BasePath:  "/worlds/same",
 			HTML:      PostsPlaceholder,
 		}, nil))
 	}

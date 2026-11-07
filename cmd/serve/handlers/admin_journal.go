@@ -20,7 +20,7 @@ const (
 	// adminJournalPage is how many rows the browser shows at a time.
 	adminJournalPage = 50
 	// adminJournalEvery spaces the journal page's live patches. Every append
-	// publishes, and the stats scan every key, so a busy feed is shown about
+	// publishes, and the stats scan every key, so a busy key is shown about
 	// once a second.
 	adminJournalEvery = time.Second
 )
@@ -33,8 +33,8 @@ var journalKeyName = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 // browsed, a match, a visitor, and the row id to page back from.
 func (h *Handlers) journalPanel(q url.Values) pages.Panel {
 	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageJournal}
-	if key := q.Get("feed"); journalKeyName.MatchString(key) {
-		panel.Feed = key
+	if key := q.Get("key"); journalKeyName.MatchString(key) {
+		panel.Key = key
 	}
 	panel.Match, _ = strconv.ParseInt(q.Get("match"), 10, 64)
 	panel.Before, _ = strconv.ParseInt(q.Get("before"), 10, 64)
@@ -77,7 +77,7 @@ func (h *Handlers) ClearJournal(w http.ResponseWriter, r *http.Request) {
 		message = "clear failed: " + err.Error()
 	}
 	// The cleared key has nothing left to page through.
-	if panel.Feed == key {
+	if panel.Key == key {
 		panel.Match, panel.Before, panel.Visitor = 0, 0, ""
 	}
 	h.adminDone(w, r, panel, message)
@@ -177,16 +177,16 @@ func (h *Handlers) adminJournal(
 	pages.SortJournalKeys(keys)
 
 	// With nothing picked, the first key that has rows is browsed.
-	if panel.Feed == "" {
+	if panel.Key == "" {
 		for _, view := range keys {
 			if view.Rows > 0 {
-				panel.Feed = view.Key
+				panel.Key = view.Key
 				break
 			}
 		}
 	}
 	var browse *pages.JournalBrowse
-	if _, ok := byKey[panel.Feed]; ok && panel.Feed != "" {
+	if _, ok := byKey[panel.Key]; ok && panel.Key != "" {
 		browse = h.adminJournalBrowse(ctx, panel)
 	}
 	return keys, browse
@@ -200,12 +200,12 @@ func (h *Handlers) adminJournalBrowse(
 ) *pages.JournalBrowse {
 	browse := &pages.JournalBrowse{
 		Base:    panel.Base,
-		Key:     panel.Feed,
+		Key:     panel.Key,
 		Match:   panel.Match,
 		Visitor: panel.Visitor,
 		Before:  panel.Before,
 	}
-	matches, err := h.queries.JournalMatches(ctx, panel.Feed)
+	matches, err := h.queries.JournalMatches(ctx, panel.Key)
 	if err != nil {
 		h.logRead("Admin could not read journal matches", err)
 	}
@@ -216,7 +216,7 @@ func (h *Handlers) adminJournalBrowse(
 	}
 	// One extra row says whether an older page exists.
 	rows, err := h.queries.JournalPage(ctx, sqlc.JournalPageParams{
-		Key:      panel.Feed,
+		Key:      panel.Key,
 		Match:    panel.Match,
 		Visitor:  panel.Visitor,
 		Before:   panel.Before,

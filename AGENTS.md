@@ -1,6 +1,6 @@
 # Working on beaverdream
 
-beaverdream is a message board whose site is rewritten by a model on each post.
+beaverdream is a world builder whose webmaster rewrites the page as people post.
 Go + templ + chi + sqlite (sqlc, goose), with a small TS frontend. It is a toy:
 prefer simple, readable code over production hardening.
 
@@ -9,11 +9,14 @@ prefer simple, readable code over production hardening.
 - Use `tmp/` for scratch files and test output. It is gitignored.
 - World migrations and registry migrations are separate sets, in separate
   folders, because the registry and each world are separate SQLite files.
-  `000001_init.sql` is frozen. A schema change is a new numbered migration in
-  the matching set, because goose will not re-run an applied version and a live
-  world keeps its data. Never edit an applied migration. World reset clears
-  every table a world migration adds, and its `sqlite_sequence` row, in that
-  world file only. The registry is never reset.
+  Pre-production, each database keeps one migration file edited in place
+  (`000001_init.sql` for a world, `000001_registry.sql` for the registry). Both
+  freeze at the first production deploy; after that every schema change is a
+  new numbered migration in the matching set, because goose will not re-run an
+  applied version and a live world keeps its data. Never edit an applied
+  migration. World reset clears every table a world migration adds, and its
+  `sqlite_sequence` row, in that world file only.
+  The registry is never reset.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`
@@ -35,19 +38,19 @@ prefer simple, readable code over production hardening.
   its own SQLite file under `WORLDS_DIR`, named by the world's immutable random
   id, never its slug. No foreign key crosses the two files, so a world read
   handles an identity that is disabled or missing and shows a fallback name.
-- `turns` is the room: one ordered row for every post, every webmaster turn and
-  every server event (heal, undo, restore). `id` is the conversation
-  order. The `posts` view exposes `kind = 'post'` and `kind = 'reply'` (the
-  webmaster's board answers) with their `kind`; the board reads posts through
-  it, so other model text (said, notes, changes) cannot reach the page by
-  accident. `site_versions` is the render, append-only; the current site is
-  `MAX(id)` and `turn_id` names the turn that produced it. `room_summaries`
-  holds the compacted history: the newest row is one message standing in for
-  everything through `through_turn_id`. `site_state` holds the model-declared
-  shared values, and its schema travels on the version row. `state_holdings`
-  holds what each identity owns of a visitor counter, and `state_ops` logs every
-  successful visitor op for a day. `journal` holds the model-declared
-  append-only feeds, and their schema travels there too.
+- `turns` is the room: one ordered row for every post, every changeset
+  (`kind = 'changeset'`) and every server event (heal, undo, restore). `id` is
+  the conversation order. The `posts` view exposes `kind = 'post'` and
+  `kind = 'reply'` (the webmaster's board answers) with their `kind`; the board
+  reads posts through it, so other model text (said, notes, changes) cannot
+  reach the page by accident. `site_versions` is the render, append-only; the
+  current site is `MAX(id)` and `turn_id` names the turn that produced it.
+  `room_summaries` holds the compacted history: the newest row is one message
+  standing in for everything through `through_turn_id`. `shared_state` holds
+  the model-declared shared values, and its schema travels on the version row.
+  `state_holdings` holds what each identity owns of a visitor counter, and
+  `state_ops` logs every successful visitor op for a day. `journal` holds the
+  model-declared append-only feeds, and their schema travels there too.
 - `lib/registry` owns the registry: schema, migrations, identity, login,
   session, invite, role, usage and world-row reads and writes. `lib/worlds`
   owns the world files: creation in three steps, open with `mode=rw`, migration
@@ -55,22 +58,23 @@ prefer simple, readable code over production hardening.
   `creating` and `deleting` rows.
 - `lib/webmaster` owns the model contract: `site.go` (types, base CSS, rendering),
   `room.go` (the turn type, the room log and
-  the change summary), `tools.go` (tool execution and validation), `mutate.go`
-  (the loop, prompts, tool schemas), `stream.go` (one streamed round and its
-  drafts). `lib/webmaster/skills` holds the skills and their registry;
-  `lib/webmaster/internal/jsrun` runs JavaScript from tests in node or bun.
+  the change summary), `tools.go` (tool execution and validation),
+  `changeset.go` (the loop, prompts, tool schemas), `stream.go` (one streamed
+  round and its drafts). `lib/webmaster/skills` holds the skills and their
+  registry; `lib/webmaster/internal/jsrun` runs JavaScript from tests in node or
+  bun.
 - `cmd/serve/handlers` owns HTTP: `live.go` (the stream and its projection),
-  `hub.go` (topics and subscribers), `pages.go` (board, post, version),
+  `hub.go` (topics and subscribers), `pages.go` (play, post, version),
   `versions.go` (version writes, carry forward), `admin.go` (auth, pages,
-  inject, restore), `admin_live.go` (the admin streams), `state.go` (shared
-  state), `journal.go` (feeds), `handlers.go` (mutation wrapper, room log,
+  restore), `admin_live.go` (the admin streams), `state.go` (shared
+  state), `journal.go` (feeds), `handlers.go` (changeset wrapper, room log,
   cap, config).
 - GET requests never call the model. Only a post or an admin instruction
-  mutates the site.
+  changes the site.
 
 ## Rules that must not break
 
-- The webmaster turn is reserved before its prompt is built, with
+- The changeset turn is reserved before its prompt is built, with
   `status = 'running'`. That id is what separates what the turn saw from posts
   that arrived while it ran: those get higher ids and appear after it in the
   next log. When the turn finishes, the version (if any) and the finished turn
@@ -82,26 +86,28 @@ prefer simple, readable code over production hardening.
   retry reads them.
 - The webmaster answers on the board through `done`'s optional `reply`
   (`maxReplyLen`). `reason` stays the short log line, stored as `said`, and
-  visitors never see it. A turn that did not fail and has a reply inserts one
-  `kind = 'reply'`, author `webmaster` row as the last write of its finish
-  transaction, so the reply takes the newest id and the stream's post cursor
-  cannot have passed it, then publishes `topicPosts`. A `silent` turn posts
-  the reply of a deferred `done`; error and stopped turns post nothing.
+  visitors never see it. Naps is the model's name; webmaster stays the role. A
+  turn that did not fail and has a reply inserts one `kind = 'reply'`, author
+  `Naps` row as the last write of its finish transaction, so the reply takes the
+  newest id and the stream's post cursor cannot have passed it, then publishes
+  `topicPosts`. Old replies keep author `webmaster` and render fine, because the
+  board tells a reply by its kind, not its author. A `silent` turn posts the
+  reply of a deferred `done`; error and stopped turns post nothing.
   `SummaryStats` counts a reply whole, as the log shows it. A reply is never
   a trigger: `ListPostsForTurn` reads `kind = 'post'` only. A later `done`
   without a reply keeps the one already given, so a deferred `done` does not
   lose it.
 - `say(text)` lets the webmaster speak before the work: it inserts a `reply`
-  row at once, through `Mutator.OnSay`, while the turn runs under `h.mu`, and
-  publishes `topicPosts`, the same path as a visitor post. One per turn,
+  row at once, through `ChangesetRunner.OnSay`, while the turn runs under `h.mu`,
+  and publishes `topicPosts`, the same path as a visitor post. One per turn,
   capped at `maxSayLen`; the prompt has the model send it alone (with any
   skill loads) before the edit round, then reply again through `done`. A say
   stays on the board even if the turn later fails.
 - The room log is words and field names only: `#id author: body`, one line per
-  webmaster turn with its `said` and `changes`, one `#id you replied: "..."`
+  changeset turn with its `said` and `changes`, one `#id you replied: "..."`
   line per reply, kept whole, and one line per server event.
   Never put markup, notes, tool calls or a render in it. The current page is
-  already in the prompt, and replaying historical tool calls would mutate the
+  already in the prompt, and replaying historical tool calls would change the
   world again. The trigger posts are skipped in the log because NEW POST shows
   them whole.
 - Compaction is one-way. When the whole prompt reaches the configured budget
@@ -111,7 +117,7 @@ prefer simple, readable code over production hardening.
   thresholds are `Config.CompactAfterTokens` and `Config.CompactAfterTurns`;
   tests set them low. The summary chains from the previous one, so old detail
   fades by design. Never summarize a running or failed turn, never put markup
-  in the summary, and never let a failed summary block the mutation: the same
+  in the summary, and never let a failed summary block the changeset: the same
   turns are retried next time. Compaction runs after the finish transaction,
   still under `h.mu`, on turns before the finished one and before any queued
   post; the finished turn stays in the next log. The log query reads at least
@@ -133,7 +139,7 @@ prefer simple, readable code over production hardening.
   records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
   no-op: the plain-board rule lives in the prompt, not in code.
 - A version is two model fields: `css` and `html` (everything inside body).
-  Enforce only what keeps the site working as an ever-mutating board: the
+  Enforce only what keeps the site working as an ever-changing page: the
   `{{posts}}` placeholder, the form contract in the prompt, the size caps and
   the code-owned shell. Do not add regions, required elements or layout rules.
   `BaseCSS` styles only code-owned markup (posts, the account link) and the color
@@ -145,9 +151,11 @@ prefer simple, readable code over production hardening.
   `SiteDoc` still appends the posts if a stored page lacks it. Never let posts
   be stored inside model-controlled HTML.
 - Posts stay server markup; the model places them, it does not render them.
-  Each `article.post` carries escaped `data-id`, `data-kind`, `data-author`
-  and `data-when` for page scripts. A reply gets `data-kind="reply"` and the
-  class `post-webmaster` from its kind, never from its author name, since a
+  Each `article.post` carries escaped `data-id`, `data-kind`, `data-author-id`
+  and `data-when` for page scripts. `data-author-id` holds the identity id;
+  `data-author` is emitted beside it for one release, so a page cached before
+  the rename keeps working, then it goes. A reply gets `data-kind="reply"` and
+  the class `post-webmaster` from its kind, never from its author name, since a
   visitor may call themselves webmaster. The prompt tells the model to position
   the articles inside `#bd-posts` (it has `display:contents`), never move
   them out or rebuild them, and never put visitor text through `innerHTML`.
@@ -214,10 +222,10 @@ prefer simple, readable code over production hardening.
   The post form is model markup: the system prompt gives it the exact method,
   action and field names. Do not reintroduce a code-owned composer; a broken
   form is a valid outcome.
-- The read side is one Datastar stream per open page, `GET /w/{slug}/live`.
-  Commands (`POST /w/{slug}/posts`, `/w/{slug}/x/state/{key}`,
-  `/w/{slug}/j/{key}`, every admin action, the worker) write the world file and
-  then publish a topic. Topics are a bitmask:
+- The read side is one Datastar stream per open page, `GET /worlds/{slug}/live`.
+  Commands (`POST /worlds/{slug}/posts`, `/worlds/{slug}/state/{key}`,
+  `/worlds/{slug}/journal/{key}`, every admin action, the worker) write the
+  world file and then publish a topic. Topics are a bitmask:
   posts, site, busy, state, journal, and turns for the admin panel. Every
   stream re-reads the parts its page is missing and pushes them; a subscriber
   coalesces a burst into one sync, so the hub never blocks and never drops.
@@ -275,8 +283,8 @@ prefer simple, readable code over production hardening.
   always wins, so a hidden name reused as a shared counter is just that. Only
   reset and the admin's clear key delete holdings, and a clear is a `state`
   event turn. Visitor counters stay out of `$shared`, `bd-state` and
-  `GET /w/{slug}/x/state`. Each page gets its own `$mine` and everyone's `$tops`
-  (top 10, `id` = `publicVisitor`, the page's `bd.visitor`, the identity id),
+  `GET /worlds/{slug}/state`. Each page gets its own `$mine` and everyone's
+  `$tops` (top 10, `id` = `publicVisitor`, the page's `bd.visitor`, the identity id),
   seeded on the first render and pushed by its stream, which reads the play
   session's identity without drawing a cookie. Only the stream writes them: an
   op's answer can be older than a push from another tab. A push sends `null` for a key the
@@ -324,27 +332,27 @@ prefer simple, readable code over production hardening.
   motion. Save names are namespaced by the world id, not the slug, so a reused
   slug does not load a deleted world's saves. Saves outlive world reset; pages
   check what they load.
-- The admin data page (`/admin/w/{slug}/journal`, labelled "data") shows the
-  shared state first, then every visitor counter, declared or hidden, with its
-  holders and the picked visitor's state ops, then lists every journal key
+- The admin data page (`/admin/worlds/{slug}/journal`, labelled "data") shows
+  the shared state first, then every visitor counter, declared or hidden, with
+  its holders and the picked visitor's state ops, then lists every journal key
   that has rows, declared or not, with stats
   from one aggregate query, and browses one key's rows newest first. The site
-  tab holds only versions and the reset; the overview shows the compacted
-  memory and the latest notes. The selection (`feed`, `match`, `visitor`,
+  tab holds only versions and the reset; the overview shows the room summary
+  and the latest notes. The selection (`key`, `match`, `visitor`,
   `before`) is in the URL, and the page's stream renders the same selection, so
   a patch never resets what the admin picked. The stream waits a second after
   each patch, because every append publishes and the stats scan every key.
   Payloads are shown as text only.
-- Clearing a key (`POST /admin/journal/{key}/clear`) deletes its rows and
-  records a `journal` event turn in one transaction, under `stateMu` like an
-  append, never `mu`, and it never calls the model. The key falls back to match
-  1; rules belong to the schema and do not change, and the id sequence is left
-  alone so cursors stay monotonic. A clear bumps `journalClears`, and each
+- Clearing a key (`POST /admin/worlds/{slug}/journal/{key}/clear`) deletes its
+  rows and records a `journal` event turn in one transaction, under `stateMu`
+  like an append, never `mu`, and it never calls the model. The key falls back
+  to match 1; rules belong to the schema and do not change, and the id sequence
+  is left alone so cursors stay monotonic. A clear bumps `journalClears`, and each
   stream that has seen fewer sends `bd._resync()`, because a clear can leave
   the newest row id where it was. The client reads the feed again on a pushed
   row from an older match it has not read, which covers a stream that was down.
-- A browser error is a turn, not a console line. `/w/{slug}/x/err` records one
-  `alert` turn per message per stretch, labelled as visitor-reported, and never
+- A browser error is a turn, not a console line. `/worlds/{slug}/errors` records
+  one `alert` turn per message per stretch, labelled as visitor-reported, and never
   triggers a turn, or a script that throws again would loop forever. The
   beacon carries the page's version; an error from a page that is no longer
   current is dropped. Refusals the page did not cause (closed match, 409, 429,
@@ -368,11 +376,11 @@ prefer simple, readable code over production hardening.
   app route. Play sessions are minted by the handoff, not by login.
 - Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
   username is `admin`. The app pages are `/admin` for the lobby, accounts and
-  invites, and `/admin/w/{slug}/...` for one world's turns, site and data. The
-  play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
+  invites, and `/admin/worlds/{slug}/...` for one world's turns, site and data.
+  The play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
   redirect, and no separate admin origin. The app refuses framing
-  (`frame-ancestors 'none'` or `X-Frame-Options: DENY`), so a board cannot frame
-  it.
+  (`frame-ancestors 'none'` or `X-Frame-Options: DENY`), so a play page cannot
+  frame it.
 - `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
   server writes an argon2id hash of it into the admin identity's password
   login, clears `disabled_at`, grants `ADMIN` when missing, and revokes the
@@ -395,11 +403,11 @@ prefer simple, readable code over production hardening.
 - Pressing play is an app POST with CSRF (or a GET that only mints the code). It
   mints a one-time code bound to the identity and the world, valid for
   `HANDOFF_TTL`. The play port exchanges the code for a play session, redirects
-  to `/w/{slug}`, and drops the code from the URL. The code is single-use.
-- Without a play session, a board request gets the gate page and `/live`
-  answers 204 so Datastar stops retrying. Revoking an identity revokes its
-  sessions and cancels its open streams through every loaded world's hub, not
-  just one. Revoking one session affects one browser.
+  to `/worlds/{slug}`, and drops the code from the URL. The code is single-use.
+- Without a play session, a play request gets the gate page and
+  `/worlds/{slug}/live` answers 204 so Datastar stops retrying. Revoking an
+  identity revokes its sessions and cancels its open streams through every
+  loaded world's hub, not just one. Revoking one session affects one browser.
 - The daily token budget is charged in model tokens per UTC day. `usage` lives
   in the registry and is written after the world commit, not in the world
   finish transaction, because one transaction cannot span two SQLite files. The
@@ -407,25 +415,25 @@ prefer simple, readable code over production hardening.
   nothing. A batch splits its tokens evenly across its distinct identities; the
   global total takes the whole amount. Admin turns are never charged or
   refused. A running turn may overshoot by one turn per running world.
-  `GET /w/{slug}/x/budget` reports `{used, limit}`. A budget refusal never goes
-  to the error beacon.
+  `GET /worlds/{slug}/budget` reports `{used, limit}`. A budget refusal never
+  goes to the error beacon.
 - Admin pages and actions answer Datastar with `#admin-body` patched in place
   (a plain request renders the whole page), so no redirect needs a secret. Each
   page opens its own stream for its own panels. A turn's conversation is stored
   whole when it finishes (a running turn saves only the prompt and its rounds,
   for crashes), so the turns page shows the running turn from memory: the
-  prompt and every finished round in full as `Mutator.OnMessage` hears them,
-  and the round being written as `#admin-draft`, which `OnDraft` fills chunk by
+  prompt and every finished round in full as `ChangesetRunner.OnMessage` hears
+  them, and the round being written as `#admin-draft`, which `OnDraft` fills chunk by
   chunk. A draft publishes `topicDraft` at most every 100 ms and patches only
   `#admin-draft` and the status card, never the whole inspector; the card names
   the phase (waiting, thinking, replying, writing a call, running its tools).
-  Board streams do not subscribe to it. The stored turn replaces the live view
+  Play streams do not subscribe to it. The stored turn replaces the live view
   when it lands, and a held turn that was running gets that one last patch: its
   mount carries `live=1`, so the patch also lands when the turn finished before
   the stream connected. `runState` rides on the public `/version` JSON, so its
   messages and draft never marshal.
-- Mutations from posts run in the background through each world's worker, which
-  coalesces a burst into one rewrite; admin mutations stay synchronous so the
+- Changesets from posts run in the background through each world's worker, which
+  coalesces a burst into one rewrite; admin changesets stay synchronous so the
   flash message works. The world's `h.mu` serializes both, the worker takes it
   before draining pending, and the timeout starts after the lock. Reset therefore
   cannot run a batch of posts it just deleted. `MODEL_CONCURRENCY` caps turns
@@ -438,14 +446,14 @@ prefer simple, readable code over production hardening.
   not end the turn, so the system prompt has the model send its loads in one
   response of their own, then edit. The skills are `controls`, `feel`, `space`,
   `entities`, `paths`, `random`, `canvas` and `characters`; each teaches
-  general technique, never one board's game. Each holds one script block
+  general technique, never one world's game. Each holds one script block
   that its `*_test.go` runs; change both together.
 - A model error must leave the current version alone. `Changed` is forced false
   and no version row is written, but the turn is still recorded with its error.
 - Restore copies an old version forward as a new row. History stays immutable.
 - A retry of an errored turn is a new turn, never an edit of the failed row. An
   admin instruction is retried from its stored `body`; a post-triggered turn
-  retries the posts between it and the webmaster turn before it, trimmed to
+  retries the posts between it and the changeset turn before it, trimmed to
   the newest `maxBatchPosts` like the worker, which is the batch that turn ran.
   A retry of a retry has no posts of its own, so it walks back to the turn it
   copied. A crash can leave no stored prompt, so the posts are read back
@@ -454,15 +462,15 @@ prefer simple, readable code over production hardening.
   recording a heal turn. In that world it keeps posts and the webmaster's notes,
   clears shared state and the journal in the same transaction as that version,
   takes `h.mu`, and never calls the model. Only the admin panel heals: a quiet
-  board keeps its page however long it sits.
+  world keeps its page however long it sits.
 - Reset is the one destructive action, and it touches one world file only. It
-  keeps the oldest version, deletes every turn (posts, webmaster turns, events,
+  keeps the oldest version, deletes every turn (posts, changesets, events,
   notes) with the compacted summaries, later versions, shared state and
   holdings, and rewinds the world's id sequences. The registry is never reset:
   identities, sessions, invites, roles, usage and other worlds survive, so an
   old play session still works. It cancels that world's turn in flight and
   drops its queue before it takes `h.mu`, so it never waits on a model call and
-  cannot race a mutation. Posts that arrive during the reset stay queued and run
+  cannot race a changeset. Posts that arrive during the reset stay queued and run
   after it.
 - A world is created in three steps: insert the registry row with
   `status = 'creating'`, create `<WORLDS_DIR>/<id>.db` and run its migrations,
@@ -495,14 +503,14 @@ prefer simple, readable code over production hardening.
 
 ## Frontend
 
-The board page is assembled in Go (`lib/webmaster/site.go`), not templ. The
+The play page is assembled in Go (`lib/webmaster/site.go`), not templ. The
 admin page is templ with tailwind classes; `web/pages/admin_view.go` turns
 stored turns into what it shows. The user message in `turns.messages`
 carries `sections`, byte offsets that tile the prompt, written by the same
 builder that writes the prompt, so the inspector shows each part exactly as
 the model read it. Charts are plain CSS bars. `web/lib` and
 `static/bundle.js` are leftover scaffold; no page loads them, so do not add
-board behavior there. `web/pages/*.templ` is the place for code-owned UI.
+play behavior there. `web/pages/*.templ` is the place for code-owned UI.
 
 ## Local model setup
 
@@ -523,18 +531,18 @@ board behavior there. `web/pages/*.templ` is the place for code-owned UI.
   chunk so a turn is slow enough to watch; tests use no pause.
   The mock reports rough usage, four request bytes per prompt token with the
   system message counted as cached, so the admin charts have numbers.
-- Each model round logs `Mutation round finished` with its time, time to the
-  first token, prompt,
+- Each changeset round logs `Changeset round finished` with its time, time to
+  the first token, prompt,
   cached and completion tokens, the size of the reply and the reasoning, its
   `finish_reason`, the tools it called, how many were rejected, one clipped
   `outcome` line per call, and the `done_deferred` reason when a done was
   pushed back. The same stats are stored on each assistant message in
-  `turns.messages`. `Mutation finished` sums
-  the turn: rounds, the done round, whether done was called at all, a done-only
-  last round, rejections, truncated rounds, the cached ratio, prompt section
-  sizes in runes, compaction time, and for posts the queue wait and the time
-  from post to version. A turn that runs out of rounds without done logs
-  `Mutation ended without done` with the round budget, the reason and the last
+  `turns.messages`. `Changeset finished` sums
+  the changeset: rounds, the done round, whether done was called at all, a
+  done-only last round, rejections, truncated rounds, the cached ratio, prompt
+  section sizes in runes, compaction time, and for posts the queue wait and the
+  time from post to version. A changeset that runs out of rounds without done
+  logs `Changeset ended without done` with the round budget, the reason and the last
   round's outcomes. The reason names what actually stopped the loop: the output
   cap, a round with no tool call, an empty choice list, or the round budget.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that

@@ -8,8 +8,8 @@ type AppWorld struct {
 	Slug      string
 	Status    string
 	CreatedAt time.Time
-	// Board is the world's board URL on the play port, seen from the app.
-	Board string
+	// BoardURL is the world's page on the play port, seen from the app.
+	BoardURL string
 }
 
 // AppInviteRow is one invite row. The raw code is never stored, so it is absent.
@@ -98,7 +98,7 @@ type AppView struct {
 
 // WorldPlayPath is the app route that mints a handoff for a world.
 func WorldPlayPath(slug string) string {
-	return "/w/" + slug + "/play"
+	return "/worlds/" + slug + "/play"
 }
 
 // InvitePath is the public redemption page.

@@ -11,7 +11,7 @@ type ToolInfo struct {
 	Parameters string
 }
 
-// Tools lists the mutation tools in the order a request advertises them.
+// Tools lists the changeset tools in the order a request advertises them.
 func Tools() []ToolInfo {
 	var out []ToolInfo
 	for _, tool := range toolParams() {

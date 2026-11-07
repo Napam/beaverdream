@@ -16,7 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-func testMutator(t *testing.T) (*Mutator, func()) {
+func testChangesetRunner(t *testing.T) (*ChangesetRunner, func()) {
 	t.Helper()
 	srv := httptest.NewServer(mockllm.Handler())
 	client := openai.NewClient(
@@ -26,18 +26,18 @@ func testMutator(t *testing.T) (*Mutator, func()) {
 	return New(client, "mock-model", 3, ""), srv.Close
 }
 
-func TestMutateAppliesMockTheme(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunAppliesMockTheme(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Changed {
 		t.Fatal("expected a change")
@@ -89,22 +89,22 @@ func editBytes(res Result) int {
 // The round streams. A watcher hears the prompt first, then the reply growing
 // chunk by chunk, then each finished round, and the drafts add up to exactly
 // what the turn stores.
-func TestMutateStreamsTheRound(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunStreamsTheRound(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 	var drafts []Draft
 	var heard []Message
 	m.OnDraft = func(d Draft) { drafts = append(drafts, d) }
 	m.OnMessage = func(msg Message) { heard = append(heard, msg) }
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(heard) != len(res.Messages) || heard[0].Role != "system" || heard[1].Role != "user" {
 		t.Fatalf("heard %d messages, stored %d, want the same and the prompt first",
@@ -145,7 +145,7 @@ func TestMutateStreamsTheRound(t *testing.T) {
 
 // A provider that sends reasoning_content, even null, gets it back beside the
 // tool call. DeepSeek's thinking mode rejects the next request without it.
-func TestMutateEchoesStreamedReasoning(t *testing.T) {
+func TestRunEchoesStreamedReasoning(t *testing.T) {
 	var bodies []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -184,14 +184,14 @@ func TestMutateEchoesStreamedReasoning(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "paint it"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Done {
 		t.Fatal("the done round did not end the turn")
@@ -206,20 +206,20 @@ func TestMutateEchoesStreamedReasoning(t *testing.T) {
 
 // A small change is a small answer: the edit and done in one response, with
 // arguments a fraction of a whole rewrite.
-func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunAppliesASmallEditInOneRound(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 	rounds := 0
 	m.OnRoundDone = func(RoundStats) { rounds++ }
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockedit the heading red"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Changed || !res.Done || res.Changes != "stylesheet" {
 		t.Fatalf("changed %v, done %v, changes %q", res.Changed, res.Done, res.Changes)
@@ -231,14 +231,14 @@ func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
 		t.Errorf("rounds = %d, want 1", rounds)
 	}
 
-	theme, err := m.Mutate(
+	theme, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "make it look like the matrix"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate theme: %v", err)
+		t.Fatalf("Run theme: %v", err)
 	}
 	small, whole := editBytes(res), editBytes(theme)
 	if small > 200 || small*4 > whole {
@@ -246,27 +246,27 @@ func TestMutateAppliesASmallEditInOneRound(t *testing.T) {
 	}
 }
 
-func TestMutatePatchesAValueInPlace(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunPatchesAValueInPlace(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 
-	first, err := m.Mutate(
+	first, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "hello"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate default theme: %v", err)
+		t.Fatalf("Run default theme: %v", err)
 	}
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		first.Site,
 		Room{},
 		Post{Author: "dave", Body: "mockpatch the accent"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate patch: %v", err)
+		t.Fatalf("Run patch: %v", err)
 	}
 	if res.Changes != "stylesheet" {
 		t.Errorf("changes = %q, want stylesheet", res.Changes)
@@ -282,20 +282,20 @@ func TestMutatePatchesAValueInPlace(t *testing.T) {
 
 // A done next to a rejected edit would end the turn before the model saw the
 // rejection. With rounds left, the turn stays open for one fix.
-func TestMutateDefersDoneAfterARejectedEdit(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunDefersDoneAfterARejectedEdit(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 	var rounds []RoundStats
 	m.OnRoundDone = func(stats RoundStats) { rounds = append(rounds, stats) }
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(rounds) != 2 {
 		t.Fatalf("rounds = %d, want 2", len(rounds))
@@ -316,19 +316,19 @@ func TestMutateDefersDoneAfterARejectedEdit(t *testing.T) {
 }
 
 // On the last round there is nobody left to fix it, so done ends the turn.
-func TestMutateAcceptsDoneOnTheLastRound(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunAcceptsDoneOnTheLastRound(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 	m.maxRounds = 1
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Done || res.Reason != "a small edit" {
 		t.Fatalf("done %v, reason %q", res.Done, res.Reason)
@@ -340,18 +340,18 @@ func TestMutateAcceptsDoneOnTheLastRound(t *testing.T) {
 
 // Each assistant message carries the stats of its round, so a stored turn says
 // what every completion cost.
-func TestMutateRecordsRoundStats(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunRecordsRoundStats(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(res.Rounds) != 2 || res.DoneRound != 2 {
 		t.Fatalf("rounds %d, done round %d", len(res.Rounds), res.DoneRound)
@@ -383,7 +383,7 @@ func TestMutateRecordsRoundStats(t *testing.T) {
 
 // DeepSeek reports cache hits in its own usage field. It counts when the
 // OpenAI field is missing.
-func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
+func TestRunReadsDeepSeekCacheHits(t *testing.T) {
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","created":0,"model":"m",`+
@@ -396,14 +396,14 @@ func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(res.Rounds) != 1 || res.Rounds[0].CachedTokens != 900 {
 		t.Fatalf("rounds = %+v, want 900 cached tokens", res.Rounds)
@@ -412,7 +412,7 @@ func TestMutateReadsDeepSeekCacheHits(t *testing.T) {
 
 // Every completion asks for a tool call, so the model cannot end a turn in
 // prose.
-func TestMutateRequiresAToolCall(t *testing.T) {
+func TestRunRequiresAToolCall(t *testing.T) {
 	var choices []any
 	mock := mockllm.Handler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -428,13 +428,13 @@ func TestMutateRequiresAToolCall(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	if _, err := m.Mutate(
+	if _, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockbadedit"},
 	); err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(choices) != 2 {
 		t.Fatalf("completions = %d, want 2", len(choices))
@@ -448,19 +448,19 @@ func TestMutateRequiresAToolCall(t *testing.T) {
 
 // A model that answers in words with no tool call ends the turn in one round,
 // whatever the budget says. The reason must name that round, not the budget.
-func TestMutateStopsOnAProseReply(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunStopsOnAProseReply(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 	m.maxRounds = 16384
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "mockprose"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(res.Rounds) != 1 || res.Done {
 		t.Fatalf("rounds %d, done %v", len(res.Rounds), res.Done)
@@ -478,7 +478,7 @@ func TestMutateStopsOnAProseReply(t *testing.T) {
 
 // A reply that stopped at the output cap never got far enough to call a tool.
 // The reason says so instead of blaming the round budget.
-func TestMutateNamesTheOutputCap(t *testing.T) {
+func TestRunNamesTheOutputCap(t *testing.T) {
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"cap","object":"chat.completion","model":"m",` +
@@ -489,14 +489,14 @@ func TestMutateNamesTheOutputCap(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 5, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
 		Room{},
 		Post{Author: "dave", Body: "hello"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(res.Rounds) != 1 {
 		t.Fatalf("rounds = %d, want 1", len(res.Rounds))
@@ -506,19 +506,19 @@ func TestMutateNamesTheOutputCap(t *testing.T) {
 	}
 }
 
-func TestMutateNoopKeepsSite(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunNoopKeepsSite(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 
 	original := Site{CSS: "body{color:red}", HTML: PostsPlaceholder}
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		original,
 		Room{},
 		Post{Author: "dave", Body: "mocknoop please"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if res.Changed {
 		t.Fatal("expected no change")
@@ -635,7 +635,7 @@ func TestUserPromptSectionsTileThePrompt(t *testing.T) {
 func TestUserPromptKeepsTheLogPrefixWhenNotesChange(t *testing.T) {
 	room := Room{Summary: "old news", Log: []Turn{
 		{ID: 1, Kind: TurnPost, Author: "kit", Body: "hi"},
-		{ID: 2, Kind: TurnWebmaster, Said: "hello kit", Status: "kept"},
+		{ID: 2, Kind: TurnChangeset, Said: "hello kit", Status: "kept"},
 	}}
 	trigger := []Post{{ID: 3, Author: "dave", Body: "yo"}}
 
@@ -677,11 +677,11 @@ func TestUserPromptCreditsABurstToEveryone(t *testing.T) {
 	}
 }
 
-func TestMutateReportsModelFailure(t *testing.T) {
-	m, closeServer := testMutator(t)
+func TestRunReportsModelFailure(t *testing.T) {
+	m, closeServer := testChangesetRunner(t)
 	defer closeServer()
 
-	if _, err := m.Mutate(
+	if _, err := m.Run(
 		context.Background(),
 		Site{},
 		Room{},
@@ -777,7 +777,7 @@ const brokenArguments = `{"target">footer</｜DSML｜: "`
 // A round whose calls all failed to parse is sampled again, not replayed: the
 // next request looks exactly like the one before it, so the provider's broken
 // markup never enters the conversation.
-func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
+func TestRunResamplesARoundOfBrokenArguments(t *testing.T) {
 	var requests [][]byte
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -791,14 +791,14 @@ func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("completions = %d, want 2", len(requests))
@@ -841,7 +841,7 @@ func TestMutateResamplesARoundOfBrokenArguments(t *testing.T) {
 // A round with one good call and one broken one keeps the good edit and
 // replays the broken call as an empty object, so the model reads the
 // rejection without the markup.
-func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
+func TestRunDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 	var requests [][]byte
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -863,14 +863,14 @@ func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("completions = %d, want 2", len(requests))
@@ -894,7 +894,7 @@ func TestMutateDropsBrokenArgumentsFromAMixedRound(t *testing.T) {
 // Valid JSON of the wrong shape is a normal model mistake, not provider
 // corruption, so it is named as a schema error and does not count toward the
 // broken-arguments cap.
-func TestMutateNamesASchemaMismatch(t *testing.T) {
+func TestRunNamesASchemaMismatch(t *testing.T) {
 	rounds := 0
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		rounds++
@@ -907,14 +907,14 @@ func TestMutateNamesASchemaMismatch(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if got := res.Messages[2].ToolCalls[0].Result; !strings.HasPrefix(
 		got,
@@ -930,7 +930,7 @@ func TestMutateNamesASchemaMismatch(t *testing.T) {
 // Tool markup inside otherwise valid JSON is still provider corruption. The
 // call is dropped, never applied to the page, and a mixed round must not
 // replay it either: the markup would go straight back into the next prompt.
-func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
+func TestRunDropsToolMarkupFromAMixedRound(t *testing.T) {
 	arguments := `{"target":"css","old":"","new":"h1{color:red}` + providerToolMarkup + `"}`
 	var requests [][]byte
 	rounds := 0
@@ -955,14 +955,14 @@ func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(res.Site.CSS, "color:blue") ||
 		strings.Contains(res.Site.CSS, providerToolMarkup) {
@@ -981,21 +981,21 @@ func TestMutateDropsToolMarkupFromAMixedRound(t *testing.T) {
 
 // A provider that answers with broken arguments round after round gets a few
 // resamples, not the whole round budget.
-func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
+func TestRunStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		writeToolCall(w, "edit", `{"target":`)
 	}))
 	defer srv.Close()
 	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 10, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(res.Rounds) != maxBrokenArgumentRounds {
 		t.Errorf("rounds = %d, want %d", len(res.Rounds), maxBrokenArgumentRounds)
@@ -1010,7 +1010,7 @@ func TestMutateStopsWhenBrokenArgumentsKeepComing(t *testing.T) {
 
 // DeepSeek's thinking mode needs the reasoning behind a tool call sent back
 // with it; without it the model loses the thread of its own tool format.
-func TestMutateReplaysDeepSeekReasoning(t *testing.T) {
+func TestRunReplaysDeepSeekReasoning(t *testing.T) {
 	var requests [][]byte
 	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -1040,13 +1040,13 @@ func TestMutateReplaysDeepSeekReasoning(t *testing.T) {
 		"",
 	)
 
-	if _, err := m.Mutate(
+	if _, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	); err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if len(requests) != 2 {
 		t.Fatalf("completions = %d, want 2", len(requests))

@@ -11,12 +11,12 @@ RETURNING
   kind;
 
 -- name: CreateReply :one
--- The webmaster's words on the board: done's reply, written in its turn's
--- finish transaction so it takes the newest id, or a say while the turn runs.
+-- Naps's words on the board: done's reply, written in its turn's finish
+-- transaction so it takes the newest id, or a say while the turn runs.
 INSERT INTO
   turns (kind, author, body)
 VALUES
-  ('reply', 'webmaster', ?)
+  ('reply', 'Naps', ?)
 RETURNING
   id;
 
@@ -53,8 +53,8 @@ LIMIT
   ?;
 
 -- name: ListPostsForTurn :many
--- The posts a webmaster turn answered: the ones between it and the webmaster
--- turn before it, which is the range the worker coalesced into that turn.
+-- The posts a changeset answered: the ones between it and the changeset
+-- before it, which is the range the worker coalesced into that turn.
 -- Replies are the webmaster's own words, never a trigger.
 SELECT
   p.*
@@ -70,7 +70,7 @@ WHERE
       FROM
         turns t
       WHERE
-        t.kind = 'webmaster'
+        t.kind = 'changeset'
         AND t.id < sqlc.arg(turn_id)
     ),
     0
@@ -78,14 +78,14 @@ WHERE
 ORDER BY
   p.id ASC;
 
--- name: PreviousWebmasterTurnID :one
--- The webmaster turn before this one, or 0 when there is none.
+-- name: PreviousChangesetID :one
+-- The changeset before this one, or 0 when there is none.
 SELECT
   CAST(COALESCE(MAX(id), 0) AS INTEGER)
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND id < ?;
 
 -- name: ListPostsAfter :many
@@ -126,7 +126,7 @@ VALUES
         FROM
           turns
         WHERE
-          kind = 'webmaster'
+          kind = 'changeset'
           AND status != 'running'
         ORDER BY
           id DESC
@@ -183,7 +183,7 @@ SET
   status = 'error',
   error_text = 'interrupted by a restart'
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status = 'running';
 
 -- name: ListRoomLog :many
@@ -205,7 +205,7 @@ WHERE
   t.id > ?
   AND t.id < ?
   AND NOT (
-    t.kind = 'webmaster'
+    t.kind = 'changeset'
     AND t.status IN ('running', 'error')
   )
 ORDER BY
@@ -219,14 +219,14 @@ SELECT
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status != 'running'
 ORDER BY
   id DESC
 LIMIT
   1;
 
--- name: ListWebmasterTurns :many
+-- name: ListChangesets :many
 SELECT
   t.*,
   v.id AS version_id
@@ -234,13 +234,13 @@ FROM
   turns t
   LEFT JOIN site_versions v ON v.turn_id = t.id
 WHERE
-  t.kind = 'webmaster'
+  t.kind = 'changeset'
 ORDER BY
   t.id DESC
 LIMIT
   ?;
 
--- name: GetWebmasterTurn :one
+-- name: GetChangeset :one
 SELECT
   t.*,
   v.id AS version_id
@@ -248,16 +248,16 @@ FROM
   turns t
   LEFT JOIN site_versions v ON v.turn_id = t.id
 WHERE
-  t.kind = 'webmaster'
+  t.kind = 'changeset'
   AND t.id = ?;
 
--- name: CountWebmasterTurnsSince :one
+-- name: CountChangesetsSince :one
 SELECT
   count(*)
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND created_at >= ?;
 
 -- name: CountChangedSinceHeal :one
@@ -266,7 +266,7 @@ SELECT
 FROM
   turns
 WHERE
-  kind = 'webmaster'
+  kind = 'changeset'
   AND status = 'changed'
   AND id > COALESCE(
     (

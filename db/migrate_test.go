@@ -67,7 +67,7 @@ func TestMigrationsCreateTheWorldSchema(t *testing.T) {
 	}
 
 	for _, statement := range []string{
-		`INSERT INTO site_state (key, value) VALUES ('likes', '3')`,
+		`INSERT INTO shared_state (key, value) VALUES ('likes', '3')`,
 		`INSERT INTO state_holdings (visitor, key, amount, name) VALUES ('v', 'coins', 3, 'dave')`,
 		`INSERT INTO state_ops (op_id, visitor, op, source, key, delta) VALUES (1, 'v', 'add', 'coins', 'coins', 3)`,
 		`INSERT INTO journal (key, payload) VALUES ('moves', '{}')`,

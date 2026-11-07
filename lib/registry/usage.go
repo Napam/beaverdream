@@ -14,7 +14,7 @@ type Budget struct {
 	Global   int64
 }
 
-// BudgetStatus is what the board's GET /x/budget returns: today's usage and
+// BudgetStatus is what the board's GET /budget returns: today's usage and
 // the configured limits. A zero limit is unlimited.
 type BudgetStatus struct {
 	IdentityUsed  int64

@@ -55,12 +55,12 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 
 // adminBase is the world's admin mount path.
 func (h *Handlers) adminBase() string {
-	return "/admin/w/" + h.world.Slug
+	return "/admin/worlds/" + h.world.Slug
 }
 
-// basePath is the world's board mount path, without a trailing slash.
+// basePath is the world's play mount path, without a trailing slash.
 func (h *Handlers) basePath() string {
-	return "/w/" + h.world.Slug
+	return "/worlds/" + h.world.Slug
 }
 
 // boardPath is the board page with the trailing slash relative model links
@@ -131,8 +131,8 @@ func (h *Handlers) fillWorldHeader(r *http.Request, view *pages.AdminView) {
 	}
 }
 
-// errNoTurn is a turn page whose id names no webmaster turn.
-var errNoTurn = errors.New("no such webmaster turn")
+// errNoTurn is a turn page whose id names no changeset.
+var errNoTurn = errors.New("no such changeset")
 
 // adminDone answers an admin page or action without a redirect: a Datastar
 // request gets the page patched into #admin-body, and anything else gets the
@@ -145,7 +145,7 @@ func (h *Handlers) adminDone(
 ) {
 	h.adminHeaders(w)
 	view, err := h.loadAdmin(r.Context(), panel, message)
-	view.Board = playOrigin(r, h.cfg) + h.boardPath()
+	view.BoardURL = playOrigin(r, h.cfg) + h.boardPath()
 	h.fillWorldHeader(r, &view)
 	if p := principalFrom(r); p != nil {
 		view.CSRF = p.CSRFToken
@@ -300,9 +300,9 @@ func (h *Handlers) adminTurns(
 	pick int64,
 	live *pages.RunProgress,
 ) ([]pages.TurnRow, *pages.TurnDetail, error) {
-	runs, err := h.queries.ListWebmasterTurns(ctx, adminTurnCount)
+	runs, err := h.queries.ListChangesets(ctx, adminTurnCount)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list webmaster turns: %w", err)
+		return nil, nil, fmt.Errorf("list changesets: %w", err)
 	}
 	rows := make([]pages.TurnRow, 0, len(runs))
 	var detail *pages.TurnDetail
@@ -316,14 +316,14 @@ func (h *Handlers) adminTurns(
 	}
 	if pick > 0 && detail == nil {
 		// Older than the list: read it on its own.
-		row, err := h.queries.GetWebmasterTurn(ctx, pick)
+		row, err := h.queries.GetChangeset(ctx, pick)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errNoTurn
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("load turn %d: %w", pick, err)
 		}
-		run := sqlc.ListWebmasterTurnsRow(row)
+		run := sqlc.ListChangesetsRow(row)
 		d := pages.NewTurnDetail(run, h.turnMessages(run), webmaster.ToolsRunes())
 		detail = &d
 	}
@@ -382,10 +382,10 @@ func addLiveTurn(
 
 // turnMessages decodes a stored conversation. A broken one shows as a turn
 // with nothing stored rather than failing the panel.
-func (h *Handlers) turnMessages(run sqlc.ListWebmasterTurnsRow) []webmaster.Message {
+func (h *Handlers) turnMessages(run sqlc.ListChangesetsRow) []webmaster.Message {
 	var messages []webmaster.Message
 	if err := json.Unmarshal([]byte(run.Messages), &messages); err != nil {
-		h.logger.Warn("Stored mutation messages are not valid JSON",
+		h.logger.Warn("Stored changeset messages are not valid JSON",
 			slog.Int64("run_id", run.ID),
 			slog.Any("error", err),
 		)
@@ -399,11 +399,11 @@ func (h *Handlers) adminBudget(ctx context.Context, site sqlc.SiteVersion) pages
 	budget := pages.BudgetView{
 		LimitTokens: h.compactAfterTokens,
 		LimitTurns:  h.compactAfterTurns,
-		PageRunes:   int64(webmaster.PageRunes(h.siteWithState(ctx, site))),
+		PageRunes:   int64(webmaster.PageRunes(h.siteWithShared(ctx, site))),
 	}
 	from, summary, err := h.latestSummary(ctx)
 	if err != nil {
-		h.logger.Warn("Failed to load compacted memory", slog.Any("error", err))
+		h.logger.Warn("Failed to load room summary", slog.Any("error", err))
 		return budget
 	}
 	budget.SummaryThrough = from
@@ -421,7 +421,7 @@ func (h *Handlers) adminBudget(ctx context.Context, site sqlc.SiteVersion) pages
 	return budget
 }
 
-// adminSummary is the compacted memory the prompt would read, if any.
+// adminSummary is the room summary the prompt would read, if any.
 func (h *Handlers) adminSummary(ctx context.Context) (string, int64) {
 	summary, err := h.queries.GetLatestSummary(ctx)
 	switch {
@@ -429,7 +429,7 @@ func (h *Handlers) adminSummary(ctx context.Context) (string, int64) {
 		return summary.Text, summary.ThroughTurnID
 	case errors.Is(err, sql.ErrNoRows):
 	default:
-		h.logger.Warn("Failed to load compacted memory", slog.Any("error", err))
+		h.logger.Warn("Failed to load room summary", slog.Any("error", err))
 	}
 	return "", 0
 }
@@ -448,9 +448,9 @@ func (h *Handlers) adminLiveView(ctx context.Context) pages.LiveView {
 			version = id
 		}
 	}
-	today, err := h.queries.CountWebmasterTurnsSince(ctx, utcDayStart())
+	today, err := h.queries.CountChangesetsSince(ctx, utcDayStart())
 	if err != nil {
-		h.logger.Error("Failed to count mutations", slog.Any("error", err))
+		h.logger.Error("Failed to count changesets", slog.Any("error", err))
 	}
 
 	view := pages.LiveView{
@@ -470,7 +470,7 @@ func (h *Handlers) adminLiveView(ctx context.Context) pages.LiveView {
 		view.State = "running"
 		view.Detail = fmt.Sprintf(
 			"%s by %s (round %d, %s)",
-			running.Kind,
+			running.Origin,
 			authors,
 			running.Round,
 			pages.RunPhase(running.Draft, running.RoundDone),
@@ -491,9 +491,9 @@ func liveInspector(picked int64, run *pages.RunProgress) bool {
 // adminStates is the shared state the page and the prompt see, so a stuck
 // value can be read without opening sqlite.
 func (h *Handlers) adminStates(ctx context.Context, site sqlc.SiteVersion) []pages.StateView {
-	live := h.siteWithState(ctx, site)
-	states := make([]pages.StateView, 0, len(live.State))
-	for key, value := range live.State {
+	live := h.siteWithShared(ctx, site)
+	states := make([]pages.StateView, 0, len(live.Shared))
+	for key, value := range live.Shared {
 		states = append(states, pages.StateView{Key: key, Value: string(value)})
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].Key < states[j].Key })
@@ -556,29 +556,29 @@ func (h *Handlers) UndoLast(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HealBoard puts the plain seed back. Posts stay; shared state and the journal
+// HealSite puts the plain seed back. Posts stay; shared state and the journal
 // are cleared with it.
-func (h *Handlers) HealBoard(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) HealSite(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
 	changed, err := h.heal(r.Context())
 	if err != nil {
-		h.logger.Error("Failed to heal the board", slog.Any("error", err))
+		h.logger.Error("Failed to heal the site", slog.Any("error", err))
 		h.adminDone(w, r, h.panel(pages.PageSite), "heal failed: "+err.Error())
 		return
 	}
 	if !changed {
-		h.adminDone(w, r, h.panel(pages.PageSite), "the board is already plain")
+		h.adminDone(w, r, h.panel(pages.PageSite), "the site is already plain")
 		return
 	}
-	h.adminDone(w, r, h.panel(pages.PageSite), "the board went back to the seed")
+	h.adminDone(w, r, h.panel(pages.PageSite), "the site went back to the seed")
 }
 
-// AdminMutate sends a free-form instruction straight to the model. It can also
+// AdminChangeset sends a free-form instruction straight to the model. It can also
 // store the instruction as a real post, which is useful for setting up a mood
 // without pretending to be a visitor.
-func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) AdminChangeset(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
@@ -608,10 +608,10 @@ func (h *Handlers) AdminMutate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res, err := h.mutate(r.Context(), "admin", instruction, trigger)
+	res, err := h.runChangeset(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
-		h.adminDone(w, r, h.panel(pages.PageOverview), "mutation failed: "+err.Error())
+		h.adminDone(w, r, h.panel(pages.PageOverview), "changeset failed: "+err.Error())
 	case res.Changed:
 		h.adminDone(w, r, h.panel(pages.PageOverview), "changed: "+res.Reason)
 	default:
@@ -640,10 +640,10 @@ func (h *Handlers) StopTurn(w http.ResponseWriter, r *http.Request) {
 	h.adminDone(w, r, panel, "that turn is not running")
 }
 
-// errNoRetryTurn is a retry whose id names no webmaster turn.
-var errNoRetryTurn = errors.New("no such webmaster turn")
+// errNoRetryTurn is a retry whose id names no changeset.
+var errNoRetryTurn = errors.New("no such changeset")
 
-// RetryTurn runs an errored webmaster turn again as a new turn. An admin
+// RetryTurn runs an errored changeset again as a new turn. An admin
 // instruction is sent as it was stored; a turn that answered posts answers the
 // same posts, found in the range the worker had coalesced into it. The failed
 // turn stays, so a retry that fails again can be retried from its page.
@@ -693,7 +693,7 @@ func (h *Handlers) runRetry(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	turn, err := h.queries.GetWebmasterTurn(ctx, id)
+	turn, err := h.queries.GetChangeset(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return webmaster.Result{}, "", errNoRetryTurn
 	}
@@ -704,10 +704,10 @@ func (h *Handlers) runRetry(
 		return webmaster.Result{}, "only a turn that errored can be retried", nil
 	}
 
-	kind, instruction := "post", ""
+	origin, instruction := "post", ""
 	var triggers []sqlc.Post
 	if strings.TrimSpace(turn.Body) != "" {
-		kind, instruction = "admin", turn.Body
+		origin, instruction = "admin", turn.Body
 	} else {
 		triggers, err = h.postsAnsweredBy(ctx, id)
 		if err != nil {
@@ -718,12 +718,12 @@ func (h *Handlers) runRetry(
 		}
 	}
 
-	res, err := h.mutateLocked(ctx, kind, instruction, triggers)
+	res, err := h.runChangesetLocked(ctx, origin, instruction, triggers)
 	return res, "", err
 }
 
-// postsAnsweredBy is the batch a webmaster turn answered: the posts between it
-// and the webmaster turn before it, trimmed to the newest maxBatchPosts like
+// postsAnsweredBy is the batch a changeset answered: the posts between it
+// and the changeset before it, trimmed to the newest maxBatchPosts like
 // the worker trims a burst. A turn that retried another has no posts of its
 // own, so it walks back to the turn it copied.
 func (h *Handlers) postsAnsweredBy(ctx context.Context, id int64) ([]sqlc.Post, error) {
@@ -738,7 +738,7 @@ func (h *Handlers) postsAnsweredBy(ctx context.Context, id int64) ([]sqlc.Post, 
 		if len(posts) > 0 {
 			return posts, nil
 		}
-		previous, err := h.queries.PreviousWebmasterTurnID(ctx, id)
+		previous, err := h.queries.PreviousChangesetID(ctx, id)
 		if err != nil {
 			return nil, fmt.Errorf("find the turn before it: %w", err)
 		}
@@ -765,8 +765,8 @@ func (h *Handlers) RestoreVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A restore that races a running mutation would be silently undone when
-	// that mutation writes its version. Take the same lock, but release it
+	// A restore that races a running changeset would be silently undone when
+	// that changeset writes its version. Take the same lock, but release it
 	// before rendering the panel.
 	message, ok := func() (string, bool) {
 		h.mu.Lock()

@@ -95,7 +95,7 @@ func (s *scriptedModel) count() int {
 	return len(s.bodies)
 }
 
-func stallMutator(srv *httptest.Server, maxRounds int) *Mutator {
+func stallChangesetRunner(srv *httptest.Server, maxRounds int) *ChangesetRunner {
 	m := New(
 		openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")),
 		"m", maxRounds, "",
@@ -111,21 +111,21 @@ func stallMutator(srv *httptest.Server, maxRounds int) *Mutator {
 
 // A stream that goes quiet after the tool name is cut at the idle limit and
 // the same request is sent again.
-func TestMutateRetriesAStalledRound(t *testing.T) {
+func TestRunRetriesAStalledRound(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{stallAfterName, realDone}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
 	started := time.Now()
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if time.Since(started) > 5*time.Second {
 		t.Errorf("took %s, the watchdog did not cut the stall", time.Since(started))
@@ -168,13 +168,13 @@ func realDone(w http.ResponseWriter, _ *http.Request) {
 
 // A model that stalls round after round ends the turn with an error and no
 // change to the page.
-func TestMutateStallStreakEndsTheTurn(t *testing.T) {
+func TestRunStallStreakEndsTheTurn(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{stallAfterName}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 10)
+	m := stallChangesetRunner(srv, 10)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -193,7 +193,7 @@ func TestMutateStallStreakEndsTheTurn(t *testing.T) {
 
 // A stream that closes cleanly with a call but no arguments and no finish
 // reason is a broken stream, so it is asked for again.
-func TestMutateRetriesAStreamWithoutAFinishReason(t *testing.T) {
+func TestRunRetriesAStreamWithoutAFinishReason(t *testing.T) {
 	early := func(w http.ResponseWriter, _ *http.Request) {
 		sseHeaders(w)
 		writeEdit(w, "edit", "")
@@ -204,16 +204,16 @@ func TestMutateRetriesAStreamWithoutAFinishReason(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{early, realDone}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Done || len(res.Rounds) != 2 {
 		t.Fatalf("done %v, rounds %d, want a retry that finished", res.Done, len(res.Rounds))
@@ -227,7 +227,7 @@ func TestMutateRetriesAStreamWithoutAFinishReason(t *testing.T) {
 }
 
 // A complete call whose only fault is a missing finish chunk is kept.
-func TestMutateKeepsACompleteRoundWithoutAFinishReason(t *testing.T) {
+func TestRunKeepsACompleteRoundWithoutAFinishReason(t *testing.T) {
 	model := &scriptedModel{
 		handlers: []http.HandlerFunc{func(w http.ResponseWriter, _ *http.Request) {
 			sseHeaders(w)
@@ -236,9 +236,9 @@ func TestMutateKeepsACompleteRoundWithoutAFinishReason(t *testing.T) {
 	}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -250,7 +250,7 @@ func TestMutateKeepsACompleteRoundWithoutAFinishReason(t *testing.T) {
 }
 
 // A stream that keeps moving, however slowly, is not a stall.
-func TestMutateDoesNotCutASlowStream(t *testing.T) {
+func TestRunDoesNotCutASlowStream(t *testing.T) {
 	slow := func(w http.ResponseWriter, _ *http.Request) {
 		sseHeaders(w)
 		writeEdit(w, "done", "")
@@ -270,9 +270,9 @@ func TestMutateDoesNotCutASlowStream(t *testing.T) {
 	}
 	srv := httptest.NewServer(&scriptedModel{handlers: []http.HandlerFunc{slow}})
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -287,11 +287,11 @@ func TestMutateDoesNotCutASlowStream(t *testing.T) {
 }
 
 // A cancelled turn is a cancel, not a stall: no retry, an error comes back.
-func TestMutateDoesNotMistakeACancelForAStall(t *testing.T) {
+func TestRunDoesNotMistakeACancelForAStall(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{stallAfterName}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 	m.idle = IdleLimits{First: time.Minute, Think: time.Minute, Call: time.Minute}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -299,7 +299,7 @@ func TestMutateDoesNotMistakeACancelForAStall(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	_, err := m.Mutate(ctx, Site{HTML: PostsPlaceholder}, Room{}, Post{Body: "hi"})
+	_, err := m.Run(ctx, Site{HTML: PostsPlaceholder}, Room{}, Post{Body: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("err = %v, want a cancel", err)
 	}
@@ -309,13 +309,13 @@ func TestMutateDoesNotMistakeACancelForAStall(t *testing.T) {
 }
 
 // A stalled or resampled round does not use up a work round.
-func TestMutateStallsDoNotUseWorkRounds(t *testing.T) {
+func TestRunStallsDoNotUseWorkRounds(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{stallAfterName, stallAfterName, realDone}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 1)
+	m := stallChangesetRunner(srv, 1)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -330,7 +330,7 @@ func TestMutateStallsDoNotUseWorkRounds(t *testing.T) {
 }
 
 // A call cut off by the output cap is rejected with a message, not resampled.
-func TestMutateRejectsATruncatedCall(t *testing.T) {
+func TestRunRejectsATruncatedCall(t *testing.T) {
 	cut := func(w http.ResponseWriter, _ *http.Request) {
 		sseHeaders(w)
 		writeEdit(w, "set_site", `{"html":"<main>{{posts}}`)
@@ -341,9 +341,9 @@ func TestMutateRejectsATruncatedCall(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{cut, realDone}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -361,7 +361,7 @@ func TestMutateRejectsATruncatedCall(t *testing.T) {
 }
 
 // A dropped round's markup never becomes the turn's reason.
-func TestMutateFallbackReasonSkipsResampledMarkup(t *testing.T) {
+func TestRunFallbackReasonSkipsResampledMarkup(t *testing.T) {
 	broken := func(w http.ResponseWriter, _ *http.Request) {
 		sseHeaders(w)
 		sseChunk(w, map[string]any{"index": 0, "delta": map[string]any{
@@ -380,16 +380,16 @@ func TestMutateFallbackReasonSkipsResampledMarkup(t *testing.T) {
 	}
 	srv := httptest.NewServer(&scriptedModel{handlers: []http.HandlerFunc{broken, prose}})
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if strings.Contains(res.Reason, "DSML") {
 		t.Errorf("reason = %q carries the dropped round's markup", res.Reason)
@@ -397,19 +397,19 @@ func TestMutateFallbackReasonSkipsResampledMarkup(t *testing.T) {
 }
 
 // The trace holds raw chunks and counts, off the message text.
-func TestMutateTraceStaysOutOfTheMessages(t *testing.T) {
+func TestRunTraceStaysOutOfTheMessages(t *testing.T) {
 	srv := httptest.NewServer(&scriptedModel{handlers: []http.HandlerFunc{realDone}})
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
 		Post{Body: "hi"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	trace := res.Rounds[0].Trace
 	if trace == nil || len(trace.Head) != 2 || len(trace.Tail) == 0 || !trace.Finished {
@@ -430,14 +430,14 @@ func TestMutateTraceStaysOutOfTheMessages(t *testing.T) {
 }
 
 // A stream that closes with no chunk at all is broken and asked for again.
-func TestMutateRetriesAnEmptyStream(t *testing.T) {
+func TestRunRetriesAnEmptyStream(t *testing.T) {
 	empty := func(w http.ResponseWriter, _ *http.Request) { sseHeaders(w) }
 	model := &scriptedModel{handlers: []http.HandlerFunc{empty, realDone}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -455,7 +455,7 @@ func TestMutateRetriesAnEmptyStream(t *testing.T) {
 
 // A stall streak counts rounds in a row: a real round in between clears it, so
 // two stalls, a real round and two more stalls still finish.
-func TestMutateStallStreakResetsAfterARealRound(t *testing.T) {
+func TestRunStallStreakResetsAfterARealRound(t *testing.T) {
 	edit := func(w http.ResponseWriter, _ *http.Request) {
 		sseHeaders(w)
 		writeEdit(w, "edit", `{"target":"css","old":"","new":"h1{color:red}"}`)
@@ -468,9 +468,9 @@ func TestMutateStallStreakResetsAfterARealRound(t *testing.T) {
 	}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 5)
+	m := stallChangesetRunner(srv, 5)
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{HTML: PostsPlaceholder},
 		Room{},
@@ -485,11 +485,11 @@ func TestMutateStallStreakResetsAfterARealRound(t *testing.T) {
 }
 
 // A cancel that lands during the pause before a retry ends the turn at once.
-func TestMutateCancelDuringTheRetryPause(t *testing.T) {
+func TestRunCancelDuringTheRetryPause(t *testing.T) {
 	model := &scriptedModel{handlers: []http.HandlerFunc{stallAfterName}}
 	srv := httptest.NewServer(model)
 	defer srv.Close()
-	m := stallMutator(srv, 3)
+	m := stallChangesetRunner(srv, 3)
 	m.stallPause = 30 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -498,7 +498,7 @@ func TestMutateCancelDuringTheRetryPause(t *testing.T) {
 		cancel()
 	}()
 	started := time.Now()
-	_, err := m.Mutate(ctx, Site{HTML: PostsPlaceholder}, Room{}, Post{Body: "hi"})
+	_, err := m.Run(ctx, Site{HTML: PostsPlaceholder}, Room{}, Post{Body: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("err = %v, want a cancel", err)
 	}

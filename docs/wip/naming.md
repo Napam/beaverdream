@@ -1,7 +1,7 @@
 # Naming: vocabulary and renames
 
-Status: decided, not built. Reviewed by GLM-5.3-Flash; findings are folded in.
-The code is the truth until this lands.
+Status: built. Reviewed by GLM-5.3-Flash; findings are folded in.
+The code is the truth now.
 
 ## Why
 
@@ -348,8 +348,8 @@ explained.
 
 Storage:
 
-- Keep `TurnWebmaster = "webmaster"` and `turns.kind = 'webmaster'` as the
-  category. The turn is still a webmaster turn.
+- `TurnChangeset = "changeset"` and `turns.kind = 'changeset'` name the
+  category. The turn is still a changeset turn.
 - New replies store `author = 'Naps'`.
 - Old replies store `'webmaster'`. The board knows a reply by `kind = 'reply'`,
   so it can show the current name without a data migration.

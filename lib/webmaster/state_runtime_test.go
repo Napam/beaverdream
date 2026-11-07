@@ -51,11 +51,11 @@ global.CustomEvent = function () {}
 
 // Each path answers once, in this order, when released.
 const answers = {
-  '/x/state/coins?add=3': [200, { ok: true, mine: { coins: 5 } }],
-  '/x/state/coins?spend=9': [409, { ok: false, reason: 'short' }],
-  '/x/state/buy_rod': [404, { ok: false, reason: 'gone', error: 'unknown state key' }],
-  '/x/state/coins?add=1': 'offline',
-  '/x/state/coins?add=2': 'hang'
+  '/state/coins?add=3': [200, { ok: true, mine: { coins: 5 } }],
+  '/state/coins?spend=9': [409, { ok: false, reason: 'short' }],
+  '/state/buy_rod': [404, { ok: false, reason: 'gone', error: 'unknown state key' }],
+  '/state/coins?add=1': 'offline',
+  '/state/coins?add=2': 'hang'
 }
 // The runtime's abort timer fires at once, so a hung call ends in the test.
 const realTimeout = setTimeout
@@ -99,7 +99,7 @@ const tick = () => new Promise((r) => setImmediate(r))
   }
   // A hung call times out, and the call queued behind it still runs.
   const hung = bd.state.add('coins', 2)
-  answers['/x/state/coins?add=7'] = [200, { ok: true, mine: { coins: 12 } }]
+  answers['/state/coins?add=7'] = [200, { ok: true, mine: { coins: 12 } }]
   const after = bd.state.add('coins', 7)
   for (let i = 0; i < 200 && !waiting.length; i++) await new Promise((r) => realTimeout(r, 1))
   if (waiting.length) waiting.shift()()
@@ -136,12 +136,12 @@ func TestStateRuntimeRunsCallsInOrderAndResolvesEveryRefusal(t *testing.T) {
 		t.Errorf("before any call: %+v, want the config's mine and tops", got.First)
 	}
 	wantLog := []string{
-		"start /x/state/coins?add=3 POST", "end /x/state/coins?add=3",
-		"start /x/state/coins?spend=9 POST", "end /x/state/coins?spend=9",
-		"start /x/state/buy_rod POST", "end /x/state/buy_rod",
-		"start /x/state/coins?add=1 POST", "end /x/state/coins?add=1",
-		"start /x/state/coins?add=2 POST", "abort /x/state/coins?add=2",
-		"start /x/state/coins?add=7 POST", "end /x/state/coins?add=7",
+		"start /state/coins?add=3 POST", "end /state/coins?add=3",
+		"start /state/coins?spend=9 POST", "end /state/coins?spend=9",
+		"start /state/buy_rod POST", "end /state/buy_rod",
+		"start /state/coins?add=1 POST", "end /state/coins?add=1",
+		"start /state/coins?add=2 POST", "abort /state/coins?add=2",
+		"start /state/coins?add=7 POST", "end /state/coins?add=7",
 	}
 	if len(got.Log) != len(wantLog) {
 		t.Fatalf("log = %q, want one call at a time: %q", got.Log, wantLog)

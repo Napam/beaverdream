@@ -19,19 +19,19 @@ func TestTurnAuthorHidesTheOldConstant(t *testing.T) {
 		"webmaster": "",
 		"":          "",
 	} {
-		row := TurnRow{Run: sqlc.ListWebmasterTurnsRow{Author: author}}
+		row := TurnRow{Run: sqlc.ListChangesetsRow{Author: author}}
 		if got := turnAuthor(row); got != want {
 			t.Errorf("turnAuthor(%q) = %q, want %q", author, got, want)
 		}
 	}
 }
 
-func storedTurn() (sqlc.ListWebmasterTurnsRow, []webmaster.Message) {
+func storedTurn() (sqlc.ListChangesetsRow, []webmaster.Message) {
 	user := "COMPACTED HISTORY:\n(nothing)\n\nNEW POST #4 from dave:\nmake it pink\nThe poster is looking at this post.\n"
 	split := strings.Index(user, "NEW POST")
-	return sqlc.ListWebmasterTurnsRow{
+	return sqlc.ListChangesetsRow{
 		ID:        5,
-		Kind:      "webmaster",
+		Kind:      "changeset",
 		Status:    "changed",
 		Messages:  "[big]",
 		VersionID: sql.NullInt64{Int64: 3, Valid: true},
@@ -282,14 +282,14 @@ func TestSplitArgsKeepsRawTextThatIsNotAnObject(t *testing.T) {
 // The charts read oldest first and skip a run that has nothing to count yet.
 func TestNewMetricsSkipsRunningTurns(t *testing.T) {
 	m := NewMetrics([]TurnRow{
-		{Run: sqlc.ListWebmasterTurnsRow{ID: 9, Status: "running"}},
+		{Run: sqlc.ListChangesetsRow{ID: 9, Status: "running"}},
 		{
-			Run:          sqlc.ListWebmasterTurnsRow{ID: 7, Status: "kept", DurationMs: 300},
+			Run:          sqlc.ListChangesetsRow{ID: 7, Status: "kept", DurationMs: 300},
 			Rounds:       1,
 			PromptTokens: 40,
 		},
 		{
-			Run:              sqlc.ListWebmasterTurnsRow{ID: 5, Status: "changed", DurationMs: 900},
+			Run:              sqlc.ListChangesetsRow{ID: 5, Status: "changed", DurationMs: 900},
 			Rounds:           3,
 			PromptTokens:     60,
 			CompletionTokens: 20,
@@ -307,9 +307,9 @@ func TestNewMetricsSkipsRunningTurns(t *testing.T) {
 // is the top of the list, so it has no newer turn.
 func TestTurnNeighboursStopsAtTheEnds(t *testing.T) {
 	view := AdminView{Turns: []TurnRow{
-		{Run: sqlc.ListWebmasterTurnsRow{ID: 9}},
-		{Run: sqlc.ListWebmasterTurnsRow{ID: 7}},
-		{Run: sqlc.ListWebmasterTurnsRow{ID: 5}},
+		{Run: sqlc.ListChangesetsRow{ID: 9}},
+		{Run: sqlc.ListChangesetsRow{ID: 7}},
+		{Run: sqlc.ListChangesetsRow{ID: 5}},
 	}}
 	if older, newer := view.turnNeighbours(); older != 7 || newer != 0 {
 		t.Errorf("newest: older = %d, newer = %d", older, newer)

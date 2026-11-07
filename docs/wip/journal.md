@@ -4,9 +4,9 @@ Status: built on `main`. This note is the design record; the code is the truth.
 
 ## What it is
 
-A message board where the model writes small client-side programs over a
+A world where the model writes small client-side programs over a
 shared, public, append-only event log. The server keeps the log and knows
-nothing about what any program means. A visitor asks for a game and the board
+nothing about what any program means. A visitor asks for a game and the page
 gains one.
 
 The invariant: the backend stays fixed. No runtime Go, no model-written
@@ -19,8 +19,9 @@ channel, not a feature per request.
   index on `(key, id)`.
 - `site_versions.journal_schema`: the model declares keys with
   `set_journal_schema(name, max, rules)`.
-- `POST /j/{key}` appends one JSON payload. The server stamps the browser's
-  opaque visitor id, the match number and the rules number from the schema.
+- `POST /worlds/{slug}/journal/{key}` appends one JSON payload. The server
+  stamps the browser's opaque visitor id, the match number and the rules number
+  from the schema.
   The body carries the rules number the page's code was written for; a
   different one is a 409, so a tab running a replaced reducer cannot write
   under rules it does not follow.
@@ -28,9 +29,9 @@ channel, not a feature per request.
   so a published id cannot be copied into another browser to take a seat.
   Match may stay or advance by one; a visitor cannot jump or rewind. Writes are
   serialized by `stateMu`, allowed in bursts by a token bucket, trimmed to the
-  declared `max`, and count as board activity so a heal does not wipe a game.
-- `GET /j/{key}?since=N` returns rows after a cursor plus the newest match and
-  the declared rules number.
+  declared `max`, and count as play activity so a heal does not wipe a game.
+- `GET /worlds/{slug}/journal/{key}?since=N` returns rows after a cursor plus
+  the newest match and the declared rules number.
 - `bd.journal(key)` client runtime: `start(reduce, render)`, `append`,
   `newMatch`, `bd.visitor`. It is code-owned, so
   the model writes about 40 lines of rules instead of a whole client.
@@ -42,16 +43,16 @@ channel, not a feature per request.
     When a push or an append reports other rules, the feed stops and sends
     `beaverdream:stale`; the live script reloads the page. A new match reloads
     just the feed.
-  - A failed read leaves the board as drawn. Rows pushed during it land after
+  - A failed read leaves the page as drawn. Rows pushed during it land after
     it fails, so a server hiccup never drops an event.
   - `append` resolves with the row, or with null when the server refused it
     for a reason that is not the page's bug: a closed match reloads the feed,
     409 reloads the page, 429 and 401 drop the write. A payload the server
     rejects is reported. Only a payload that cannot be serialized throws,
     before any request is sent.
-- `POST /x/err` turns a thrown script into one `alert` turn per message per
-  stretch. The beacon carries the page's version, and an error from a page
-  that is no longer current is dropped. It sends no line number: that counts
+- `POST /worlds/{slug}/errors` turns a thrown script into one `alert` turn per
+  message per stretch. The beacon carries the page's version, and an error from
+  a page that is no longer current is dropped. It sends no line number: that counts
   lines of the served document, which the model never sees. The room log
   labels it as visitor-reported. A beacon never triggers a turn.
 - The features guard: a `done` whose page no longer calls `bd.journal("key")`
@@ -72,7 +73,7 @@ channel, not a feature per request.
   (`_bd.journal`) and the stream pushes rows written after it through
   `bd._rows`; a rewind or a full 500-row batch calls `bd._resync`, which reads
   every started feed again. A page with a live feed never reloads
-  on new posts; posts are patched into the board instead.
+  on new posts; posts are patched into the page instead.
 
 ## Where it stops
 
@@ -95,7 +96,7 @@ illegal rows are ignored by every client, not rejected by the server.
 
 - Anyone can open the next match. `newMatch` is not a row the reducer can
   veto, so a page has to gate its control on the game being over; a visitor
-  with devtools can clear the board at any time. That is consistent with
+  with devtools can clear the game at any time. That is consistent with
   sabotage being allowed, and the prompt says so.
 - A row that makes `reduce` throw stops the draw for everyone until it trims
   out or the match ends. The runtime cannot skip a row because it only sees

@@ -41,8 +41,8 @@ func TestLoadSkillBrokenArgumentsCountAsBroken(t *testing.T) {
 
 // A round that only loads a skill is not the end of the turn. The skill's
 // body is the tool result the next round builds from.
-func TestMutateLoadsASkillBeforeDone(t *testing.T) {
-	res := mutateWith(t, Site{HTML: "<main>{{posts}}</main>"}, [][]fakeToolCall{
+func TestRunLoadsASkillBeforeDone(t *testing.T) {
+	res := runChangesetWith(t, Site{HTML: "<main>{{posts}}</main>"}, [][]fakeToolCall{
 		{{name: "load_skill", args: `{"name":"controls"}`}},
 		{{name: "done", args: `{"reason":"read the reference first"}`}},
 	})
@@ -80,8 +80,8 @@ func TestLoadSkillSchemaListsTheSkills(t *testing.T) {
 }
 
 // Several skills load in one round, each with its own body.
-func TestMutateLoadsSeveralSkillsInOneRound(t *testing.T) {
-	res := mutateWith(t, Site{HTML: "<main>{{posts}}</main>"}, [][]fakeToolCall{
+func TestRunLoadsSeveralSkillsInOneRound(t *testing.T) {
+	res := runChangesetWith(t, Site{HTML: "<main>{{posts}}</main>"}, [][]fakeToolCall{
 		{
 			{name: "load_skill", args: `{"name":"controls"}`},
 			{name: "load_skill", args: `{"name":"feel"}`},

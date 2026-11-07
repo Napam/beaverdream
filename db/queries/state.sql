@@ -1,22 +1,22 @@
--- name: ListSiteState :many
+-- name: ListSharedState :many
 SELECT
   *
 FROM
-  site_state
+  shared_state
 ORDER BY
   key;
 
--- name: GetSiteState :one
+-- name: GetSharedState :one
 SELECT
   *
 FROM
-  site_state
+  shared_state
 WHERE
   key = ?;
 
--- name: UpsertSiteState :exec
+-- name: UpsertSharedState :exec
 INSERT INTO
-  site_state (key, value, updated_at)
+  shared_state (key, value, updated_at)
 VALUES
   (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT (key) DO UPDATE
@@ -24,5 +24,5 @@ SET
   value = excluded.value,
   updated_at = excluded.updated_at;
 
--- name: DeleteSiteState :exec
-DELETE FROM site_state;
+-- name: DeleteSharedState :exec
+DELETE FROM shared_state;

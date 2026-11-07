@@ -33,7 +33,7 @@ func TestInterruptedTurnKeepsItsPrompt(t *testing.T) {
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit make it blue"}})
 	var id int64
 	waitFor(t, "the turn to be running", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		if err != nil || len(turns) != 1 || turns[0].Status != "running" || calls.Load() < 1 {
 			return false
 		}
@@ -45,7 +45,7 @@ func TestInterruptedTurnKeepsItsPrompt(t *testing.T) {
 	if err := queries.FailRunningTurns(ctx); err != nil {
 		t.Fatalf("fail running turns: %v", err)
 	}
-	turn, err := queries.GetWebmasterTurn(ctx, id)
+	turn, err := queries.GetChangeset(ctx, id)
 	if err != nil {
 		t.Fatalf("get turn: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestFailedTurnWithoutMessagesShowsItsPost(t *testing.T) {
 		t.Fatalf("create post: %v", err)
 	}
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: "dave",
 	})
 	if err != nil {

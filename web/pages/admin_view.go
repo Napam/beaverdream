@@ -25,7 +25,7 @@ type WorldChoice struct {
 // TurnRow is one webmaster turn as the list and the charts read it: the stored
 // row without its conversation, plus sums over its rounds.
 type TurnRow struct {
-	Run sqlc.ListWebmasterTurnsRow
+	Run sqlc.ListChangesetsRow
 	// Trigger is what the turn answered: the admin instruction, or the new
 	// posts as the prompt showed them.
 	Trigger string
@@ -40,7 +40,7 @@ type TurnRow struct {
 
 // NewTurnRow sums a turn's rounds. The conversation is dropped from the row,
 // so a list of rows stays small.
-func NewTurnRow(run sqlc.ListWebmasterTurnsRow, messages []webmaster.Message) TurnRow {
+func NewTurnRow(run sqlc.ListChangesetsRow, messages []webmaster.Message) TurnRow {
 	run.Messages = ""
 	row := TurnRow{Run: run, Trigger: run.Body}
 	for _, message := range messages {
@@ -421,7 +421,7 @@ func scanValue(s string, i int) int {
 // is the size of the tool definitions this build sends; older turns may have
 // sent different ones.
 func NewTurnDetail(
-	run sqlc.ListWebmasterTurnsRow,
+	run sqlc.ListChangesetsRow,
 	messages []webmaster.Message,
 	toolsRunes int,
 ) TurnDetail {

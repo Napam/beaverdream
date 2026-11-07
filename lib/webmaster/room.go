@@ -82,7 +82,7 @@ func renderTurn(turn Turn) string {
 		}
 		return fmt.Sprintf("#%d %s: %s", turn.ID, author, clip(turn.Body, historyPostLen))
 
-	case TurnWebmaster:
+	case TurnChangeset:
 		return renderWebmasterTurn(turn)
 
 	case TurnReply:

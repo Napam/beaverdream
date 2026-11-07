@@ -60,7 +60,7 @@ func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit make it red"}})
 	var finished int64
 	waitFor(t, "the first turn to finish", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		if err != nil || len(turns) != 1 || turns[0].Status == "running" {
 			return false
 		}
@@ -76,7 +76,7 @@ func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 	postFormAs(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit make it blue"}}, "erin")
 	var id int64
 	waitFor(t, "the second turn to be running", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		if err != nil || len(turns) != 1 || turns[0].Status != "running" || calls.Load() < 2 {
 			return false
 		}
@@ -90,7 +90,7 @@ func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "not running") {
 		t.Fatalf("stale stop: status %d, body missing \"not running\"", rec.Code)
 	}
-	turns, err := queries.ListWebmasterTurns(ctx, 1)
+	turns, err := queries.ListChangesets(ctx, 1)
 	if err != nil || turns[0].Status != "running" {
 		t.Fatalf("a stop with a stale id ended the turn: %+v, %v", turns, err)
 	}
@@ -100,10 +100,10 @@ func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 		t.Fatalf("stop: status = %d", rec.Code)
 	}
 	waitFor(t, "the stopped turn to be stored", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
-	turns, err = queries.ListWebmasterTurns(ctx, 1)
+	turns, err = queries.ListChangesets(ctx, 1)
 	if err != nil {
 		t.Fatalf("list turns: %v", err)
 	}

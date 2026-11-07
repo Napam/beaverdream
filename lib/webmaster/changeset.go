@@ -15,8 +15,8 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// Mutator asks the model to rewrite the site.
-type Mutator struct {
+// ChangesetRunner asks the model to rewrite the site.
+type ChangesetRunner struct {
 	client    openai.Client
 	model     string
 	maxRounds int
@@ -30,7 +30,7 @@ type Mutator struct {
 	// panel uses it to show progress.
 	OnRound func(round int)
 	// OnRoundDone reports what one round cost and which tools it called, so a
-	// slow mutation can be told apart from a slow model, and a long answer
+	// slow changeset can be told apart from a slow model, and a long answer
 	// from a slow one.
 	OnRoundDone func(stats RoundStats)
 	// OnDraft reports the round being written each time the stream adds to
@@ -44,14 +44,14 @@ type Mutator struct {
 	OnSay func(ctx context.Context, text string) error
 }
 
-// New builds a Mutator. maxRounds caps how many tool rounds one mutation may
+// New builds a ChangesetRunner. maxRounds caps how many tool rounds one changeset may
 // take; values below one fall back to 25. effort may be empty, or one of
 // minimal, low, medium, high, xhigh.
-func New(client openai.Client, model string, maxRounds int, effort string) *Mutator {
+func New(client openai.Client, model string, maxRounds int, effort string) *ChangesetRunner {
 	if maxRounds <= 0 {
 		maxRounds = 25
 	}
-	return &Mutator{
+	return &ChangesetRunner{
 		client:    client,
 		model:     model,
 		maxRounds: maxRounds,
@@ -84,7 +84,7 @@ type Message struct {
 	Stats      *RoundStats     `json:"stats,omitempty"`
 }
 
-// Result is what one mutation produced. Rounds holds every completion that
+// Result is what one changeset produced. Rounds holds every completion that
 // was attempted, including a failed one. DoneRound is the round whose done
 // ended the turn, or zero.
 type Result struct {
@@ -140,21 +140,21 @@ type RoundStats struct {
 	Trace *RoundTrace `json:"trace,omitempty"`
 }
 
-// Mutate asks the model to rewrite the site in response to one trigger. The
+// Run asks the model to rewrite the site in response to one trigger. The
 // returned Site is the original when nothing changed, so callers can write a
 // new version only when Changed is true.
-func (m *Mutator) Mutate(
+func (m *ChangesetRunner) Run(
 	ctx context.Context,
 	current Site,
 	room Room,
 	trigger Post,
 ) (Result, error) {
-	return m.MutatePosts(ctx, current, room, []Post{trigger})
+	return m.RunPosts(ctx, current, room, []Post{trigger})
 }
 
-// MutatePosts is Mutate for a burst that was coalesced into one rewrite. The
+// RunPosts is Run for a burst that was coalesced into one rewrite. The
 // prompt credits every poster instead of pretending one person wrote it all.
-func (m *Mutator) MutatePosts(
+func (m *ChangesetRunner) RunPosts(
 	ctx context.Context,
 	current Site,
 	room Room,
@@ -532,7 +532,7 @@ const doneDropsJournal = "not finished: no script in the page calls bd.journal f
 
 // reportRound records one finished completion on the result and tells the
 // listener.
-func (m *Mutator) reportRound(res *Result, stats RoundStats) {
+func (m *ChangesetRunner) reportRound(res *Result, stats RoundStats) {
 	res.Rounds = append(res.Rounds, stats)
 	if m.OnRoundDone != nil {
 		m.OnRoundDone(stats)
@@ -540,15 +540,15 @@ func (m *Mutator) reportRound(res *Result, stats RoundStats) {
 }
 
 // record adds one entry to the turn's conversation and tells the listener.
-func (m *Mutator) record(res *Result, message Message) {
+func (m *ChangesetRunner) record(res *Result, message Message) {
 	res.Messages = append(res.Messages, message)
 	if m.OnMessage != nil {
 		m.OnMessage(message)
 	}
 }
 
-// MaxRounds is the round budget this Mutator was built with.
-func (m *Mutator) MaxRounds() int { return m.maxRounds }
+// MaxRounds is the round budget this ChangesetRunner was built with.
+func (m *ChangesetRunner) MaxRounds() int { return m.maxRounds }
 
 // outcomeLine is one tool call as a single log line: the name, then what the
 // editor said back, flattened and clipped so the log stays readable. A call
@@ -606,7 +606,7 @@ func toolCallParam(call ToolCall) openai.ChatCompletionMessageToolCallUnionParam
 	}
 }
 
-// toolParams advertises the mutation tools. Every extra knob is another way a
+// toolParams advertises the changeset tools. Every extra knob is another way a
 // small model can produce broken output.
 func toolParams() []openai.ChatCompletionToolUnionParam {
 	return []openai.ChatCompletionToolUnionParam{
@@ -790,7 +790,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			Name: "say",
 			Description: openai.String(
 				"Post a quick message on the board right now, before the turn ends, " +
-					"signed webmaster. Use it to answer a request before you work on it. " +
+					"signed Naps. Use it to answer a request before you work on it. " +
 					"Once per turn.",
 			),
 			Parameters: shared.FunctionParameters{
@@ -829,7 +829,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					"reply": map[string]any{
 						"type": "string",
 						"description": fmt.Sprintf(
-							"Your answer, posted on the board as a post signed webmaster. "+
+							"Your answer, posted on the board as a post signed Naps. "+
 								"Answer questions here in plain text, short and casual, like "+
 								"talking to a friend you play with. Omit it when "+
 								"you have nothing to tell the visitors. Max %d characters.",
@@ -855,11 +855,11 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 // The system prompt is assembled from static pieces, so it is one stable
 // string with a stable prompt cache prefix.
 var systemPromptHead = fmt.Sprintf(
-	`You are the webmaster of beaverdream. It starts as a small anonymous message
+	`You are Naps, the webmaster of beaverdream. It starts as a small anonymous message
 board, and a post can turn it into anything: a game, a shop, a city, a world
 the posts live in. You are the one other presence in a room full of visitors.
 You have two voices: the page, which you rewrite, and your reply, which done
-posts on the board as a post signed webmaster. Every turn is your turn in one
+posts on the board as a post signed Naps. Every turn is your turn in one
 continuous conversation.
 
 The COMPACTED HISTORY is everything older, folded into one message so it fits.
@@ -1017,7 +1017,7 @@ var systemPromptMiddle = fmt.Sprintf(
   behavior. Up to %d keys, and every key must appear in the page.
 - done(reason, reply, notes): end your turn. reason is one sentence for your
   own log; you read it back next turn and visitors never see it. reply is
-  posted on the board as a post signed webmaster, the newest post, with its
+  posted on the board as a post signed Naps, the newest post, with its
   own No.; it is plain text, and >>12 links to post 12. Omit reply to post
   nothing. notes replaces your private notes to your future self. Omit notes
   to keep them.
@@ -1052,8 +1052,8 @@ Every version must contain a working post form, anywhere in the html. Start
 from this markup, because the server only listens on these names:
 
 <form class="postbox" method="post" action="posts" data-on:submit="@post('posts', {contentType: 'form'}); el.reset()">
-  <p class="postbox-title">post a message</p>
-  <textarea name="body" required maxlength="%d" rows="3" placeholder="say something" aria-label="message"></textarea>
+  <p class="postbox-title">say something</p>
+  <textarea name="body" required maxlength="%d" rows="3" placeholder="a hello, a request, anything" aria-label="post"></textarea>
   <div class="postbox-actions"><span>posting as {{name}}</span>
   <button type="submit">post</button></div>
 </form>
@@ -1063,8 +1063,8 @@ clears the box; the post then arrives in {{posts}} for everyone over the live
 stream. Keep it. Without it the form still works as a plain form
 post, which reloads the page.
 
-A board can live under a path, such as /w/NAME/. Write every board URL
-relative, with no leading slash: posts, x/state/KEY, j/KEY. A leading / sends
+A world can live under a path, such as /worlds/NAME/. Write every board URL
+relative, with no leading slash: posts, state/KEY, journal/KEY. A leading / sends
 the request to the server root and misses this board.
 
 The server records the visitor's identity name as the post author. Do not add a
@@ -1098,7 +1098,7 @@ The live page:
   through bd.save. These attribute names belong to
   Datastar, so do not use a Datastar name for your own data; data-cell and
   data-label are safe.
-- Use @post only for posts and x/state/KEY. They answer with nothing; the
+- Use @post only for posts and state/KEY. They answer with nothing; the
   new data comes back over the stream to every page at once. Never @get or
   @post the page itself or an absolute path: the reply would be patched into
   the document.
@@ -1122,15 +1122,15 @@ Shared state:
   everyone the moment anyone writes. Scripts get the beaverdream:state event
   with the values in detail.state; the JSON script tag id="bd-state" is kept
   current too.
-- POST x/state/KEY applies that key's op for the current visitor. The value
+- POST state/KEY applies that key's op for the current visitor. The value
   comes from a value=... query parameter or form field:
-    <button type="button" data-on:click="@post('x/state/likes')">like</button>
+    <button type="button" data-on:click="@post('state/likes')">like</button>
     <span data-text="$shared.likes"></span>
-    <button type="button" data-on:click="@post('x/state/poll?value=yes')">yes</button>
+    <button type="button" data-on:click="@post('state/poll?value=yes')">yes</button>
     <span data-text="$shared.poll.yes || 0"></span>
   A list holds {author, value, at} entries. Add to it with a form that has an
-  input named value and data-on:submit="@post('x/state/wall', {contentType:
-  'form'}); el.reset()". GET x/state returns {"schema": ..., "state": ...}.
+  input named value and data-on:submit="@post('state/wall', {contentType:
+  'form'}); el.reset()". GET state returns {"schema": ..., "state": ...}.
 - Use state only when a post asks for something people can click, vote on or
   leave behind. Do not add widgets just because you can. Shared values survive
   restores; heal and reset clear them. Do not store HTML in it.
@@ -1157,8 +1157,8 @@ Visitor state:
     bd.state.trade('buy_rod').then(function (r) {
       note.textContent = r.ok ? 'bought a rod' : r.reason === 'short' ? 'not enough gold' : r.reason
     })
-  Markup can also send @post('x/state/coins?add=5') or
-  @post('x/state/coins?add=' + $catch), but a refused @post shows nothing,
+  Markup can also send @post('state/coins?add=5') or
+  @post('state/coins?add=' + $catch), but a refused @post shows nothing,
   so a shop button calls bd.state.trade from a script.
 - $mine.KEY (by name, not label) is this visitor's count, kept live; bind
   markup to it and never keep your own copy of a balance. $tops.KEY is the
@@ -1217,7 +1217,7 @@ Rules:
   To make #bd-posts a box of its own, override it with
   #bd-posts{display:grid!important} or any display you like. Do not move the
   articles out or rebuild them as your own markup. A script can read data-id,
-  data-kind, data-author and data-when from each article. data-kind is post
+  data-kind, data-author-id and data-when from each article. data-kind is post
   for a visitor and reply for your own replies, which carry the class
   post-webmaster; a visitor can be named webmaster, so tell them apart by
   kind, never by author.
@@ -1704,18 +1704,18 @@ func writePage(b *promptBuilder, site Site) {
 		for _, def := range ParseStateSchema(site.StateSchema) {
 			hasGlobal = hasGlobal || def.Global()
 		}
-		if len(site.State) == 0 {
+		if len(site.Shared) == 0 {
 			if hasGlobal {
 				b.WriteString("(no values yet)\n")
 			}
 		} else {
-			keys := make([]string, 0, len(site.State))
-			for key := range site.State {
+			keys := make([]string, 0, len(site.Shared))
+			for key := range site.Shared {
 				keys = append(keys, key)
 			}
 			sort.Strings(keys)
 			for _, key := range keys {
-				fmt.Fprintf(&b.Builder, "%s: %s\n", key, site.State[key])
+				fmt.Fprintf(&b.Builder, "%s: %s\n", key, site.Shared[key])
 			}
 		}
 	}

@@ -13,7 +13,7 @@ import (
 
 // resetConfirm asks before the one destructive action. Both the plain form and
 // the Datastar click ask the same question.
-const resetConfirm = "confirm('Delete every post, feed row, shared value and later version, and clear the mutation history? This cannot be undone.')"
+const resetConfirm = "confirm('Reset the world: delete every post, journal row, shared value and later version, and clear the changeset history? This cannot be undone.')"
 
 // StateView is one value in the model-declared shared state.
 type StateView struct {
@@ -92,7 +92,7 @@ func stateText(states []StateView) string {
 	return strings.Join(lines, "\n")
 }
 
-// todayText is the number of mutations so far today.
+// todayText is the number of changesets so far today.
 func todayText(live LiveView) string {
 	return strconv.FormatInt(live.Today, 10)
 }
@@ -128,15 +128,15 @@ const (
 // follow the newest.
 type Panel struct {
 	// Base is the world's admin mount path, for example
-	// "/admin/w/heroes". Empty uses "/admin", which keeps the root panel and
-	// its tests working.
+	// "/admin/worlds/heroes". Empty uses "/admin", which keeps the root panel
+	// and its tests working.
 	Base string
 	Page string
 	Turn int64
-	// Feed, Match, Visitor and Before are what the journal page browses: a
+	// Key, Match, Visitor and Before are what the journal page browses: a
 	// key, one match of it, one visitor's rows, and the row id to page back
 	// from. They live in the URL, so the stream renders the same selection.
-	Feed    string
+	Key     string
 	Match   int64
 	Visitor string
 	Before  int64
@@ -185,8 +185,8 @@ func (p Panel) turnPath(id int64, newest bool) string {
 // picked.
 func (p Panel) query() string {
 	v := url.Values{}
-	if p.Feed != "" {
-		v.Set("feed", p.Feed)
+	if p.Key != "" {
+		v.Set("key", p.Key)
 		if p.Match > 0 {
 			v.Set("match", i64(p.Match))
 		}
@@ -194,8 +194,8 @@ func (p Panel) query() string {
 			v.Set("before", i64(p.Before))
 		}
 	}
-	// A picked visitor filters the feed and opens their state ops, so it
-	// stays without a feed too.
+	// A picked visitor filters the key and opens their state ops, so it
+	// stays without a key too.
 	if p.Visitor != "" {
 		v.Set("visitor", p.Visitor)
 	}
@@ -253,9 +253,10 @@ type AdminView struct {
 	// CSRF is the token every action form carries for this login. Empty when
 	// the request has no login cookie, which is why login redirects.
 	CSRF string
-	// Board is the board's URL as seen from the admin port, for the header
-	// link. The admin runs on its own port, so a relative link would 404.
-	Board string
+	// BoardURL is the world's page as seen from the admin port, for the
+	// header link. The admin runs on its own port, so a relative link would
+	// 404.
+	BoardURL string
 	// Stream is the data-init that opens this page's stream.
 	Stream string
 	// Run is the turn in flight, for the inspector to show before the
@@ -340,7 +341,7 @@ templ AdminBody(view AdminView) {
 				<div class="ml-auto flex items-center gap-1.5">
 					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href="/admin">← back office</a>
 					@themeToggle()
-					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.Board } target="_blank" rel="noopener">board ↗</a>
+					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.BoardURL } target="_blank" rel="noopener">open world ↗</a>
 					<form method="post" action="/logout" class="contents">
 						@csrfInput(view.CSRF)
 						<button type="submit" class="cursor-pointer rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200">sign out</button>
@@ -394,7 +395,7 @@ templ worldSwitcher(view AdminView) {
 			class="max-w-40 cursor-pointer rounded-md border border-gray-300 bg-white px-2 py-0.5 font-mono text-sm text-gray-700 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-300"
 		>
 			for _, world := range view.Worlds {
-				<option value={ "/admin/w/" + world.Slug + "/" } selected?={ world.Slug == view.World }>{ world.Slug }</option>
+				<option value={ "/admin/worlds/" + world.Slug + "/" } selected?={ world.Slug == view.World }>{ world.Slug }</option>
 			}
 		</select>
 	}
@@ -444,10 +445,10 @@ templ sitePage(view AdminView) {
 					data-attr:disabled="$_resetting"
 					data-on:click={ "evt.preventDefault(); if (" + resetConfirm + ") @post('" + view.Panel.Action("/reset") + "', {contentType: 'form'})" }
 					class="cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
-				>reset the board</button>
+				>reset the world</button>
 			</form>
 			<p class={ adminMuted }>
-				Deletes every post, feed row, shared value and later version, and clears the mutation history. The original version stays.
+				Resets the world: deletes every post, journal row, shared value and later version, and clears the changeset history. The original version stays.
 			</p>
 		</div>
 	</section>
@@ -456,7 +457,7 @@ templ sitePage(view AdminView) {
 templ adminInstruct(panel Panel, csrf string) {
 	<section class={ adminCard }>
 		<p class={ adminLabel }>talk to the webmaster</p>
-		<form method="post" action={ templ.SafeURL(panel.Action("/mutate")) } class="mt-2 flex flex-col gap-2" data-on:submit={ "@post('" + panel.Action("/mutate") + "', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" } data-indicator:_sending>
+		<form method="post" action={ templ.SafeURL(panel.Action("/changeset")) } class="mt-2 flex flex-col gap-2" data-on:submit={ "@post('" + panel.Action("/changeset") + "', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" } data-indicator:_sending>
 			@csrfInput(csrf)
 			<textarea
 				name="instruction"
@@ -652,7 +653,7 @@ templ AdminBudget(b BudgetView) {
 templ AdminMemory(summary string, through int64, notes string) {
 	<section id="admin-memory" class={ adminCard + " flex flex-col gap-3" }>
 		<div>
-			<p class={ adminLabel }>compacted memory</p>
+			<p class={ adminLabel }>room summary</p>
 			if summary == "" {
 				<p class="mt-2 text-sm text-gray-400 dark:text-neutral-600">nothing compacted yet</p>
 			} else {

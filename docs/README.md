@@ -5,7 +5,7 @@ Start with the [README](../README.md). These pages go deeper.
 ## Guides
 
 - [Worlds and invites](worlds.md): accounts, invites, worlds and daily budgets.
-- [LAN play](lan-play.md): share a running board with friends on your network.
+- [LAN play](lan-play.md): share a running world with friends on your network.
 - [Configuration](configuration.md): every environment variable and its default,
   plus how to run the binary.
 - [Admin panel](admin.md): the bootstrap password, sessions and the admin pages.
@@ -27,3 +27,5 @@ a plan that is not built yet. The code is the source of truth.
   a visitor's place and the page state across reloads.
 - [worlds-and-invites.md](wip/worlds-and-invites.md): invite-only access with daily
   budgets, then many worlds on one instance. Not built.
+- [naming.md](wip/naming.md): the vocabulary contract, the Naps persona, the
+  URL paths, the renames and the seed. Not built.

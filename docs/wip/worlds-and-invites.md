@@ -26,8 +26,8 @@ migration. See [Removed](#removed).
    cooldowns. Drop the old keys; no migration.
 5. Revoke cancels that identity's open streams.
 6. Usage and the budget.
-7. Worlds: the lobby, admin create and delete, and `/w/{slug}` routing on the
-   play port. The first world is created by the admin and is named `heroes`.
+7. Worlds: the lobby, admin create and delete, and `/worlds/{slug}` routing on
+   the play port. The first world is created by the admin and is named `heroes`.
 
 Each step ends with `task check` and `go test ./...` passing.
 
@@ -37,8 +37,8 @@ Two listeners, both from the same binary:
 
 - **`APP_PORT`, default 6930**: the management plane. Login, account, API
   tokens, invites, the world registry and the admin pages.
-- **`PLAY_PORT`, default 6932**: the boards. Each world's board, its `/live`
-  stream, posts, state, journal and error beacon.
+- **`PLAY_PORT`, default 6932**: the worlds. Each world's page, its
+  `/worlds/{slug}/live` stream, posts, state, journal and error beacon.
 
 `HOST` binds both. The live reload proxy keeps its own port. `Taskfile.yml`,
 `docs/configuration.md`, `docs/lan-play.md` and the tests change with the rename.
@@ -49,12 +49,12 @@ through the handoff below.
 ### What the ports do and do not separate
 
 Cookies ignore ports. On `localhost`, a cookie set by 6930 is sent to 6932 too.
-So a board script on 6932 can send a request to 6930 with the app session
+So a page script on 6932 can send a request to 6930 with the app session
 attached. CORS stops it from reading the reply, but the request still goes
 through. The app therefore needs a CSRF token on every state-changing POST.
 
 - The token is derived from the session with an HMAC. It is rendered into app
-  forms only. A board script cannot read it across origins.
+  forms only. A page script cannot read it across origins.
 - A `GET` never changes state.
 - Real isolation needs two different sites, with different registrable domains.
   On `localhost` you get the code path and the tokens, not the isolation. Test
@@ -103,8 +103,8 @@ Password rules and the hashing details are left to the implementer.
 - `app`: the management plane. Held by a browser after login. Can change the
   account, mint API tokens, create invites and, for admins, create and delete
   worlds. Expires after 7 days.
-- `play`: a board. Minted by the handoff. It can post and play, and it cannot
-  change credentials. No expiry by default.
+- `play`: a play session for a world. Minted by the handoff. It can post and
+  play, and it cannot change credentials. No expiry by default.
 - `api`: a script token. Admin identity only for now. Sent as
   `Authorization: Bearer` or `X-Admin-Token`. It skips the CSRF check, since a
   script cannot attach an ambient cookie. Never a query parameter.
@@ -122,7 +122,7 @@ it.
   not offer a password change for the bootstrap login.
 - If `ADMIN_PASSWORD` is empty, the server generates one and logs it, as now.
 - Only admins create invites, create worlds and delete worlds.
-- The admin can play boards like any identity. Its board sessions are never
+- The admin can play worlds like any identity. Its play sessions are never
   refused and never counted toward a budget.
 - The API token replaces the password-as-header. It is a random value of about
   32 bytes, shown once when created, stored as a hash in `sessions` with
@@ -143,10 +143,10 @@ it.
    it is kept. The `app` cookie never
    reaches the play port's requests, except on localhost, where the CSRF rule
    above applies.
-5. Without a play session, a board request gets the gate page. `/live` answers
-   204, so Datastar stops retrying.
+5. Without a play session, a play request gets the gate page.
+   `/worlds/{slug}/live` answers 204, so Datastar stops retrying.
 
-The handoff adds one redirect the first time a browser opens a board. Later
+The handoff adds one redirect the first time a browser opens a world. Later
 visits use the play cookie.
 
 ## Invites
@@ -180,7 +180,7 @@ visits use the play cookie.
 ## Revocation
 
 - Revoking an identity sets `disabled_at`, revokes its sessions, and cancels its
-  open `/live` streams through the hub. Otherwise a revoked player keeps
+  open live streams through the hub. Otherwise a revoked player keeps
   receiving pushes until the page reloads.
 - Revoking one session affects one browser only.
 - Log out everywhere revokes every session of an identity.
@@ -206,8 +206,8 @@ visits use the play cookie.
   transaction cannot span two sqlite files. A crash between the two loses one
   turn's charge. That is accepted.
 - Admin turns count toward neither budget and are never refused.
-- A budget refusal goes to the board as a 429, never to the error beacon. The
-  board reads `GET /x/budget` for `{used, limit}`.
+- A budget refusal goes to the play page as a 429, never to the error beacon.
+  The page reads `GET /worlds/{slug}/budget` for `{used, limit}`.
 
 ## Registry and reset
 
@@ -224,14 +224,15 @@ visits use the play cookie.
 
 ## Worlds
 
-- One sqlite file per world. Migrations run per file, and the seed in
-  `000001_init.sql` stays frozen.
+- One sqlite file per world. Migrations run per file. Pre-production the seed
+  and schema live in `000001_init.sql`, edited in place; it freezes at the
+  first production deploy, and later changes are new numbered migrations.
 - Only an admin creates and deletes worlds.
 - A `World` struct holds what the handler set holds today: the database, the
-  hub, `mu`, the worker and the mutator. A registry loads worlds lazily and
-  unloads idle ones.
+  hub, `mu`, the worker and the changeset runner. A registry loads worlds lazily
+  and unloads idle ones.
 - The app port lists worlds (the lobby), creates them and shows a play button.
-  The play port serves `/w/{slug}/...`.
+  The play port serves `/worlds/{slug}/...`.
 - The current database, `data/sqlite.db`, is deleted when the new layout lands.
   The owner backs up what they want first. The first world is created fresh
   and named `heroes`.
@@ -316,10 +317,10 @@ Run the real router through `httptest`, with `lib/mockllm`:
 - An expired, revoked or exhausted invite is refused. An invite at its exact
   expiry instant is refused.
 - A redemption logs out an existing app session in the same browser.
-- A revoked identity is refused on its next request, and its open `/live`
+- A revoked identity is refused on its next request, and its open live
   stream closes.
-- A forged or unknown session cookie gets the gate page. `/live` without a
-  session answers 204.
+- A forged or unknown session cookie gets the gate page. The live stream
+  without a session answers 204.
 - A `POST` without a CSRF token on the app port is refused.
 - A non-admin cannot create or delete a world.
 - A post at the member limit and one at the global limit get 429 with reason
@@ -338,7 +339,7 @@ Run the real router through `httptest`, with `lib/mockllm`:
 | Name | Default | Meaning |
 |---|---|---|
 | `APP_PORT` | 6930 | The app: login, invites, worlds, admin |
-| `PLAY_PORT` | 6932 | The boards |
+| `PLAY_PORT` | 6932 | The worlds |
 | `HOST` | unchanged | Bind address for both |
 | `ADMIN_PASSWORD` | empty | Bootstrap password, written on every start |
 | `APP_SESSION_TTL` | 168h | App sessions, 7 days |
@@ -380,7 +381,7 @@ From an Opus review of this plan. Not yet folded into the sections above.
 - Open existing worlds with `mode=rw`. The default `mode=rwc` creates an empty
   file, so a request after a delete could rebuild an orphan world.
 - Delete and the `creating` cleanup also remove the `-wal` and `-shm` files.
-- Closing a world drains its worker and closes its `/live` and admin streams
+- Closing a world drains its worker and closes its live and admin streams
   before the database closes. Otherwise a finishing turn writes to a closed
   handle.
 - Idle unload needs a definition: no subscribers, no queued posts, no running
@@ -398,7 +399,7 @@ From an Opus review of this plan. Not yet folded into the sections above.
 - Play cookies are `HttpOnly`. App and play cookies have different names, so the
   handoff cannot overwrite the app session on localhost.
 - Every app-port response sends `frame-ancestors 'none'` (or `X-Frame-Options:
-  DENY`), so a board cannot frame the app.
+  DENY`), so a play page cannot frame the app.
 - "Press play" is a POST with CSRF, or a GET that only mints the code. The code
   is bound to the identity and the world, and the redirect after exchange drops
   it from the URL.
@@ -420,13 +421,13 @@ From an Opus review of this plan. Not yet folded into the sections above.
 - "One turn overshoot" really means one turn per running world, plus posts
   queued before their usage is written.
 - A plain form POST that hits a budget refusal gets a raw 429, and the typed
-  post is lost. Say what a plain POST gets. `GET /x/budget` also needs a world
-  prefix.
+  post is lost. Say what a plain POST gets. `GET /worlds/{slug}/budget` now
+  carries the world prefix.
 
 ### Routes and revocation
 
-- Admin pages per world need a route scheme, such as `/admin/w/{slug}/...`, and
-  a rule for which hub the admin streams subscribe to.
+- Admin pages per world need a route scheme, such as `/admin/worlds/{slug}/...`,
+  and a rule for which hub the admin streams subscribe to.
 - Revoking an identity must reach every loaded world's hub, not just one.
 - Revoking one session says whether its streams close.
 

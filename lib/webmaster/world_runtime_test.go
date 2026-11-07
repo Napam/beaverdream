@@ -17,7 +17,7 @@ const scenario = process.argv[3]
 const world = scenario === 'world'
 
 const config = world
-  ? { visitor: 'me', keys: { moves: { match: 1, rules: 1 } }, base: '/w/heroes', store: 'bd:world42:' }
+  ? { visitor: 'me', keys: { moves: { match: 1, rules: 1 } }, base: '/worlds/heroes', store: 'bd:world42:' }
   : { visitor: 'me', keys: { moves: { match: 1, rules: 1 } } }
 
 function node() {
@@ -74,7 +74,7 @@ function reply(status, body) {
 global.fetch = (url, opts) => {
   const method = (opts && opts.method) || 'GET'
   fetches.push(method + ' ' + url)
-  if (url.indexOf('/x/state/') >= 0) return Promise.resolve(reply(200, { ok: true, mine: { coins: 2 } }))
+  if (url.indexOf('/state/') >= 0) return Promise.resolve(reply(200, { ok: true, mine: { coins: 2 } }))
   if (method === 'POST') {
     return Promise.resolve(reply(200, { id: 3, key: 'moves', visitor: 'me', payload: { n: 1 }, match: 1, rules: 1 }))
   }
@@ -132,15 +132,15 @@ func runWorld(t *testing.T, scenario string) worldResult {
 func TestWorldRuntimePrefixesItsRoutes(t *testing.T) {
 	got := runWorld(t, "world")
 	for _, want := range []string{
-		"GET /w/heroes/j/moves?since=0",
-		"POST /w/heroes/j/moves",
-		"POST /w/heroes/x/state/coins?add=2",
+		"GET /worlds/heroes/journal/moves?since=0",
+		"POST /worlds/heroes/journal/moves",
+		"POST /worlds/heroes/state/coins?add=2",
 	} {
 		if !contains(got.Fetches, want) {
 			t.Errorf("fetches = %v, want %q", got.Fetches, want)
 		}
 	}
-	if len(got.Beacons) != 1 || got.Beacons[0] != "/w/heroes/x/err" {
+	if len(got.Beacons) != 1 || got.Beacons[0] != "/worlds/heroes/errors" {
 		t.Errorf("beacons = %v, want the world's error route", got.Beacons)
 	}
 }
@@ -166,15 +166,15 @@ func TestWorldRuntimeNamespacesSaves(t *testing.T) {
 func TestRootRuntimeKeepsRootRoutes(t *testing.T) {
 	got := runWorld(t, "root")
 	for _, want := range []string{
-		"GET /j/moves?since=0",
-		"POST /j/moves",
-		"POST /x/state/coins?add=2",
+		"GET /journal/moves?since=0",
+		"POST /journal/moves",
+		"POST /state/coins?add=2",
 	} {
 		if !contains(got.Fetches, want) {
 			t.Errorf("fetches = %v, want %q", got.Fetches, want)
 		}
 	}
-	if len(got.Beacons) != 1 || got.Beacons[0] != "/x/err" {
+	if len(got.Beacons) != 1 || got.Beacons[0] != "/errors" {
 		t.Errorf("beacons = %v, want the root error route", got.Beacons)
 	}
 	if got.Loaded["x"] != 9 {

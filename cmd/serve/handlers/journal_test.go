@@ -73,7 +73,7 @@ func appendJournalRules(
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/j/"+key, strings.NewReader(string(body)))
+	req := httptest.NewRequest(http.MethodPost, "/journal/"+key, strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req = handlers.WithTestPrincipal(req, visitor, "dave", false, true)
 	req = withURLParam(req, "key", key)
@@ -91,7 +91,7 @@ func readJournal(
 	t.Helper()
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/j/"+key+"?since="+strconv.FormatInt(since, 10),
+		"/journal/"+key+"?since="+strconv.FormatInt(since, 10),
 		nil,
 	)
 	req = withURLParam(req, "key", key)
@@ -231,7 +231,7 @@ func TestJournalAssignsVisitor(t *testing.T) {
 	declareJournal(t, queries, `{"moves":{"max":10,"rules":1}}`)
 
 	body := strings.NewReader(`{"payload":{"cell":1},"rules":1}`)
-	req := httptest.NewRequest(http.MethodPost, "/j/moves", body)
+	req := httptest.NewRequest(http.MethodPost, "/journal/moves", body)
 	req.Header.Set("Content-Type", "application/json")
 	req = handlers.WithTestPrincipal(req, visitorA, "dave", false, true)
 	req = withURLParam(req, "key", "moves")
@@ -257,7 +257,7 @@ func TestClientErrorCollapsesBurst(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		req := httptest.NewRequest(
 			http.MethodPost,
-			"/x/err",
+			"/errors",
 			strings.NewReader(`{"message":"reduce is not a function"}`),
 		)
 		rec := httptest.NewRecorder()
@@ -416,7 +416,7 @@ func countAlerts(t *testing.T, queries *sqlc.Queries) int {
 
 func sendClientError(t *testing.T, h *handlers.Handlers, body string) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/x/err", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/errors", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ClientError(rec, req)
 	if rec.Code != http.StatusNoContent {
@@ -510,7 +510,7 @@ func TestHealKeepsTheJournalWhenTheWriteFails(t *testing.T) {
 	ctx := context.Background()
 	declareJournal(t, queries, `{"moves":{"max":10,"rules":1}}`)
 	appendJournal(t, h.JournalAppend, "moves", `{"x":1}`, 0, visitorA)
-	if err := queries.UpsertSiteState(ctx, sqlc.UpsertSiteStateParams{
+	if err := queries.UpsertSharedState(ctx, sqlc.UpsertSharedStateParams{
 		Key:   "votes",
 		Value: "7",
 	}); err != nil {
@@ -521,18 +521,18 @@ func TestHealKeepsTheJournalWhenTheWriteFails(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'no versions'); END`); err != nil {
 		t.Fatalf("create trigger: %v", err)
 	}
-	postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
 	if count, err := queries.CountJournal(ctx); err != nil || count != 1 {
 		t.Fatalf("journal rows after a failed heal = %d (%v), want 1", count, err)
 	}
-	if state, err := queries.ListSiteState(ctx); err != nil || len(state) != 1 {
+	if state, err := queries.ListSharedState(ctx); err != nil || len(state) != 1 {
 		t.Fatalf("state after a failed heal = %+v (%v), want the vote kept", state, err)
 	}
 
 	if err := h.ExecForTest(ctx, `DROP TRIGGER no_versions`); err != nil {
 		t.Fatalf("drop trigger: %v", err)
 	}
-	postAdmin(t, h.HealBoard, "/admin/heal", url.Values{})
+	postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
 	if count, err := queries.CountJournal(ctx); err != nil || count != 0 {
 		t.Fatalf("journal rows after a heal = %d (%v), want 0", count, err)
 	}

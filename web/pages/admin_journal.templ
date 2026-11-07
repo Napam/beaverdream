@@ -224,7 +224,7 @@ func browseLinkClass(picked bool) string {
 
 // holdingCard is one visitor counter: what everyone holds, what was gained
 // in the last hour, and the biggest holders. A holder's id picks them, which
-// opens their op log and filters the feed to them.
+// opens their op log and filters the key to them.
 templ holdingCard(k HoldingView, panel Panel, csrf string) {
 	<section class={ adminCard + " flex flex-col gap-3" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">

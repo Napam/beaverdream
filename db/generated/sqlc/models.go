@@ -33,7 +33,7 @@ type RoomSummary struct {
 	CreatedAt     string
 }
 
-type SiteState struct {
+type SharedState struct {
 	Key       string
 	Value     string
 	UpdatedAt string

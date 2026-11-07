@@ -79,7 +79,7 @@ type stateKeyInput struct {
 }
 
 // editor applies tool calls to a copy of the site. Nothing reaches the
-// database until the whole mutation finishes, so a failed round cannot leave a
+// database until the whole changeset finishes, so a failed round cannot leave a
 // half-written page behind.
 type editor struct {
 	site   Site

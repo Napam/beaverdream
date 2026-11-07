@@ -21,7 +21,7 @@ const stateTag = { textContent: '{}' }
 const journalTag = { textContent: '{}' }
 const world = scenario.indexOf('world') === 0
 if (world) {
-  journalTag.textContent = JSON.stringify({ base: '/w/heroes', store: 'bd:abc:' })
+  journalTag.textContent = JSON.stringify({ base: '/worlds/heroes', store: 'bd:abc:' })
 }
 const stored = {}
 let replaced = ''
@@ -327,7 +327,7 @@ func TestLiveScriptDropsDuplicatePosts(t *testing.T) {
 // A world page reloads into its own mount path, not the server root.
 func TestLiveScriptUsesTheWorldBaseForReloads(t *testing.T) {
 	got := runLiveScript(t, "worldreload")
-	if got.Replaced != "/w/heroes/?v=5" {
+	if got.Replaced != "/worlds/heroes/?v=5" {
 		t.Fatalf("replaced = %q, want the world's reload URL", got.Replaced)
 	}
 }
@@ -360,7 +360,7 @@ func TestLiveScriptSavesUnderTheWorldStorage(t *testing.T) {
 	if _, ok := got.Stored["bd:draft"]; ok {
 		t.Error("a world draft leaked into the root storage key")
 	}
-	if got.Replaced != "/w/heroes/?v=5" {
+	if got.Replaced != "/worlds/heroes/?v=5" {
 		t.Errorf("replaced = %q, want the world's reload URL", got.Replaced)
 	}
 }

@@ -196,7 +196,7 @@ func datastarPost(
 	if name != "" {
 		req = withIdentity(req, name)
 	}
-	if key, ok := strings.CutPrefix(req.URL.Path, "/x/state/"); ok {
+	if key, ok := strings.CutPrefix(req.URL.Path, "/state/"); ok {
 		req = withURLParam(req, "key", key)
 	}
 	rec := httptest.NewRecorder()
@@ -244,7 +244,7 @@ func TestLiveStreamPushesPostsInPlace(t *testing.T) {
 		[]string{"selector #bd-posts", "mode prepend", "second mocknoop"},
 		"first mocknoop",
 	)
-	// The webmaster turn may reserve its id before or after this post, so the
+	// The changeset may reserve its id before or after this post, so the
 	// id itself varies.
 	live.next(t, []string{`bdLive.posts(`, `"prepend", [`})
 }
@@ -475,14 +475,14 @@ func TestLiveStreamPushesSharedState(t *testing.T) {
 	live := openLive(t, h, cursor{Version: site.ID})
 	live.next(t, []string{`"shared":{`, `"likes":0`})
 
-	rec := datastarPost(t, h.SetState, "/x/state/likes", nil, "dave")
+	rec := datastarPost(t, h.SetState, "/state/likes", nil, "dave")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("datastar state write: status = %d, want 204", rec.Code)
 	}
 	live.next(t, []string{`"shared":{`, `"likes":1`})
 	live.next(t, []string{"bdLive.state(", `"likes":1`})
 
-	rec = datastarPost(t, h.SetState, "/x/state/poll?value=yes", nil, "erin")
+	rec = datastarPost(t, h.SetState, "/state/poll?value=yes", nil, "erin")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("choice from the query string: status = %d, want 204", rec.Code)
 	}

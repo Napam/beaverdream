@@ -532,7 +532,7 @@ func TestRenderPostsAddsBoardConventions(t *testing.T) {
 // spans. The author is visitor input, so the attribute is escaped too.
 func TestRenderPostsCarriesDataAttributes(t *testing.T) {
 	got := RenderPosts([]Post{{ID: 3, Author: `d"><b>`, When: "Nov 4 21:00", Body: "hi"}})
-	want := `<article class="post" id="p3" data-id="3" data-kind="post" data-author="d&#34;&gt;&lt;b&gt;" data-when="Nov 4 21:00">`
+	want := `<article class="post" id="p3" data-id="3" data-kind="post" data-author="d&#34;&gt;&lt;b&gt;" data-author-id="d&#34;&gt;&lt;b&gt;" data-when="Nov 4 21:00">`
 	if !strings.HasPrefix(got, want) {
 		t.Errorf("got %s, want it to start with %s", got, want)
 	}
@@ -594,7 +594,7 @@ func TestSiteDocEmbedsSharedStateSafely(t *testing.T) {
 		Site{
 			HTML:        PostsPlaceholder,
 			StateSchema: `{"votes":{"op":"counter"}}`,
-			State: map[string]json.RawMessage{
+			Shared: map[string]json.RawMessage{
 				"votes": json.RawMessage(`{"html":"<b>x</b>"}`),
 			},
 		},

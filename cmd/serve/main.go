@@ -102,11 +102,11 @@ func run(logger *slog.Logger) error {
 		clientOpts = append(clientOpts, option.WithHeader("x-opencode-session", sessionID))
 	}
 	client := openai.NewClient(clientOpts...)
-	newMutator := func() *webmaster.Mutator {
+	newRunner := func() *webmaster.ChangesetRunner {
 		return webmaster.New(
 			client,
 			env.Vars.OpenAIModel,
-			env.Vars.MutationRounds,
+			env.Vars.ChangesetRounds,
 			env.Vars.OpenAIReasoningEffort,
 		)
 	}
@@ -122,7 +122,7 @@ func run(logger *slog.Logger) error {
 		ThreeSrc:       beaverdream.StaticRootPath("static/three.module.js"),
 		ThreeAddonsSrc: beaverdream.StaticRootPath("static/three-addons.js"),
 	}
-	app := handlers.NewApp(logger, reg, manager, newMutator, handlers.AppConfig{
+	app := handlers.NewApp(logger, reg, manager, newRunner, handlers.AppConfig{
 		Config: cfg,
 		Budget: registry.Budget{
 			Identity: env.Vars.DailyTokensIdentity,

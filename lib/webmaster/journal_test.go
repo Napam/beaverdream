@@ -238,7 +238,7 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 	)
 	m := New(client, "fake", 3, "")
 
-	res, err := m.Mutate(
+	res, err := m.Run(
 		context.Background(),
 		Site{
 			HTML:          journalBoard,
@@ -248,7 +248,7 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 		Post{Author: "dave", Body: "make it plain"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !res.Done {
 		t.Fatal("the turn never finished")
@@ -307,21 +307,21 @@ func TestJournalSchemaKeepsOmittedNumbers(t *testing.T) {
 const journalBoard = `<main><h2>moves</h2><div id="game"></div>` +
 	`<script>var feed = bd.journal("moves")</script>{{posts}}</main>`
 
-func mutateWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
+func runChangesetWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
 	t.Helper()
 	server := fakeModel(t, rounds)
 	client := openai.NewClient(
 		option.WithBaseURL(server.URL),
 		option.WithAPIKey("test"),
 	)
-	res, err := New(client, "fake", 3, "").Mutate(
+	res, err := New(client, "fake", 3, "").Run(
 		context.Background(),
 		site,
 		Room{},
 		Post{Author: "dave", Body: "tidy up"},
 	)
 	if err != nil {
-		t.Fatalf("Mutate: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 	return res
 }
@@ -329,7 +329,7 @@ func mutateWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
 // Editing prose that happens to name the key is not dropping the feed: the
 // call is still there, so done ends the turn at once.
 func TestDoneKeepsAProseEditWhenTheCallStays(t *testing.T) {
-	res := mutateWith(t, Site{
+	res := runChangesetWith(t, Site{
 		HTML:          journalBoard,
 		JournalSchema: `{"moves":{"rules":1}}`,
 	}, [][]fakeToolCall{{

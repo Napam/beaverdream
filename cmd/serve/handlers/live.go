@@ -271,7 +271,7 @@ func (h *Handlers) syncState(
 		h.logRead("Live stream could not load the site", err)
 		return nil
 	}
-	rows, err := h.queries.ListSiteState(ctx)
+	rows, err := h.queries.ListSharedState(ctx)
 	if err != nil {
 		h.logRead("Live stream could not load shared state", err)
 		return nil

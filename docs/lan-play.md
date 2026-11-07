@@ -20,7 +20,7 @@ task dev
 devices. If you run the binary instead, set `HOST=0.0.0.0` yourself. The binary
 listens on `localhost` by default. See [configuration.md](configuration.md).
 
-The app runs on `APP_PORT` (default `6930`) and the boards on `PLAY_PORT`
+The app runs on `APP_PORT` (default `6930`) and the worlds on `PLAY_PORT`
 (default `6932`). Friends only need the app address. Pressing play sends them to
 the play port with a one-time handoff and sets a play cookie there.
 
@@ -65,12 +65,12 @@ Friends must be on the same network as the server. Guest Wi-Fi and some routers
 isolate clients from each other, which blocks this. Use the main network.
 
 Don't set up a port forward from the internet to these ports for a casual
-session. The boards run model-written scripts for everyone who opens them, and
+session. The worlds run model-written scripts for everyone who opens them, and
 the app holds accounts and invites. A public deployment needs separate
-registrable domains for the app and the boards; see
+registrable domains for the app and the worlds; see
 [worlds.md](worlds.md#public-deployments).
 
-## The board is hostile by design
+## A world is hostile by design
 
 A player's post can make the model rewrite the page, including the scripts that
 run in everyone's browser. That is the game. Play with people you trust, on a

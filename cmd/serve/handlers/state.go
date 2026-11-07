@@ -36,7 +36,7 @@ func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 	}
 	schema := parseStateSchema(site.StateSchema)
 
-	rows, err := h.queries.ListSiteState(r.Context())
+	rows, err := h.queries.ListSharedState(r.Context())
 	if err != nil {
 		http.Error(w, "unknown", http.StatusInternalServerError)
 		return
@@ -62,7 +62,7 @@ func (h *Handlers) State(w http.ResponseWriter, r *http.Request) {
 // Visitor counters and recipes are not shared values and are skipped.
 func stateValues(
 	schema map[string]webmaster.StateKey,
-	rows []sqlc.SiteState,
+	rows []sqlc.SharedState,
 ) map[string]json.RawMessage {
 	stored := make(map[string]string, len(rows))
 	for _, row := range rows {
@@ -177,7 +177,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 
 	h.stateMu.Lock()
 	existing := ""
-	if row, err := h.queries.GetSiteState(r.Context(), key); err == nil {
+	if row, err := h.queries.GetSharedState(r.Context(), key); err == nil {
 		existing = row.Value
 	}
 	value, err := applyState(
@@ -192,7 +192,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		writeStateError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.queries.UpsertSiteState(r.Context(), sqlc.UpsertSiteStateParams{
+	if err := h.queries.UpsertSharedState(r.Context(), sqlc.UpsertSharedStateParams{
 		Key:   key,
 		Value: value,
 	}); err != nil {

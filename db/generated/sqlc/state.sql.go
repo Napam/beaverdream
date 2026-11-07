@@ -9,49 +9,49 @@ import (
 	"context"
 )
 
-const deleteSiteState = `-- name: DeleteSiteState :exec
-DELETE FROM site_state
+const deleteSharedState = `-- name: DeleteSharedState :exec
+DELETE FROM shared_state
 `
 
-func (q *Queries) DeleteSiteState(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteSiteState)
+func (q *Queries) DeleteSharedState(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, deleteSharedState)
 	return err
 }
 
-const getSiteState = `-- name: GetSiteState :one
+const getSharedState = `-- name: GetSharedState :one
 SELECT
   "key", value, updated_at
 FROM
-  site_state
+  shared_state
 WHERE
   key = ?
 `
 
-func (q *Queries) GetSiteState(ctx context.Context, key string) (SiteState, error) {
-	row := q.db.QueryRowContext(ctx, getSiteState, key)
-	var i SiteState
+func (q *Queries) GetSharedState(ctx context.Context, key string) (SharedState, error) {
+	row := q.db.QueryRowContext(ctx, getSharedState, key)
+	var i SharedState
 	err := row.Scan(&i.Key, &i.Value, &i.UpdatedAt)
 	return i, err
 }
 
-const listSiteState = `-- name: ListSiteState :many
+const listSharedState = `-- name: ListSharedState :many
 SELECT
   "key", value, updated_at
 FROM
-  site_state
+  shared_state
 ORDER BY
   key
 `
 
-func (q *Queries) ListSiteState(ctx context.Context) ([]SiteState, error) {
-	rows, err := q.db.QueryContext(ctx, listSiteState)
+func (q *Queries) ListSharedState(ctx context.Context) ([]SharedState, error) {
+	rows, err := q.db.QueryContext(ctx, listSharedState)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SiteState
+	var items []SharedState
 	for rows.Next() {
-		var i SiteState
+		var i SharedState
 		if err := rows.Scan(&i.Key, &i.Value, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -66,9 +66,9 @@ func (q *Queries) ListSiteState(ctx context.Context) ([]SiteState, error) {
 	return items, nil
 }
 
-const upsertSiteState = `-- name: UpsertSiteState :exec
+const upsertSharedState = `-- name: UpsertSharedState :exec
 INSERT INTO
-  site_state (key, value, updated_at)
+  shared_state (key, value, updated_at)
 VALUES
   (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT (key) DO UPDATE
@@ -77,12 +77,12 @@ SET
   updated_at = excluded.updated_at
 `
 
-type UpsertSiteStateParams struct {
+type UpsertSharedStateParams struct {
 	Key   string
 	Value string
 }
 
-func (q *Queries) UpsertSiteState(ctx context.Context, arg UpsertSiteStateParams) error {
-	_, err := q.db.ExecContext(ctx, upsertSiteState, arg.Key, arg.Value)
+func (q *Queries) UpsertSharedState(ctx context.Context, arg UpsertSharedStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSharedState, arg.Key, arg.Value)
 	return err
 }

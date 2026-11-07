@@ -4,7 +4,7 @@ Status: built. This note is the design record; the code is the truth.
 
 ## What it is
 
-The board used to poll `/version` and reload the page when a stamp moved. Now
+The page used to poll `/version` and reload the page when a stamp moved. Now
 every open page holds one Datastar stream and the server pushes changes into
 it. Commands write; queries read; nothing on the page polls.
 
@@ -12,15 +12,16 @@ it. Commands write; queries read; nothing on the page polls.
 
 Every write path publishes a topic after it commits:
 
-- `POST /posts`, `POST /x/state/{key}`, `POST /j/{key}`
-- restore, undo, heal, inject and reset
+- `POST /worlds/{slug}/posts`, `POST /worlds/{slug}/state/{key}`,
+  `POST /worlds/{slug}/journal/{key}`
+- restore, undo, heal and reset
 - the worker, when a queued post starts and when a run ends
 
 A topic is a bit in a mask: posts, site, busy, state, journal, turns, draft.
-Turns is a finished webmaster run, version or not; only the admin panel reads
+Turns is a finished changeset, version or not; only the admin panel reads
 it. Draft is the round the model is writing, published at most every 100 ms;
 a stream subscribes to the topics it reads, and only admin streams ask for
-draft, so a streaming round never wakes a board. A topic carries no
+draft, so a streaming round never wakes a play page. A topic carries no
 data, so a stream cannot apply an event twice or out of order; it only learns
 that something changed and reads the current state. A subscriber keeps the
 mask of what changed since it last looked, so a burst coalesces into one sync.
@@ -33,8 +34,8 @@ no name answers 204, which tells Datastar to stop retrying.
 
 ## The query side
 
-`GET /live` is one stream per tab. It reads a cursor from the page's `_bd`
-signal:
+`GET /worlds/{slug}/live` is one stream per tab. It reads a cursor from the
+page's `_bd` signal:
 
 ```
 {"_bd": {"version": 4, "post": 9, "journal": 12}, "shared": {...}}
@@ -71,7 +72,7 @@ its cursor.
 Known gap: a reset rewinds every id. Open streams hear the reset and resync,
 but a tab whose stream was down through it reconnects with old cursors. If new
 ids have climbed back to exactly its cursor, it keeps stale posts or markup
-until the next change or a reload. A board epoch in the cursor would close
+until the next change or a reload. A world epoch in the cursor would close
 this; for a toy it is not worth the extra signal.
 
 ## The page
@@ -82,7 +83,8 @@ The mount is the first element in the body:
 ```html
 <div id="bd-live" hidden
      data-signals='{"_bd":{...},"shared":{...}}'
-     data-init="@get('/live', {retry: 'always', retryMaxCount: Infinity,
+     data-init="@get('/worlds/{slug}/live', {retry: 'always',
+                retryMaxCount: Infinity,
                 retryInterval: 1234,
                 filterSignals: {include: /^_bd\./, exclude: /^$/}})"></div>
 ```
@@ -110,16 +112,16 @@ The code-owned live script owns the parts Datastar does not:
 ## The admin pages and their streams
 
 The admin panel is pages that stack in one column: `/admin` (overview:
-instruction box, charts, compaction budget, memory), `/admin/turns` (a strip
+instruction box, charts, compaction budget, room summary), `/admin/turns` (a strip
 of recent turns over an inspector that follows the newest turn),
 `/admin/turns/{id}` (the same strip with one turn held), and `/admin/site`
 (current version, versions, journal and state, reset).
 
 The admin lives on its own port, `ADMIN_PORT` (default: the port after
-`PORT`, skipping the live reload proxy). The board's port redirects every
+`PORT`, skipping the live reload proxy). The play port redirects every
 `/admin` path there, keeping the host, so `http://192.168.1.5:6930/admin`
 becomes `http://192.168.1.5:6932/admin` for everyone on the network. The admin
-listener mounts the panel and the assets it loads and nothing else: no board
+listener mounts the panel and the assets it loads and nothing else: no play
 route, so model-written JavaScript never runs on the origin that holds the
 login cookie.
 
@@ -129,13 +131,13 @@ the same path, so the next request has the cookie and the page can render its
 CSRF token. Nothing like the token appears in the page or in a URL. A new
 `ADMIN_PASSWORD` invalidates every remembered login.
 
-Cookies ignore ports, so the board's page does send this cookie to the admin
+Cookies ignore ports, so the play page does send this cookie to the admin
 port. That is harmless for reads (the browser refuses to hand a cross-origin
 response to a script) but not for writes, which is why every
 cookie-authenticated POST must carry `csrf`: HMAC(ADMIN_PASSWORD, "admin-csrf:" +
 the cookie's signed expiry), in constant time. The panel puts it in every
 action form, and the stream puts it in the fragments that contain forms. The
-board cannot read the admin HTML, so it cannot learn the token. A request
+play page cannot read the admin HTML, so it cannot learn the token. A request
 authenticated by `X-Admin-Token` skips the check. Login needs none, since it
 is one shared identity and still needs the password.
 
@@ -145,7 +147,7 @@ address sends no fetch metadata at all, so such a check only passes on
 localhost.
 
 Any cookie with the login's name is tried and the first one that verifies is
-used, so a cookie planted by the board's page cannot lock the admin out.
+used, so a cookie planted by the play page cannot lock the admin out.
 Signing out clears this browser only; rotating `ADMIN_PASSWORD` signs out
 everyone. Without cookies the form works but every visit asks again.
 
@@ -200,9 +202,9 @@ tab.
 Datastar is the page's front end, so the system prompt teaches it: the
 attribute cheat sheet (`data-signals`, `data-on:click`, `data-show`,
 `data-text`, `data-class`, `data-bind`, `data-computed`, `data-on-interval`,
-`data-init`), the `@post` rule (only `/posts` and `/x/state/KEY`), the
+`data-init`), the `@post` rule (only `posts` and `state/KEY`), the
 reserved ids, `$shared`, and the three page events. The form example uses
-`data-on:submit="@post('/posts', {contentType: 'form'}); el.reset()"`, so the
+`data-on:submit="@post('posts', {contentType: 'form'}); el.reset()"`, so the
 seed and every restyle keep an in-place composer. A plain form post still
 works.
 
@@ -241,7 +243,7 @@ in SQLite and the stream reads everything after its cursor once per beat.
   reload, a missing cursor, shared state, journal rows and the 204 without a
   name.
 - `cmd/serve/handlers/swap_test.go` covers `swapKind`, the hub's coalescing and
-  a board stream that a draft never wakes.
+  a play stream that a draft never wakes.
 - `lib/webmaster/live_test.go` runs the live script in node or bun: reload,
   typing wait, stale reload, posts, stylesheet, state.
 - `lib/webmaster/journal_runtime_test.go` runs the journal runtime in node or

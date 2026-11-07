@@ -26,7 +26,7 @@ type IdleLimits struct {
 	Call time.Duration
 }
 
-// DefaultIdleLimits are the limits a Mutator starts with. LLM_IDLE_TIMEOUT sets
+// DefaultIdleLimits are the limits a ChangesetRunner starts with. LLM_IDLE_TIMEOUT sets
 // all three phases to one value, for a provider that is slower than these; a
 // zero turns the checks off.
 var DefaultIdleLimits = idleLimitsFromEnv()

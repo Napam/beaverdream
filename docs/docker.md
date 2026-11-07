@@ -1,6 +1,6 @@
 # Docker
 
-Run the app and its boards in a container so friends on your LAN can join.
+Run the app and its worlds in a container so friends on your LAN can join.
 
 ## Build and run
 
@@ -26,7 +26,7 @@ Then friends open:
 
     http://<host-LAN-IP>:6930
 
-The app is on 6930. The boards are on 6932, reached by pressing play; friends do
+The app is on 6930. The worlds are on 6932, reached by pressing play; friends do
 not type that address. The admin panel is on the app port under `/admin`.
 
 ## Admin password

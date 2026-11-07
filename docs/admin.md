@@ -2,8 +2,8 @@
 
 The admin panel is code-owned. The model never writes it. It lists a world's
 current version, its CSS and HTML, and the version history. It can restore an
-old version, undo the last change, heal the board, or reset it. It shows the
-recent webmaster turns with their prompts, tool calls and results. It also
+old version, undo the last change, heal the site, or reset it. It shows the
+recent changesets with their prompts, tool calls and results. It also
 sends an instruction straight to the model, and has a data page for journal
 feeds.
 
@@ -22,10 +22,11 @@ scripts off the origin that holds the app session.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
   read from the same definitions the model requests use. Skill bodies open in
   place; tool parameter schemas are shown as JSON.
-- `/admin/w/{slug}/...`: one world's turns, site tools and data page.
-  `/admin/w/{slug}/turns`, `/admin/w/{slug}/site` and
-  `/admin/w/{slug}/journal` are the main ones.
-- The header links back to the back office (`/admin`) and to the world's board.
+- `/admin/worlds/{slug}/...`: one world's turns, site tools and data page.
+  `/admin/worlds/{slug}/turns`, `/admin/worlds/{slug}/site` and
+  `/admin/worlds/{slug}/journal` are the main ones.
+- The header links back to the back office (`/admin`) and to the world's page
+  (`open world ↗`).
   On a world page, the world name in the breadcrumb is a switcher when there
   is more than one world.
 - The user pages are the warm surface: the lobby, the account, sign-in and the
@@ -33,7 +34,7 @@ scripts off the origin that holds the app session.
   The back office keeps the neutral gray chrome, and its header links back to
   the lobby.
 
-There is no `ADMIN_PORT`, no separate admin hostname, and no board redirect to
+There is no `ADMIN_PORT`, no separate admin hostname, and no play redirect to
 an admin port.
 
 ## Password

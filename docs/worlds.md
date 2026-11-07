@@ -1,8 +1,8 @@
 # Worlds, accounts and invites
 
-One beaverdream instance holds many worlds. Each world is a message board whose
-site a model rewrites. The app port owns accounts and the lobby; the play port
-owns the boards.
+One beaverdream instance holds many worlds. Each world starts as a plain page
+with a message board, and a model rewrites its site. The app port owns accounts
+and the lobby; the play port serves the worlds.
 
 ## First start
 
@@ -46,7 +46,7 @@ across restarts, set `ADMIN_PASSWORD` in `.env`.
 - Each world is one SQLite file under `WORLDS_DIR`, named by its random id.
   The slug is only a label in the registry, so renaming or reusing a slug never
   touches a path.
-- The play URL is `/w/{slug}`. The app shows a play button that hands the
+- The play URL is `/worlds/{slug}`. The app shows a play button that hands the
   browser to the play port with a one-time code.
 - Deleting a world closes its database, cancels its turn, removes its file and
   then removes the registry row. A crash halfway is finished on the next start.
@@ -73,9 +73,9 @@ already running finishes.
 
 Public play needs care:
 
-- Use two registrable domains, one for the app and one for the boards. Set
+- Use two registrable domains, one for the app and one for the worlds. Set
   `APP_URL` and `PLAY_URL`. Ports on one host are not an origin boundary.
-- Keep the app behind HTTPS. Board scripts run with the play session and must
+- Keep the app behind HTTPS. Page scripts run with the play session and must
   never reach the app origin's HTML.
 - Keep `ADMIN_PASSWORD` set and strong. The bootstrap password is the way back
   if the admin identity is disabled.

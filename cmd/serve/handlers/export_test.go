@@ -110,7 +110,7 @@ func (h *Handlers) ExecForTest(ctx context.Context, query string) error {
 
 // QueuePost and RunPending let tests queue a post and drain the queue without
 // racing the background worker.
-func (h *Handlers) QueuePost(post sqlc.Post) { h.mutateInBackground(post) }
+func (h *Handlers) QueuePost(post sqlc.Post) { h.queuePost(post) }
 
 func (h *Handlers) RunPending() { h.runPending() }
 
@@ -122,7 +122,7 @@ func (h *Handlers) HoldPost(post sqlc.Post) {
 }
 
 // HoldInstruction shows an admin instruction as waiting for a turn, the way a
-// real one does while it waits for the mutation lock.
+// real one does while it waits for the changeset lock.
 func (h *Handlers) HoldInstruction(text string) { h.addWaiting(text) }
 
 // TableCountsForTest counts the rows of every table, so a test can check

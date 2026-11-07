@@ -159,7 +159,7 @@ func (a *App) requirePlay(next http.Handler) http.Handler {
 			}
 			// Machine endpoints answer JSON, never a page a fetch would try
 			// to parse as data.
-			if strings.Contains(r.URL.Path, "/x/") || strings.Contains(r.URL.Path, "/j/") {
+			if isMachinePath(r.URL.Path) {
 				writeStateError(w, http.StatusUnauthorized, "sign in to play")
 				return
 			}
@@ -168,6 +168,27 @@ func (a *App) requirePlay(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, withPrincipal(r, p))
 	})
+}
+
+// isMachinePath reports a play endpoint whose answer is data, so an anonymous
+// request is refused in JSON instead of being shown the gate. The endpoint is
+// read after the world slug, because a world may itself be named state or
+// budget.
+func isMachinePath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/worlds/")
+	if !ok {
+		return false
+	}
+	_, endpoint, ok := strings.Cut(rest, "/")
+	if !ok {
+		return false
+	}
+	segment, _, _ := strings.Cut(endpoint, "/")
+	switch segment {
+	case "state", "journal", "errors", "budget":
+		return true
+	}
+	return false
 }
 
 // anonymousApp shows the login page to a browser and refuses a script.

@@ -30,23 +30,27 @@ const (
 	// defaultCompactAfterTurns is the backstop for many very short turns.
 	defaultCompactAfterTurns = 10_000
 	// compactMaxTurns caps one summarizer input, so a large backlog is folded
-	// in several mutations instead of one call that overflows the model.
+	// in several changesets instead of one call that overflows the model.
 	compactMaxTurns = 1000
-	// compactMaxChunks bounds the summarizer calls in one mutation.
+	// compactMaxChunks bounds the summarizer calls in one changeset.
 	compactMaxChunks = 8
-	// summarizeTimeout is separate from the mutation budget so a slow summary
+	// summarizeTimeout is separate from the changeset budget so a slow summary
 	// cannot starve the rewrite that follows it.
 	summarizeTimeout = 5 * time.Minute
 	// draftEvery bounds how often a streaming round repaints the admin panel.
 	// A fast model sends dozens of chunks a second; the panel needs a few.
 	draftEvery = 100 * time.Millisecond
+	// personaName is the webmaster's name on the board. Reply rows stored
+	// before the rename carry the role word "webmaster"; the kind tells them
+	// apart, so they show the current name without a data migration.
+	personaName = "Naps"
 )
 
-// mutationTimeout bounds one model call sequence. It is a backstop: a quiet
+// changesetTimeout bounds one model call sequence. It is a backstop: a quiet
 // stream is cut by the idle limits long before. A whole legal page is about
 // 17 minutes of generation, and a few rounds follow it. TURN_TIMEOUT
 // overrides it for a provider that is slower still.
-var mutationTimeout = env.GetEnvPositiveDuration("TURN_TIMEOUT", time.Hour)
+var changesetTimeout = env.GetEnvPositiveDuration("TURN_TIMEOUT", time.Hour)
 
 // Config holds the environment knobs one world's handlers enforce.
 type Config struct {
@@ -86,7 +90,7 @@ type Deps struct {
 	World    registry.World
 	DB       *sql.DB
 	Queries  *sqlc.Queries
-	Mutator  *webmaster.Mutator
+	Runner   *webmaster.ChangesetRunner
 	Config   Config
 	Budget   registry.Budget
 	// ModelSem caps model turns across every loaded world. Nil means no cap.
@@ -94,12 +98,12 @@ type Deps struct {
 }
 
 // runState is what the live endpoint and the admin panel show while a
-// mutation is in flight. Messages is the conversation so far, the prompt and
+// changeset is in flight. Messages is the conversation so far, the prompt and
 // every finished round, and Draft is the round the model is writing now, so
 // the turn inspector can follow the turn before it is stored. /version is
 // public and carries this as JSON, so model text stays out of it.
 type runState struct {
-	Kind       string              `json:"kind"`
+	Origin     string              `json:"origin"`
 	Authors    []string            `json:"authors,omitempty"`
 	Round      int                 `json:"round"`
 	Since      time.Time           `json:"since"`
@@ -120,7 +124,7 @@ type Handlers struct {
 	world   registry.World
 	db      *sql.DB
 	queries *sqlc.Queries
-	mutator *webmaster.Mutator
+	runner  *webmaster.ChangesetRunner
 	cfg     Config
 	budget  registry.Budget
 	// modelSem is the instance-wide model turn limiter shared by every world.
@@ -130,7 +134,7 @@ type Handlers struct {
 	// the board publishes; the streams do the reading.
 	hub *hub
 
-	// mu serializes mutations. One process, one site: a second mutation
+	// mu serializes changesets. One process, one site: a second changeset
 	// waiting beats two of them writing versions over each other.
 	mu sync.Mutex
 
@@ -147,13 +151,13 @@ type Handlers struct {
 	holdingsGen atomic.Int64
 	holders     holdersCache
 
-	// The worker coalesces posts that arrive while a mutation is running, so
+	// The worker coalesces posts that arrive while a changeset is running, so
 	// a burst becomes one rewrite instead of a queue of them.
 	liveMu  sync.Mutex
 	version int64
 	pending []sqlc.Post
 	// waiting holds the admin instructions that have been sent and are
-	// waiting for the mutation lock, so the panel can show them queued.
+	// waiting for the changeset lock, so the panel can show them queued.
 	waiting       []string
 	running       *runState
 	lastError     string
@@ -191,7 +195,7 @@ func New(d Deps) *Handlers {
 		world:         d.World,
 		db:            d.DB,
 		queries:       d.Queries,
-		mutator:       d.Mutator,
+		runner:        d.Runner,
 		cfg:           d.Config,
 		budget:        d.Budget,
 		modelSem:      d.ModelSem,
@@ -236,11 +240,11 @@ func New(d Deps) *Handlers {
 	if err := d.Queries.FailRunningTurns(context.Background()); err != nil {
 		d.Logger.Error("Failed to close interrupted turns", slog.Any("error", err))
 	}
-	d.Mutator.OnRound = h.setRunningRound
-	d.Mutator.OnRoundDone = h.logRoundDone
-	d.Mutator.OnDraft = h.setDraft
-	d.Mutator.OnMessage = h.addRunMessage
-	d.Mutator.OnSay = h.say
+	d.Runner.OnRound = h.setRunningRound
+	d.Runner.OnRoundDone = h.logRoundDone
+	d.Runner.OnDraft = h.setDraft
+	d.Runner.OnMessage = h.addRunMessage
+	d.Runner.OnSay = h.say
 	h.workerWG.Add(1)
 	go func() {
 		defer h.workerWG.Done()
@@ -268,9 +272,9 @@ func siteFromRow(row sqlc.SiteVersion) webmaster.Site {
 	}
 }
 
-// siteWithState attaches the model-declared shared state and journal to a
+// siteWithShared attaches the model-declared shared state and journal to a
 // version before it is rendered or sent to the model.
-func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webmaster.Site {
+func (h *Handlers) siteWithShared(ctx context.Context, row sqlc.SiteVersion) webmaster.Site {
 	site := siteFromRow(row)
 	site.Journal = h.journalState(ctx, row.JournalSchema)
 	schema := parseStateSchema(row.StateSchema)
@@ -278,12 +282,12 @@ func (h *Handlers) siteWithState(ctx context.Context, row sqlc.SiteVersion) webm
 		return site
 	}
 
-	rows, err := h.queries.ListSiteState(ctx)
+	rows, err := h.queries.ListSharedState(ctx)
 	if err != nil {
 		h.logger.Error("Failed to load shared state", slog.Any("error", err))
 		return site
 	}
-	site.State = stateValues(schema, rows)
+	site.Shared = stateValues(schema, rows)
 	return site
 }
 
@@ -320,20 +324,35 @@ func (h *Handlers) authorName(ctx context.Context, id string) string {
 	return identity.DisplayName
 }
 
-// turnAuthorName resolves a room-log author. A webmaster turn already stores
+// turnAuthorName resolves a room-log author. A changeset already stores
 // display names; a post or reply stores the identity id.
 func (h *Handlers) turnAuthorName(ctx context.Context, kind, author string) string {
 	switch kind {
-	case webmaster.TurnPost, webmaster.TurnReply:
+	case webmaster.TurnPost:
 		return h.authorName(ctx, author)
+	case webmaster.TurnReply:
+		return h.replyAuthor(ctx, author)
 	}
 	return author
 }
 
+// replyAuthor names the webmaster on the board. A legacy reply row stores the
+// role word, so it reads as the current name.
+func (h *Handlers) replyAuthor(ctx context.Context, author string) string {
+	if author == "webmaster" {
+		return personaName
+	}
+	return h.authorName(ctx, author)
+}
+
 func (h *Handlers) postFromRow(ctx context.Context, row sqlc.Post) webmaster.Post {
+	author := h.authorName(ctx, row.Author)
+	if row.Kind == webmaster.TurnReply {
+		author = h.replyAuthor(ctx, row.Author)
+	}
 	return webmaster.Post{
 		ID:       row.ID,
-		Author:   h.authorName(ctx, row.Author),
+		Author:   author,
 		AuthorID: row.Author,
 		Body:     row.Body,
 		When:     formatWhen(row.CreatedAt),
@@ -377,12 +396,12 @@ func (h *Handlers) recentPosts(ctx context.Context, limit int64) ([]sqlc.Post, e
 	return rows, nil
 }
 
-// mutate runs one admin mutation and waits for it. It takes h.mu, then starts
-// the timeout, so time spent queued behind another mutation does not eat the
+// runChangeset runs one admin changeset and waits for it. It takes h.mu, then starts
+// the timeout, so time spent queued behind another changeset does not eat the
 // model's budget.
-func (h *Handlers) mutate(
+func (h *Handlers) runChangeset(
 	ctx context.Context,
-	kind string,
+	origin string,
 	instruction string,
 	triggerPost *sqlc.Post,
 ) (webmaster.Result, error) {
@@ -390,30 +409,30 @@ func (h *Handlers) mutate(
 	if triggerPost != nil {
 		triggers = []sqlc.Post{*triggerPost}
 	}
-	return h.mutateBatch(ctx, kind, instruction, triggers)
+	return h.runChangesetBatch(ctx, origin, instruction, triggers)
 }
 
-// mutateBatch is mutate for a set of triggers: a coalesced burst, or the posts
+// runChangesetBatch is runChangeset for a set of triggers: a coalesced burst, or the posts
 // a retried turn answered.
-func (h *Handlers) mutateBatch(
+func (h *Handlers) runChangesetBatch(
 	ctx context.Context,
-	kind string,
+	origin string,
 	instruction string,
 	triggers []sqlc.Post,
 ) (webmaster.Result, error) {
-	if kind == "admin" {
+	if origin == "admin" {
 		h.addWaiting(instruction)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if kind == "admin" {
+	if origin == "admin" {
 		h.removeWaiting(instruction)
 	}
-	return h.mutateLocked(ctx, kind, instruction, triggers)
+	return h.runChangesetLocked(ctx, origin, instruction, triggers)
 }
 
 // addWaiting and removeWaiting show an admin instruction as queued while it
-// waits for the mutation lock behind a running turn.
+// waits for the changeset lock behind a running turn.
 func (h *Handlers) addWaiting(instruction string) {
 	h.liveMu.Lock()
 	h.waiting = append(h.waiting, instruction)
@@ -433,35 +452,35 @@ func (h *Handlers) removeWaiting(instruction string) {
 	h.hub.publish(topicBusy)
 }
 
-// mutateLocked runs one mutation with h.mu held. A caller that has to read the
+// runChangesetLocked runs one changeset with h.mu held. A caller that has to read the
 // rows behind the triggers takes the lock itself, so a reset cannot slip
 // between the read and the run.
-func (h *Handlers) mutateLocked(
+func (h *Handlers) runChangesetLocked(
 	ctx context.Context,
-	kind string,
+	origin string,
 	instruction string,
 	triggers []sqlc.Post,
 ) (webmaster.Result, error) {
-	ctx, cancel := mutationContext(ctx)
+	ctx, cancel := changesetContext(ctx)
 	defer cancel(nil)
 	if !h.startRun(cancel) {
 		return webmaster.Result{}, errors.New("the board is resetting")
 	}
 	defer h.clearRun()
 
-	h.beginRun(kind, postAuthors(triggers))
-	res, err := h.mutateHeld(ctx, kind, instruction, triggers)
+	h.beginRun(origin, postAuthors(triggers))
+	res, err := h.runChangesetHeld(ctx, origin, instruction, triggers)
 	h.endRun(err)
 	return res, err
 }
 
-// mutateHeld is mutate with h.mu already held. triggerPosts is empty for admin
+// runChangesetHeld is runChangeset with h.mu already held. triggerPosts is empty for admin
 // instructions, which never become posts. A burst arrives as several triggers.
 // On a model error the site is left alone; a partial rewrite is worse than no
 // rewrite.
-func (h *Handlers) mutateHeld(
+func (h *Handlers) runChangesetHeld(
 	ctx context.Context,
-	kind string,
+	origin string,
 	instruction string,
 	triggerPosts []sqlc.Post,
 ) (webmaster.Result, error) {
@@ -486,7 +505,7 @@ func (h *Handlers) mutateHeld(
 	// The author column names who the turn answers, so the admin panel can
 	// tell turns apart after they finish.
 	turnBody := ""
-	if kind == "admin" {
+	if origin == "admin" {
 		turnBody = instruction
 	}
 	authors := []string{"admin"}
@@ -494,7 +513,7 @@ func (h *Handlers) mutateHeld(
 		authors = h.postAuthorNames(ctx, triggerPosts)
 	}
 	turn, err := h.queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnWebmaster,
+		Kind:   webmaster.TurnChangeset,
 		Author: strings.Join(authors, ", "),
 		Body:   turnBody,
 	})
@@ -511,15 +530,15 @@ func (h *Handlers) mutateHeld(
 	}
 	startAttrs := []any{
 		slog.Int64("turn_id", turn.ID),
-		slog.String("kind", kind),
+		slog.String("origin", origin),
 		slog.Int("posts", len(postIDs)),
 		slog.Any("post_ids", postIDs),
 		slog.Any("authors", authors),
 	}
-	if kind == "admin" {
+	if origin == "admin" {
 		startAttrs = append(startAttrs, slog.String("instruction", instruction))
 	}
-	h.logger.Info("Mutation started", startAttrs...)
+	h.logger.Info("Changeset started", startAttrs...)
 
 	// A turn that never reaches the finish transaction must not stay
 	// "running": the next prompt would treat it as a turn in flight forever.
@@ -543,7 +562,7 @@ func (h *Handlers) mutateHeld(
 			h.saveRunningMessages(turn.ID, messages)
 		}
 		if err := h.queries.FailTurn(closeCtx, sqlc.FailTurnParams{
-			ErrorText: "the mutation did not finish",
+			ErrorText: "the changeset did not finish",
 			ID:        turn.ID,
 		}); err != nil {
 			h.logger.Error(
@@ -554,7 +573,7 @@ func (h *Handlers) mutateHeld(
 		}
 	}()
 
-	currentSite := h.siteWithState(ctx, current)
+	currentSite := h.siteWithShared(ctx, current)
 	currentSite.JournalRulesUsed = h.journalRulesUsed(ctx)
 	currentSite.Holdings = h.holdingTotals(ctx)
 	if seed, err := h.queries.SeedSiteVersion(ctx); err == nil {
@@ -573,7 +592,7 @@ func (h *Handlers) mutateHeld(
 		return webmaster.Result{}, ctx.Err()
 	}
 	start := time.Now()
-	res, mutErr := h.mutator.MutatePosts(ctx, currentSite, room, triggers)
+	res, mutErr := h.runner.RunPosts(ctx, currentSite, room, triggers)
 	elapsed := time.Since(start).Milliseconds()
 	h.releaseModel()
 	h.setFinishing()
@@ -596,10 +615,10 @@ func (h *Handlers) mutateHeld(
 	// A turn that ran out of rounds without done is the one case where the
 	// reason line is the only clue, so say what the last round was doing.
 	if mutErr == nil && !res.Done {
-		h.logger.Warn("Mutation ended without done",
+		h.logger.Warn("Changeset ended without done",
 			slog.Int64("turn_id", turn.ID),
 			slog.Int("rounds", len(res.Rounds)),
-			slog.Int("max_rounds", h.mutator.MaxRounds()),
+			slog.Int("max_rounds", h.runner.MaxRounds()),
 			slog.String("status", status),
 			slog.String("reason", res.Reason),
 			slog.Bool("changed", res.Changed),
@@ -616,7 +635,7 @@ func (h *Handlers) mutateHeld(
 
 	messagesJSON := "[]"
 	if data, err := json.Marshal(res.Messages); err != nil {
-		h.logger.Error("Failed to marshal mutation messages", slog.Any("error", err))
+		h.logger.Error("Failed to marshal changeset messages", slog.Any("error", err))
 	} else {
 		messagesJSON = string(data)
 	}
@@ -631,7 +650,7 @@ func (h *Handlers) mutateHeld(
 
 	// The version and the finished turn land together, so a reader never sees
 	// a "changed" turn without its page, or a page with no explanation. The
-	// write uses a detached context: on a model timeout the mutation context
+	// write uses a detached context: on a model timeout the changeset context
 	// is already dead, and the record of the failure still has to land.
 	finishCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
@@ -692,7 +711,7 @@ func (h *Handlers) mutateHeld(
 		// files cannot share a transaction. A crash here loses one turn's
 		// charge, which is the accepted gap. Admin turns and admin-authored
 		// shares are exempt in the registry.
-		h.recordUsage(ctx, kind, triggerPosts, turn.ID, res)
+		h.recordUsage(ctx, origin, triggerPosts, turn.ID, res)
 		// The conversation is stored now, so the inspector can drop the live
 		// rounds before compaction runs.
 		h.finishRunningTurn()
@@ -715,9 +734,9 @@ func (h *Handlers) mutateHeld(
 
 	// Compaction runs after the turn has landed, so a slow summary delays the
 	// next turn rather than this one's page. It is best effort: a failed
-	// summary must not take the mutation down with it, and the same turns are
+	// summary must not take the changeset down with it, and the same turns are
 	// retried next time. The page the next turn reads counts against the
-	// budget. The mutation deadline may already be spent, so compaction runs
+	// budget. The changeset deadline may already be spent, so compaction runs
 	// on its own clock; summarize bounds each model call.
 	//
 	// A reset cancels this turn and then waits for the lock. Summarizing turns
@@ -741,7 +760,7 @@ func (h *Handlers) mutateHeld(
 
 	attrs := []any{
 		slog.Int64("turn_id", turn.ID),
-		slog.String("kind", kind),
+		slog.String("origin", origin),
 		slog.String("status", status),
 		slog.Int64("version_id", versionID.Int64),
 		slog.Int64("duration_ms", elapsed),
@@ -763,7 +782,7 @@ func (h *Handlers) mutateHeld(
 			slog.Int64("post_to_version_ms", postToVersion.Milliseconds()),
 		)
 	}
-	h.logger.Info("Mutation finished", attrs...)
+	h.logger.Info("Changeset finished", attrs...)
 
 	return res, mutErr
 }
@@ -795,12 +814,12 @@ func (h *Handlers) releaseModel() {
 // failing cannot spend free tokens.
 func (h *Handlers) recordUsage(
 	ctx context.Context,
-	kind string,
+	origin string,
 	triggers []sqlc.Post,
 	turnID int64,
 	res webmaster.Result,
 ) {
-	if h.reg == nil || kind == "admin" || h.world.ID == "" {
+	if h.reg == nil || origin == "admin" || h.world.ID == "" {
 		return
 	}
 	ids := postAuthorIDs(triggers)
@@ -825,7 +844,7 @@ func (h *Handlers) recordUsage(
 	}
 }
 
-// roundAttrs sums the rounds of one mutation for the finish log. A done-only
+// roundAttrs sums the rounds of one changeset for the finish log. A done-only
 // last round after earlier rounds is a round spent on one sentence, which the
 // prompt asks the model to avoid.
 func roundAttrs(res webmaster.Result) []any {
@@ -1005,7 +1024,7 @@ func (h *Handlers) compactRoom(
 }
 
 // summarize gives the summarizer its own budget. It must not inherit an
-// almost-expired mutation deadline, even though it still runs under h.mu.
+// almost-expired changeset deadline, even though it still runs under h.mu.
 func (h *Handlers) summarize(
 	ctx context.Context,
 	previous string,
@@ -1020,7 +1039,7 @@ func (h *Handlers) summarize(
 		return "", summaryCtx.Err()
 	}
 	defer h.releaseModel()
-	text, err := h.mutator.Summarize(summaryCtx, previous, turns)
+	text, err := h.runner.Summarize(summaryCtx, previous, turns)
 	if err != nil {
 		return "", fmt.Errorf("summarize: %w", err)
 	}
@@ -1091,10 +1110,10 @@ func (h *Handlers) roomFor(ctx context.Context, before int64) (webmaster.Room, e
 	return webmaster.Room{Summary: summary, Log: turns, Notes: notes}, nil
 }
 
-// mutateInBackground queues a post for the worker. Posts that arrive while a
-// mutation is running are collected into the next one, so a burst becomes one
+// queuePost queues a post for the worker. Posts that arrive while a
+// changeset is running are collected into the next one, so a burst becomes one
 // rewrite rather than a long queue.
-func (h *Handlers) mutateInBackground(post sqlc.Post) {
+func (h *Handlers) queuePost(post sqlc.Post) {
 	h.liveMu.Lock()
 	h.pending = append(h.pending, post)
 	pending := len(h.pending)
@@ -1113,8 +1132,8 @@ func (h *Handlers) mutateInBackground(post sqlc.Post) {
 	}
 }
 
-// worker is the single background mutator. It drains the queue, runs one
-// mutation for the batch, and goes back to waiting.
+// worker is the single background runner. It drains the queue, runs one
+// changeset for the batch, and goes back to waiting.
 func (h *Handlers) worker() {
 	for {
 		select {
@@ -1127,7 +1146,7 @@ func (h *Handlers) worker() {
 }
 
 func (h *Handlers) runPending() {
-	// Take the mutation lock before looking at the queue. A reset that holds
+	// Take the changeset lock before looking at the queue. A reset that holds
 	// the lock then clears pending, so its posts cannot run after the reset.
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1167,7 +1186,7 @@ func (h *Handlers) runPending() {
 	for i, post := range batch {
 		batchIDs[i] = post.ID
 	}
-	h.logger.Info("Mutation batch ready",
+	h.logger.Info("Changeset batch ready",
 		slog.Int("posts", len(batch)),
 		slog.Any("post_ids", batchIDs),
 	)
@@ -1178,7 +1197,7 @@ func (h *Handlers) runPending() {
 		return
 	}
 	h.beginRun("post", h.postAuthorNames(context.Background(), batch))
-	_, err := h.mutateHeld(ctx, "post", "", batch)
+	_, err := h.runChangesetHeld(ctx, "post", "", batch)
 	cancel(nil)
 	h.clearRun()
 	h.endRun(err)
@@ -1186,7 +1205,7 @@ func (h *Handlers) runPending() {
 	// A reset cancels the turn in flight on purpose, so that is not a failure.
 	if err != nil && !errors.Is(err, context.Canceled) {
 		h.logger.Error(
-			"Mutation failed",
+			"Changeset failed",
 			slog.Int64("post_id", batch[len(batch)-1].ID),
 			slog.Int("batch", len(batch)),
 			slog.Any("error", err),
@@ -1262,10 +1281,10 @@ func postAuthorIDs(posts []sqlc.Post) []string {
 }
 
 // beginRun, endRun and the snapshot helpers keep the live state in one place.
-func (h *Handlers) beginRun(kind string, authors []string) {
+func (h *Handlers) beginRun(origin string, authors []string) {
 	h.liveMu.Lock()
 	now := time.Now()
-	h.running = &runState{Kind: kind, Authors: authors, Round: 1, Since: now, RoundSince: now}
+	h.running = &runState{Origin: origin, Authors: authors, Round: 1, Since: now, RoundSince: now}
 	h.lastError = ""
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
@@ -1367,7 +1386,7 @@ func (h *Handlers) setRunningRound(round int) {
 		h.running.RoundDone = false
 	}
 	h.liveMu.Unlock()
-	h.logger.Info("Mutation round started", slog.Int("round", round))
+	h.logger.Info("Changeset round started", slog.Int("round", round))
 	h.hub.publish(topicBusy)
 }
 
@@ -1527,7 +1546,7 @@ func (h *Handlers) logRoundDone(stats webmaster.RoundStats) {
 			slog.Bool("finished", t.Finished),
 		)
 	}
-	h.logger.Info("Mutation round finished", attrs...)
+	h.logger.Info("Changeset round finished", attrs...)
 }
 
 // setVersion records the current version. A new one is published, so open
@@ -1665,9 +1684,9 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 		seed,
 		webmaster.TurnHeal,
 		"server",
-		"the board went quiet; the plain page is back. you remember.",
+		"the site went quiet; the plain page is back. you remember.",
 		func(q *sqlc.Queries) error {
-			if err := q.DeleteSiteState(ctx); err != nil {
+			if err := q.DeleteSharedState(ctx); err != nil {
 				return fmt.Errorf("clear shared state: %w", err)
 			}
 			if err := q.DeleteJournal(ctx); err != nil {
@@ -1681,7 +1700,7 @@ func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	}
 	h.setVersion(healed.ID)
 	h.hub.publish(topicState | topicJournal)
-	h.logger.Info("Board returned to the seed", slog.Int64("version_id", healed.ID))
+	h.logger.Info("Site returned to the seed", slog.Int64("version_id", healed.ID))
 	return true, nil
 }
 
@@ -1722,22 +1741,22 @@ func (h *Handlers) allowRewrite(name string) bool {
 	return true
 }
 
-// utcDayStart is the timestamp the "today" mutation count starts from.
+// utcDayStart is the timestamp the "today" changeset count starts from.
 func utcDayStart() string {
 	return time.Now().UTC().Format("2006-01-02T00:00:00.000Z")
 }
 
-// mutationContext detaches the work from the request, so a refresh does not
-// cancel a mutation halfway, then bounds it.
-func mutationContext(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+// changesetContext detaches the work from the request, so a refresh does not
+// cancel a changeset halfway, then bounds it.
+func changesetContext(ctx context.Context) (context.Context, context.CancelCauseFunc) {
 	return runContext(context.WithoutCancel(ctx))
 }
 
-// runContext bounds one turn by mutationTimeout. Its cancel takes a cause, so
+// runContext bounds one turn by changesetTimeout. Its cancel takes a cause, so
 // a stop from the admin can be told from a timeout or a reset.
 func runContext(parent context.Context) (context.Context, context.CancelCauseFunc) {
 	base, cancelCause := context.WithCancelCause(parent)
-	ctx, cancelTimeout := context.WithTimeout(base, mutationTimeout)
+	ctx, cancelTimeout := context.WithTimeout(base, changesetTimeout)
 	return ctx, func(cause error) {
 		cancelCause(cause)
 		cancelTimeout()

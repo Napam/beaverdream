@@ -38,12 +38,12 @@ func TestAdminPageOpensTheLiveStream(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`id="admin-stream-site-0"`,
-		`@get(&#39;/admin/w/test/live?page=site&#39;`,
+		`@get(&#39;/admin/worlds/test/live?page=site&#39;`,
 		`requestCancellation: &#39;cleanup&#39;`,
 		`id="admin-body"`,
 		`sign out`,
 		`/static/datastar.js`,
-		`/admin/w/test/heal`,
+		`/admin/worlds/test/heal`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the admin page is missing %q", want)
@@ -82,7 +82,7 @@ func TestAdminLivePushesThePanel(t *testing.T) {
 	live.next(t, []string{`id="admin-live"`, `waiting for a post`})
 	live.next(t, []string{`id="admin-journal"`, `likes = 0`})
 
-	rec := datastarPost(t, h.SetState, "/x/state/likes", nil, "dave")
+	rec := datastarPost(t, h.SetState, "/state/likes", nil, "dave")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("state write: status = %d, want 204", rec.Code)
 	}
@@ -159,12 +159,22 @@ func TestAdminLivePatchesTheInspectorAndCharts(t *testing.T) {
 
 // A turn has its own page. The panel fetches it with the token in a header and
 // gets the body patched; without the token the path asks for the password and
-// posts back to itself. Only a webmaster turn opens.
+// posts back to itself. Only a changeset opens.
 func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 	h, queries := setup(t)
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{"instruction": {"mockedit first"}})
-	postAdmin(t, h.AdminMutate, "/admin/mutate", url.Values{"instruction": {"mocknoop second"}})
-	turns, err := queries.ListWebmasterTurns(context.Background(), 10)
+	postAdmin(
+		t,
+		h.AdminChangeset,
+		"/admin/changeset",
+		url.Values{"instruction": {"mockedit first"}},
+	)
+	postAdmin(
+		t,
+		h.AdminChangeset,
+		"/admin/changeset",
+		url.Values{"instruction": {"mocknoop second"}},
+	)
+	turns, err := queries.ListChangesets(context.Background(), 10)
 	if err != nil || len(turns) != 2 {
 		t.Fatalf("turns = %d, err = %v", len(turns), err)
 	}
@@ -191,7 +201,7 @@ func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 		"follow the newest",
 		"mockedit first",
 		"what the model read",
-		"/admin/w/test/live?page=turns&amp;turn=" + first,
+		"/admin/worlds/test/live?page=turns&amp;turn=" + first,
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("turn page is missing %q", want)
@@ -212,7 +222,7 @@ func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 	}
 	post := strconv.FormatInt(created.ID, 10)
 	if rec := open(post, true); rec.Code != http.StatusNotFound {
-		t.Errorf("a non-webmaster turn: status = %d, want 404", rec.Code)
+		t.Errorf("a non-changeset: status = %d, want 404", rec.Code)
 	}
 }
 
@@ -246,7 +256,7 @@ func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
 	// A stored turn, so the test can check the queued row sits above it.
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop earlier"}})
 	waitFor(t, "the earlier turn", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 1)
+		turns, err := queries.ListChangesets(ctx, 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 
@@ -286,7 +296,7 @@ func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
 	go h.RunPending()
 	live.next(t, []string{`id="admin-history"`}, ">next<")
 	waitFor(t, "the queued batch to finish", func() bool {
-		turns, err := queries.ListWebmasterTurns(ctx, 2)
+		turns, err := queries.ListChangesets(ctx, 2)
 		return err == nil && len(turns) == 2 && turns[0].Status != "running"
 	})
 }
@@ -346,7 +356,7 @@ func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
 
 	stop()
 	waitFor(t, "the turn to finish", func() bool {
-		turns, err := queries.ListWebmasterTurns(context.Background(), 1)
+		turns, err := queries.ListChangesets(context.Background(), 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
 	body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
@@ -451,7 +461,7 @@ func waitForRunningTurn(t *testing.T, queries *sqlc.Queries) int64 {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		turns, err := queries.ListWebmasterTurns(context.Background(), 5)
+		turns, err := queries.ListChangesets(context.Background(), 5)
 		if err != nil {
 			t.Fatalf("list turns: %v", err)
 		}

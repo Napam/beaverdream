@@ -26,12 +26,12 @@ type AppConfig struct {
 // App owns the registry, the open worlds and the two planes. One App serves the
 // app port and the play port from the same process.
 type App struct {
-	logger     *slog.Logger
-	reg        *registry.Registry
-	worlds     *worlds.Manager
-	newMutator func() *webmaster.Mutator
-	cfg        AppConfig
-	sem        chan struct{}
+	logger    *slog.Logger
+	reg       *registry.Registry
+	worlds    *worlds.Manager
+	newRunner func() *webmaster.ChangesetRunner
+	cfg       AppConfig
+	sem       chan struct{}
 
 	mu       sync.Mutex
 	runtimes map[string]*worldRuntime
@@ -65,19 +65,19 @@ func NewApp(
 	logger *slog.Logger,
 	reg *registry.Registry,
 	manager *worlds.Manager,
-	newMutator func() *webmaster.Mutator,
+	newRunner func() *webmaster.ChangesetRunner,
 	cfg AppConfig,
 ) *App {
 	app := &App{
-		logger:     logger,
-		reg:        reg,
-		worlds:     manager,
-		newMutator: newMutator,
-		cfg:        cfg,
-		runtimes:   make(map[string]*worldRuntime),
-		loading:    make(map[string]*worldLoad),
-		deleting:   make(map[string]bool),
-		stop:       make(chan struct{}),
+		logger:    logger,
+		reg:       reg,
+		worlds:    manager,
+		newRunner: newRunner,
+		cfg:       cfg,
+		runtimes:  make(map[string]*worldRuntime),
+		loading:   make(map[string]*worldLoad),
+		deleting:  make(map[string]bool),
+		stop:      make(chan struct{}),
 	}
 	if cfg.ModelConcurrency > 0 {
 		app.sem = make(chan struct{}, cfg.ModelConcurrency)
@@ -275,7 +275,7 @@ func (a *App) openWorld(ctx context.Context, info registry.World) (*worldRuntime
 		World:    info,
 		DB:       handle.DB,
 		Queries:  queries,
-		Mutator:  a.newMutator(),
+		Runner:   a.newRunner(),
 		Config:   a.cfg.Config,
 		Budget:   a.cfg.Budget,
 		ModelSem: a.sem,

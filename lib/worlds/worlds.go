@@ -3,11 +3,11 @@
 // random id, never from the slug, so a user-chosen name cannot touch the
 // filesystem.
 //
-// The manager does not hold open databases, hubs, workers or mutators. A
-// caller opens a Handle, uses it, and closes it, which keeps the runtime
-// lifecycle (draining streams and workers) in the handler layer. Open runs the
-// world migrations every time; they are idempotent, so a world that sat at an
-// older version catches up the next time it opens.
+// The manager does not hold open databases, hubs, workers or changeset
+// runners. A caller opens a Handle, uses it, and closes it, which keeps the
+// runtime lifecycle (draining streams and workers) in the handler layer. Open
+// runs the world migrations every time; they are idempotent, so a world that
+// sat at an older version catches up the next time it opens.
 package worlds
 
 import (

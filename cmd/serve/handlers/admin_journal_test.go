@@ -60,9 +60,9 @@ func TestClearJournalDeletesOneKeyAndRecordsAnEvent(t *testing.T) {
 	if len(events) != 1 || !strings.Contains(events[0].Body, `"moves" (2 rows, was match 2)`) {
 		t.Fatalf("event turns = %+v, want one that names the key, rows and match", events)
 	}
-	if turns, err := queries.ListWebmasterTurns(ctx, 10); err != nil || len(turns) != 0 {
+	if turns, err := queries.ListChangesets(ctx, 10); err != nil || len(turns) != 0 {
 		t.Fatalf(
-			"webmaster turns = %d (%v), want none: a clear never asks the model",
+			"changesets = %d (%v), want none: a clear never asks the model",
 			len(turns),
 			err,
 		)
@@ -122,7 +122,7 @@ func TestAdminJournalPageShowsStatsAndRows(t *testing.T) {
 	appendJournal(t, h.JournalAppend, "moves", `{"x":2}`, 0, visitorB)
 	appendJournal(t, h.JournalAppend, "chat", `{"m":"<script>alert(1)</script>"}`, 0, visitorA)
 
-	rec := getAdmin(t, h.AdminJournal, "/admin/journal?feed=chat")
+	rec := getAdmin(t, h.AdminJournal, "/admin/journal?key=chat")
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
@@ -169,7 +169,7 @@ func TestAdminJournalBrowseFiltersAndPages(t *testing.T) {
 	}
 
 	filtered := getAdmin(t, h.AdminJournal,
-		"/admin/journal?feed=moves&visitor="+publicID(visitorA)).Body.String()
+		"/admin/journal?key=moves&visitor="+publicID(visitorA)).Body.String()
 	if strings.Contains(filtered, "visitor "+publicID(visitorB)) {
 		t.Error("the filter shows the other visitor")
 	}
@@ -177,7 +177,7 @@ func TestAdminJournalBrowseFiltersAndPages(t *testing.T) {
 		t.Error("a visitor filter has no way back")
 	}
 
-	older := getAdmin(t, h.AdminJournal, "/admin/journal?feed=moves&before=11").Body.String()
+	older := getAdmin(t, h.AdminJournal, "/admin/journal?key=moves&before=11").Body.String()
 	if !strings.Contains(older, "back to the newest") || strings.Contains(older, "older rows") {
 		t.Error("the last page links the wrong way")
 	}
@@ -198,7 +198,7 @@ func TestAdminLivePushesTheJournalPage(t *testing.T) {
 	declareJournal(t, queries, `{"moves":{"max":10,"rules":1}}`)
 	appendJournal(t, h.JournalAppend, "moves", `{"x":1}`, 0, visitorA)
 
-	live := openAdminLive(t, h, "page=journal&feed=moves", testAdminToken)
+	live := openAdminLive(t, h, "page=journal&key=moves", testAdminToken)
 	live.next(t, []string{`id="admin-live"`})
 	live.next(t, []string{`id="admin-journal"`, "1 / 10 rows"})
 
@@ -207,7 +207,7 @@ func TestAdminLivePushesTheJournalPage(t *testing.T) {
 }
 
 // The overview shows the notes the next prompt will carry, next to the
-// compacted memory.
+// room summary.
 func TestAdminOverviewShowsTheNotes(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -218,7 +218,7 @@ func TestAdminOverviewShowsTheNotes(t *testing.T) {
 	}
 
 	turn, err := queries.CreateTurn(ctx, sqlc.CreateTurnParams{
-		Kind: webmaster.TurnWebmaster, Author: "webmaster", Body: "seed",
+		Kind: webmaster.TurnChangeset, Author: "webmaster", Body: "seed",
 	})
 	if err != nil {
 		t.Fatalf("create turn: %v", err)

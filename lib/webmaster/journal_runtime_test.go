@@ -9,7 +9,7 @@ import (
 )
 
 // exampleMotion is the motion half of the journal example in journalPrompt
-// (mutate.go). exampleRun in the harness runs these lines. The drift test in
+// (changeset.go). exampleRun in the harness runs these lines. The drift test in
 // journal_test.go checks that the prompt contains this block whole, so change
 // both together.
 const exampleMotion = `var me = { x: 50, y: 50, look: 'hero' }  // fixed spawn, never random
@@ -144,7 +144,7 @@ function server(url, method) {
   if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
   if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
   if (state.read === 'own') return reply(200, { match: 1, rules: 1, rows: [{ id: 1, key: 'moves', visitor: 'me', payload: { x: 20, y: 70 }, match: 1, rules: 1 }] })
-  if (url.indexOf('/j/cut') >= 0) return reply(200, { match: 1, rules: 1, rows: [cutRow(1), cutRow(2)] })
+  if (url.indexOf('/journal/cut') >= 0) return reply(200, { match: 1, rules: 1, rows: [cutRow(1), cutRow(2)] })
   return reply(200, { match: 1, rules: 1, rows: [row(1), row(2), ...state.extra] })
 }
 
@@ -184,8 +184,8 @@ if (beforeInit[scenario]) beforeInit[scenario]()
 eval(src)
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
-const movesReads = () => fetches.filter((f) => f === 'GET /j/moves?since=0').length
-const cutReads = () => fetches.filter((f) => f === 'GET /j/cut?since=0').length
+const movesReads = () => fetches.filter((f) => f === 'GET /journal/moves?since=0').length
+const cutReads = () => fetches.filter((f) => f === 'GET /journal/cut?since=0').length
 const feed = window.bd.journal('moves')
 const draws = []
 function start() {
@@ -619,7 +619,7 @@ func sameIDs(got, want []int64) bool {
 func readsOf(fetches []string, key string) int {
 	n := 0
 	for _, f := range fetches {
-		if f == "GET /j/"+key+"?since=0" {
+		if f == "GET /journal/"+key+"?since=0" {
 			n++
 		}
 	}

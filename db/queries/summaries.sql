@@ -31,7 +31,7 @@ WHERE
   t.id > ?
   AND t.id <= ?
   AND NOT (
-    t.kind = 'webmaster'
+    t.kind = 'changeset'
     AND t.status IN ('running', 'error')
   );
 
@@ -52,7 +52,7 @@ WHERE
   t.id > ?
   AND t.id <= ?
   AND NOT (
-    t.kind = 'webmaster'
+    t.kind = 'changeset'
     AND t.status IN ('running', 'error')
   )
 ORDER BY

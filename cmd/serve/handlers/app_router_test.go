@@ -226,11 +226,11 @@ func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 		t.Fatal("anonymous admin request is not the login page")
 	}
 
-	board := b.get(in.playURLFor("/w/heroes/"))
+	board := b.get(in.playURLFor("/worlds/heroes/"))
 	if board.StatusCode != http.StatusOK || strings.Contains(body(t, board), "data-version=") {
 		t.Fatal("anonymous board shows the gate page")
 	}
-	live := b.get(in.playURLFor("/w/heroes/live"))
+	live := b.get(in.playURLFor("/worlds/heroes/live"))
 	if live.StatusCode != http.StatusNoContent {
 		t.Fatalf("anonymous live: status = %d, want 204", live.StatusCode)
 	}
@@ -243,6 +243,45 @@ func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 	}
+}
+
+// A world may be named after a machine endpoint. Its page is still a page, so
+// an anonymous visit gets the gate, while the endpoint path on any world is
+// refused as JSON.
+func TestMachinePathsReadTheSegmentAfterTheSlug(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	slugs := []string{"state", "statecraft", "budget", "errors", "journal"}
+	for _, slug := range slugs {
+		if _, err := in.worlds.Create(context.Background(), in.adminID, slug); err != nil {
+			t.Fatalf("create %s: %v", slug, err)
+		}
+	}
+
+	anonymous := in.newBrowser(t)
+	for _, slug := range slugs {
+		resp := anonymous.get(in.playURLFor("/worlds/" + slug + "/"))
+		page := body(t, resp)
+		if resp.StatusCode != http.StatusOK || strings.Contains(page, "data-version=") {
+			t.Errorf("%s page: status = %d, want the gate", slug, resp.StatusCode)
+		}
+	}
+
+	for _, target := range []string{
+		"/worlds/heroes/state",
+		"/worlds/heroes/journal/moves",
+		"/worlds/heroes/budget",
+	} {
+		resp := anonymous.get(in.playURLFor(target))
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401", target, resp.StatusCode)
+		}
+		_ = resp.Body.Close()
+	}
+	resp := anonymous.post(in.playURLFor("/worlds/heroes/errors"), nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous errors post: status = %d, want 401", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
 }
 
 func TestCSRFOnCookieAppWrites(t *testing.T) {
@@ -264,7 +303,7 @@ func TestCSRFOnCookieAppWrites(t *testing.T) {
 	_ = ok.Body.Close()
 
 	// The handoff is an app write too.
-	missing = admin.post(in.appURLFor("/w/heroes/play"), nil)
+	missing = admin.post(in.appURLFor("/worlds/heroes/play"), nil)
 	if missing.StatusCode != http.StatusForbidden {
 		t.Fatalf("handoff without csrf: status = %d, want 403", missing.StatusCode)
 	}
@@ -293,7 +332,7 @@ func TestBearerOnlyAndScopeSeparation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body(t, resp), `id="app-admin"`) {
 		t.Fatalf("bearer admin: status = %d", resp.StatusCode)
 	}
-	resp = do(http.MethodGet, in.playURLFor("/w/heroes/live"), token)
+	resp = do(http.MethodGet, in.playURLFor("/worlds/heroes/live"), token)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("bearer on play live: status = %d, want 204", resp.StatusCode)
 	}
@@ -347,7 +386,7 @@ func TestRoutesStayOnTheirPlane(t *testing.T) {
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 
-	resp := admin.get(in.appURLFor("/w/heroes/live"))
+	resp := admin.get(in.appURLFor("/worlds/heroes/live"))
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("app serves a board route: status = %d", resp.StatusCode)
 	}
@@ -463,7 +502,7 @@ func TestResetKeepsTheRegistryAndOtherWorlds(t *testing.T) {
 	waitFor(
 		t,
 		"the heroes turn",
-		func() bool { return countWorldRows(t, in, in.heroesID, "webmaster turns") > 0 },
+		func() bool { return countWorldRows(t, in, in.heroesID, "changesets") > 0 },
 	)
 	// The charge is a registry write after the world commit, so wait for it
 	// before snapshotting the total the reset must preserve.
@@ -479,7 +518,7 @@ func TestResetKeepsTheRegistryAndOtherWorlds(t *testing.T) {
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 	csrf := admin.csrf(in, "/")
-	resp := admin.post(in.appURLFor("/admin/w/heroes/reset"), url.Values{"csrf": {csrf}})
+	resp := admin.post(in.appURLFor("/admin/worlds/heroes/reset"), url.Values{"csrf": {csrf}})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("reset: status = %d, body %s", resp.StatusCode, body(t, resp))
 	}
@@ -507,12 +546,12 @@ func TestResetKeepsTheRegistryAndOtherWorlds(t *testing.T) {
 	}
 
 	// The old play session still opens the other world and can post there.
-	atlasURL := in.playURLFor("/w/atlas/")
+	atlasURL := in.playURLFor("/worlds/atlas/")
 	page := b.get(atlasURL)
 	if page.StatusCode != http.StatusOK || !strings.Contains(body(t, page), "data-version=") {
 		t.Fatal("the old play session no longer opens another world")
 	}
-	resp = b.postBoard(in.playURLFor("/w/atlas"), url.Values{"body": {"after reset"}})
+	resp = b.postBoard(in.playURLFor("/worlds/atlas"), url.Values{"body": {"after reset"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("post to atlas: status = %d", resp.StatusCode)
 	}
@@ -533,8 +572,8 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 	for _, want := range []string{
 		`data-world="` + in.heroesID + `"`,
 		`data-world-slug="heroes"`,
-		`data-base="/w/heroes"`,
-		`"base":"/w/heroes"`,
+		`data-base="/worlds/heroes"`,
+		`"base":"/worlds/heroes"`,
 		`"store":"bd:` + in.heroesID + `:"`,
 		`action="posts"`,
 	} {
@@ -550,7 +589,7 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 	}
 
 	// The same play session opens atlas without another handoff.
-	other := b.get(in.playURLFor("/w/atlas/"))
+	other := b.get(in.playURLFor("/worlds/atlas/"))
 	if other.StatusCode != http.StatusOK {
 		t.Fatalf("atlas with the same play cookie: status = %d", other.StatusCode)
 	}
@@ -596,7 +635,7 @@ func TestDisablingAnIdentityClosesStreamsInEveryWorld(t *testing.T) {
 
 	streams := make([]*http.Response, 0, 2)
 	for _, slug := range []string{"heroes", "atlas"} {
-		resp := player.get(in.playURLFor("/w/" + slug + "/live"))
+		resp := player.get(in.playURLFor("/worlds/" + slug + "/live"))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("%s live: status = %d", slug, resp.StatusCode)
 		}
@@ -632,11 +671,11 @@ func TestDisablingAnIdentityClosesStreamsInEveryWorld(t *testing.T) {
 
 	// The next play request is refused at the gate, and live asks Datastar to
 	// stop retrying.
-	page := player.get(in.playURLFor("/w/heroes/"))
+	page := player.get(in.playURLFor("/worlds/heroes/"))
 	if !strings.Contains(body(t, page), "go to the app") {
 		t.Error("a disabled identity still gets the board")
 	}
-	live := player.get(in.playURLFor("/w/atlas/live"))
+	live := player.get(in.playURLFor("/worlds/atlas/live"))
 	if live.StatusCode != http.StatusNoContent {
 		t.Errorf("disabled live: status = %d, want 204", live.StatusCode)
 	}
@@ -649,7 +688,7 @@ func countRunningTurns(t *testing.T, in *instance, worldID string) int {
 	var n int
 	if err := handle.DB.QueryRowContext(
 		context.Background(),
-		`SELECT COUNT(*) FROM turns WHERE kind = 'webmaster' AND status = 'running'`,
+		`SELECT COUNT(*) FROM turns WHERE kind = 'changeset' AND status = 'running'`,
 	).Scan(&n); err != nil {
 		t.Fatalf("count running turns: %v", err)
 	}
@@ -659,7 +698,7 @@ func countRunningTurns(t *testing.T, in *instance, worldID string) int {
 func countWorldRows(t *testing.T, in *instance, worldID, table string) int {
 	t.Helper()
 	handle := in.worldDB(t, worldID)
-	query := `SELECT COUNT(*) FROM turns WHERE kind = 'webmaster'`
+	query := `SELECT COUNT(*) FROM turns WHERE kind = 'changeset'`
 	if table == "turns" {
 		query = `SELECT COUNT(*) FROM turns`
 	}
@@ -678,17 +717,17 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 
-	resp := admin.get(in.appURLFor("/admin/w/heroes/"))
+	resp := admin.get(in.appURLFor("/admin/worlds/heroes/"))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("world admin: status = %d", resp.StatusCode)
 	}
 	page := body(t, resp)
 	for _, want := range []string{
 		`id="admin-body"`,
-		`/admin/w/heroes/turns`,
-		`/admin/w/heroes/site`,
-		`/admin/w/heroes/journal`,
-		in.playURL + "/w/heroes/",
+		`/admin/worlds/heroes/turns`,
+		`/admin/worlds/heroes/site`,
+		`/admin/worlds/heroes/journal`,
+		in.playURL + "/worlds/heroes/",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("world admin page is missing %q", want)
@@ -707,7 +746,7 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 	in.redeem(t, code, "member")
 	member := in.newBrowser(t)
 	member.login(in, "member", "correct horse battery")
-	resp = member.get(in.appURLFor("/admin/w/heroes/"))
+	resp = member.get(in.appURLFor("/admin/worlds/heroes/"))
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("member world admin: status = %d, want 404", resp.StatusCode)
 	}
@@ -727,7 +766,7 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 		`id="app-admin"`,
 		`href="/admin/invites"`,
 		`href="/admin/people"`,
-		`href="/admin/w/heroes/"`,
+		`href="/admin/worlds/heroes/"`,
 		`action="/admin/worlds"`,
 	} {
 		if !strings.Contains(page, want) {
@@ -760,13 +799,13 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 	if _, err := in.worlds.Create(context.Background(), in.adminID, "second"); err != nil {
 		t.Fatalf("create second world: %v", err)
 	}
-	resp = admin.get(in.appURLFor("/admin/w/heroes/"))
+	resp = admin.get(in.appURLFor("/admin/worlds/heroes/"))
 	page = body(t, resp)
 	for _, want := range []string{
 		`href="/admin"`,
 		`id="admin-world-switcher"`,
-		`value="/admin/w/heroes/"`,
-		`value="/admin/w/second/"`,
+		`value="/admin/worlds/heroes/"`,
+		`value="/admin/worlds/second/"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("world admin page is missing %q", want)
@@ -817,7 +856,7 @@ func TestUserPagesShowTheBackOfficeDoorwayOnlyToAdmins(t *testing.T) {
 	if strings.Contains(page, `aria-current="page"`) {
 		t.Error("the user lobby marks a tab as current")
 	}
-	if !strings.Contains(page, `href="/admin/w/heroes/"`) {
+	if !strings.Contains(page, `href="/admin/worlds/heroes/"`) {
 		t.Error("the admin's lobby row has no manage link")
 	}
 
@@ -867,7 +906,10 @@ func TestDeleteWorldRemovesOnlyThatWorld(t *testing.T) {
 		t.Fatalf("world file missing: %v", err)
 	}
 
-	resp = admin.post(in.appURLFor("/admin/worlds/"+world.ID+"/delete"), url.Values{"csrf": {csrf}})
+	resp = admin.post(
+		in.appURLFor("/admin/worlds/"+world.Slug+"/delete"),
+		url.Values{"csrf": {csrf}},
+	)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("delete: status = %d, body %s", resp.StatusCode, body(t, resp))
 	}
@@ -891,7 +933,7 @@ func TestDeleteWorldRemovesOnlyThatWorld(t *testing.T) {
 	in.redeem(t, code, "member")
 	member.login(in, "member", "correct horse battery")
 	member.play(in, "heroes")
-	resp = member.get(in.playURLFor("/w/tempworld/"))
+	resp = member.get(in.playURLFor("/worlds/tempworld/"))
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("deleted world play: status = %d, want 404", resp.StatusCode)
 	}
@@ -924,8 +966,10 @@ func TestDisplayNameIsOnTheIdentityAndPostAuthorHasStableID(t *testing.T) {
 	waitFor(t, "the post", func() bool {
 		return countWorldRows(t, in, in.heroesID, "turns") > 0
 	})
-	page := body(t, two.get(in.playURLFor("/w/heroes/")))
-	if !strings.Contains(page, "player") || !strings.Contains(page, `data-author="`+id.ID+`"`) {
+	page := body(t, two.get(in.playURLFor("/worlds/heroes/")))
+	if !strings.Contains(page, "player") ||
+		!strings.Contains(page, `data-author="`+id.ID+`"`) ||
+		!strings.Contains(page, `data-author-id="`+id.ID+`"`) {
 		t.Errorf("the other browser does not show the identity's name and id")
 	}
 
@@ -939,7 +983,7 @@ func TestDisplayNameIsOnTheIdentityAndPostAuthorHasStableID(t *testing.T) {
 		t.Fatalf("rename: status = %d", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
-	page = body(t, two.get(in.playURLFor("/w/heroes/")))
+	page = body(t, two.get(in.playURLFor("/worlds/heroes/")))
 	if !strings.Contains(page, "Renamed") {
 		t.Error("the other browser did not see the new display name")
 	}
@@ -975,7 +1019,7 @@ func TestIdleWorldUnloadsAndReopens(t *testing.T) {
 	admin.play(in, "heroes")
 	waitFor(t, "the world to load", func() bool { return in.app.LoadedForTest() > 0 })
 	waitFor(t, "the idle unload", func() bool { return in.app.LoadedForTest() == 0 })
-	page := admin.get(in.playURLFor("/w/heroes/"))
+	page := admin.get(in.playURLFor("/worlds/heroes/"))
 	if page.StatusCode != http.StatusOK || !strings.Contains(body(t, page), "data-version=") {
 		t.Fatal("a reloaded world does not serve its board")
 	}
@@ -1025,7 +1069,7 @@ func TestCookieContractAndScopeSeparation(t *testing.T) {
 
 	// Press play manually, so the handoff's Set-Cookie is visible.
 	csrf := admin.csrf(in, "/")
-	playResp := admin.post(in.appURLFor("/w/heroes/play"), url.Values{"csrf": {csrf}})
+	playResp := admin.post(in.appURLFor("/worlds/heroes/play"), url.Values{"csrf": {csrf}})
 	target := playResp.Header.Get("Location")
 	_ = playResp.Body.Close()
 	handoff := admin.get(target)
@@ -1065,7 +1109,7 @@ func TestCookieContractAndScopeSeparation(t *testing.T) {
 		playURL,
 		[]*http.Cookie{{Name: handlers.AppCookieName, Value: appCookie.Value}},
 	)
-	resp := appOnly.get(in.playURLFor("/w/heroes/"))
+	resp := appOnly.get(in.playURLFor("/worlds/heroes/"))
 	if strings.Contains(body(t, resp), "data-version=") {
 		t.Error("the app cookie opened a board")
 	}
@@ -1105,7 +1149,7 @@ func TestBootstrapRotationRevokesEverySession(t *testing.T) {
 	if strings.Contains(body(t, resp), "sign out everywhere") {
 		t.Error("the old app session survived rotation")
 	}
-	resp = admin.get(in.playURLFor("/w/heroes/"))
+	resp = admin.get(in.playURLFor("/worlds/heroes/"))
 	if strings.Contains(body(t, resp), "data-version=") {
 		t.Error("the old play session survived rotation")
 	}
@@ -1129,8 +1173,8 @@ func TestLogoutEverywhereClosesEveryStream(t *testing.T) {
 	two.play(in, "heroes")
 
 	streams := []*http.Response{
-		one.get(in.playURLFor("/w/heroes/live")),
-		two.get(in.playURLFor("/w/heroes/live")),
+		one.get(in.playURLFor("/worlds/heroes/live")),
+		two.get(in.playURLFor("/worlds/heroes/live")),
 	}
 	time.Sleep(100 * time.Millisecond)
 
@@ -1154,7 +1198,7 @@ func TestLogoutEverywhereClosesEveryStream(t *testing.T) {
 		}
 	}
 	for i, b := range []*browser{one, two} {
-		if strings.Contains(body(t, b.get(in.playURLFor("/w/heroes/"))), "data-version=") {
+		if strings.Contains(body(t, b.get(in.playURLFor("/worlds/heroes/"))), "data-version=") {
 			t.Errorf("browser %d still plays after log out everywhere", i)
 		}
 	}
@@ -1171,8 +1215,8 @@ func TestDeleteWorldClosesItsStreamsAndLeavesOthersAlone(t *testing.T) {
 	player := in.newBrowser(t)
 	player.login(in, "player", "correct horse battery")
 	player.play(in, "heroes")
-	heroesStream := player.get(in.playURLFor("/w/heroes/live"))
-	atlasStream := player.get(in.playURLFor("/w/atlas/live"))
+	heroesStream := player.get(in.playURLFor("/worlds/heroes/live"))
+	atlasStream := player.get(in.playURLFor("/worlds/atlas/live"))
 	if heroesStream.StatusCode != http.StatusOK || atlasStream.StatusCode != http.StatusOK {
 		t.Fatalf("streams: heroes %d atlas %d", heroesStream.StatusCode, atlasStream.StatusCode)
 	}
@@ -1182,7 +1226,7 @@ func TestDeleteWorldClosesItsStreamsAndLeavesOthersAlone(t *testing.T) {
 	admin.login(in, "admin", acceptanceAdminPassword)
 	csrf := admin.csrf(in, "/")
 	resp := admin.post(
-		in.appURLFor("/admin/worlds/"+in.heroesID+"/delete"),
+		in.appURLFor("/admin/worlds/heroes/delete"),
 		url.Values{"csrf": {csrf}},
 	)
 	if resp.StatusCode != http.StatusSeeOther {
@@ -1212,7 +1256,7 @@ func TestDeleteWorldClosesItsStreamsAndLeavesOthersAlone(t *testing.T) {
 	if _, err := in.reg.GetWorld(context.Background(), in.atlasID); err != nil {
 		t.Error("delete removed the other world")
 	}
-	resp = player.get(in.playURLFor("/w/atlas/"))
+	resp = player.get(in.playURLFor("/worlds/atlas/"))
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body(t, resp), "data-version=") {
 		t.Error("the other world stopped working after a delete")
 	}
@@ -1242,7 +1286,7 @@ func TestBudgetStatusRouteAndGlobalLimit(t *testing.T) {
 	one := in.newBrowser(t)
 	one.login(in, "first", "correct horse battery")
 	boardURL, _ := one.play(in, "heroes")
-	resp := one.get(in.playURLFor("/w/heroes/x/budget"))
+	resp := one.get(in.playURLFor("/worlds/heroes/budget"))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("budget: status = %d", resp.StatusCode)
 	}
@@ -1264,7 +1308,7 @@ func TestBudgetStatusRouteAndGlobalLimit(t *testing.T) {
 	}
 
 	anonymous := in.newBrowser(t)
-	resp = anonymous.get(in.playURLFor("/w/heroes/x/budget"))
+	resp = anonymous.get(in.playURLFor("/worlds/heroes/budget"))
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("anonymous budget: status = %d, want 401", resp.StatusCode)
 	}
@@ -1370,7 +1414,7 @@ func TestIdleUnloadWaitsForAnOpenStream(t *testing.T) {
 	player := in.newBrowser(t)
 	player.login(in, "player", "correct horse battery")
 	player.play(in, "heroes")
-	stream := player.get(in.playURLFor("/w/heroes/live"))
+	stream := player.get(in.playURLFor("/worlds/heroes/live"))
 	if stream.StatusCode != http.StatusOK {
 		t.Fatalf("live: status = %d", stream.StatusCode)
 	}
@@ -1402,13 +1446,13 @@ func TestModelConcurrencyIsCappedAcrossWorlds(t *testing.T) {
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 	heroesURL, _ := admin.play(in, "heroes")
-	atlasURL := in.playURLFor("/w/atlas/")
+	atlasURL := in.playURLFor("/worlds/atlas/")
 	if page := admin.get(atlasURL); !strings.Contains(body(t, page), "data-version=") {
 		t.Fatal("atlas did not open with the same play session")
 	}
 
 	var wg sync.WaitGroup
-	for _, target := range []string{heroesURL, in.playURLFor("/w/atlas")} {
+	for _, target := range []string{heroesURL, in.playURLFor("/worlds/atlas")} {
 		wg.Add(1)
 		go func(target string) {
 			defer wg.Done()
@@ -1493,7 +1537,7 @@ func TestRevokingOneSessionLeavesTheOtherPlaneAlone(t *testing.T) {
 	if strings.Contains(body(t, resp), "sign out everywhere") {
 		t.Error("the revoked app session still works")
 	}
-	board := b.get(in.playURLFor("/w/heroes/"))
+	board := b.get(in.playURLFor("/worlds/heroes/"))
 	if !strings.Contains(body(t, board), "data-version=") {
 		t.Error("revoking the app session closed the play session")
 	}

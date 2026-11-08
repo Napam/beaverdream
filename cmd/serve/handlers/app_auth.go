@@ -37,12 +37,26 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(header[7:])
 }
 
+// sessionCookie reads the request's only cookie of that name, or "" when the
+// request carries none. More than one cookie of the name fails closed as
+// anonymous: Request.Cookie returns the first match, and a browser orders a
+// deeper-path cookie first, so a page can shadow the real session with its own.
+// Picking one would hand over the identity; making both unusable is a denial of
+// service at that deeper path, which is the acceptable cost.
 func sessionCookie(r *http.Request, name string) string {
-	cookie, err := r.Cookie(name)
-	if err != nil {
-		return ""
+	value := ""
+	seen := false
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != name {
+			continue
+		}
+		if seen {
+			return ""
+		}
+		value = cookie.Value
+		seen = true
 	}
-	return cookie.Value
+	return value
 }
 
 // authenticateApp reads a bearer token or the app cookie. A bearer header is
@@ -209,7 +223,7 @@ func (a *App) gate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	login := appOrigin(r, a.cfg.Config) + "/login"
-	_ = pages.AppGate(login).Render(r.Context(), w)
+	_ = pages.AppGate(login, "").Render(r.Context(), w)
 }
 
 // loginURL is where the app login form posts. It stays on the app origin so

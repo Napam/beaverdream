@@ -1,6 +1,148 @@
 package pages
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"html"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// decodeJSString reads one single-quoted JavaScript string literal the way a
+// browser does, so a test can prove a quote stayed data.
+func decodeJSString(t *testing.T, lit string) string {
+	t.Helper()
+	if len(lit) < 2 || lit[0] != '\'' || lit[len(lit)-1] != '\'' {
+		t.Fatalf("%q is not one single-quoted literal", lit)
+	}
+	body := lit[1 : len(lit)-1]
+	var b strings.Builder
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; c {
+		case '\'':
+			t.Fatalf("%q has a quote that ends the literal early", lit)
+		case '\\':
+			i++
+			if i >= len(body) {
+				t.Fatalf("%q ends in a backslash", lit)
+			}
+			switch e := body[i]; e {
+			case '\\', '\'':
+				b.WriteByte(e)
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 'u':
+				if i+4 >= len(body) {
+					t.Fatalf("%q has a short unicode escape", lit)
+				}
+				switch body[i+1 : i+5] {
+				case "2028":
+					b.WriteRune('\u2028')
+				case "2029":
+					b.WriteRune('\u2029')
+				default:
+					t.Fatalf("%q has an unknown unicode escape", lit)
+				}
+				i += 4
+			default:
+				t.Fatalf("%q has an unknown escape \\%c", lit, e)
+			}
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func TestJSStringKeepsHostileTextInTheLiteral(t *testing.T) {
+	for _, in := range []string{"moves", "a'b", `a\b`, "two\nlines", "l\u2028m"} {
+		lit := jsString(in)
+		if got := decodeJSString(t, lit); got != in {
+			t.Errorf("jsString(%q) = %q, which decodes to %q", in, lit, got)
+		}
+	}
+}
+
+func TestClearConfirmsKeepTheKeyInTheLiteral(t *testing.T) {
+	key := "x'); alert(1); //"
+	for name, script := range map[string]string{
+		"journal":  clearConfirm(key),
+		"holdings": holdingsClearConfirm(key),
+	} {
+		if !strings.HasPrefix(script, "confirm(") || !strings.HasSuffix(script, ")") {
+			t.Fatalf("%s = %q, want one confirm call", name, script)
+		}
+		arg := script[len("confirm(") : len(script)-1]
+		if got := decodeJSString(t, arg); !strings.Contains(got, key) {
+			t.Errorf("%s decodes to %q, which loses the key", name, got)
+		}
+	}
+}
+
+// renderedClearScripts is the card's onsubmit and its clear button's click,
+// HTML-unescaped the way a browser hands them to the JS parser.
+func renderedClearScripts(t *testing.T, page string) (onsubmit, click string) {
+	t.Helper()
+	for _, m := range regexp.MustCompile(`onsubmit="([^"]*)"`).FindAllStringSubmatch(page, -1) {
+		onsubmit = html.UnescapeString(m[1])
+	}
+	for _, m := range regexp.MustCompile(`data-on:click="([^"]*)"`).FindAllStringSubmatch(page, -1) {
+		js := html.UnescapeString(m[1])
+		if strings.HasPrefix(js, "evt.preventDefault(); if (confirm(") {
+			click = js
+		}
+	}
+	return onsubmit, click
+}
+
+func assertKeyIsText(t *testing.T, name, script, key string) {
+	t.Helper()
+	if script == "" {
+		t.Fatalf("the card has no %s", name)
+	}
+	if strings.Contains(script, key) {
+		t.Errorf("%s keeps the key as syntax: %s", name, script)
+	}
+	if escaped := strings.ReplaceAll(key, "'", `\'`); !strings.Contains(script, escaped) {
+		t.Errorf("%s does not carry the key as escaped text: %s", name, script)
+	}
+}
+
+func TestJournalCardKeepsAHostileKeyInsideItsScripts(t *testing.T) {
+	key := "x'); alert(1); //"
+	keys := []JournalKeyView{{
+		Key: key, Declared: true, Max: 10, Rules: 1, Match: 1, Rows: 1,
+	}}
+	var buf bytes.Buffer
+	if err := AdminJournal(
+		nil, nil, nil, keys, nil, Panel{Page: PageJournal}, "csrf",
+	).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	onsubmit, click := renderedClearScripts(t, buf.String())
+	assertKeyIsText(t, "onsubmit", onsubmit, key)
+	assertKeyIsText(t, "clear click", click, key)
+}
+
+func TestHoldingCardKeepsAHostileKeyInsideItsScripts(t *testing.T) {
+	key := "x'); alert(1); //"
+	holdings := []HoldingView{{
+		Key: key, Total: 1, Holders: 1,
+		Top: []HolderView{{Visitor: "v", Name: "dave", Amount: 1}},
+	}}
+	var buf bytes.Buffer
+	if err := AdminJournal(
+		nil, holdings, nil, nil, nil, Panel{Page: PageJournal}, "csrf",
+	).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	onsubmit, click := renderedClearScripts(t, buf.String())
+	assertKeyIsText(t, "onsubmit", onsubmit, key)
+	assertKeyIsText(t, "clear click", click, key)
+}
 
 func TestFeedFillAndRulesNote(t *testing.T) {
 	declared := JournalKeyView{

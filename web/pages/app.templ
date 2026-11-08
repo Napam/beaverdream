@@ -213,15 +213,19 @@ templ loginCard(next string, failed string, action string) {
 	</section>
 }
 
-// AppGate is the play plane's anonymous page.
-templ AppGate(login string) {
-	@authShell("world gate · beaverdream", gateCard(login))
+// AppGate is the play plane's anonymous page. notice explains a refusal when
+// the gate follows one; the ordinary anonymous gate passes "".
+templ AppGate(login string, notice string) {
+	@authShell("world gate · beaverdream", gateCard(login, notice))
 }
 
-templ gateCard(login string) {
+templ gateCard(login string, notice string) {
 	<section class={ appUserCard + " p-6" }>
 		<h1 class="text-xl font-semibold tracking-tight">this world opens in the app</h1>
 		<p class={ appUserMuted + " mt-2" }>sign in there, then press enter. the world keeps the app's account.</p>
+		if notice != "" {
+			<p class={ appUserMuted + " mt-2" }>{ notice }</p>
+		}
 		<a class={ appUserButton + " mt-5 w-full" } href={ templ.SafeURL(login) }>go to the app</a>
 	</section>
 }

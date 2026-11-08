@@ -245,6 +245,91 @@ func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 	}
 }
 
+// next must stay on this origin. A browser turns a backslash into a slash, so
+// prefix matching alone let "/\evil.com" send a fresh session off-origin.
+func TestLoginNextStaysOnThisOrigin(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	cases := []struct {
+		name string
+		next string
+		want string
+	}{
+		{"empty", "", "/"},
+		{"root", "/", "/"},
+		{"local", "/account", "/account"},
+		{"local with query", "/worlds/heroes/?x=1", "/worlds/heroes/?x=1"},
+		{"absolute", "https://evil.com", "/"},
+		{"scheme relative", "//evil.com", "/"},
+		{"backslash", `/\evil.com`, "/"},
+		{"backslash only", `\evil.com`, "/"},
+		{"encoded backslash", "/%5Cevil.com", "/"},
+		{"triple slash", "///evil.com", "/"},
+		{"tab", "/\tevil.com", "/"},
+		{"crlf", "/x\r\nLocation:%20https://evil.com", "/"},
+		{"javascript", "javascript:alert(1)", "/"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := in.newBrowser(t)
+			resp := b.post(in.appURLFor("/login"), url.Values{
+				"username": {"admin"},
+				"password": {acceptanceAdminPassword},
+				"next":     {tc.next},
+			})
+			location := resp.Header.Get("Location")
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusSeeOther {
+				t.Fatalf("next %q: status = %d, want 303", tc.next, resp.StatusCode)
+			}
+			if location != tc.want {
+				t.Fatalf("next %q redirected to %q, want %q", tc.next, location, tc.want)
+			}
+		})
+	}
+
+	// The GET render uses the same rule, so its hidden field cannot carry a
+	// value the POST would then refuse.
+	page := body(t, in.newBrowser(t).get(in.appURLFor("/login?next=%2F%5Cevil.com")))
+	if !strings.Contains(page, `name="next" value="/"`) {
+		t.Fatal("the login form kept a hostile next value")
+	}
+}
+
+// A handoff refused because this browser is already another visitor says so;
+// the anonymous gate carries no notice.
+func TestRefusedHandoffExplainsItself(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	ctx := context.Background()
+
+	_, code, _ := in.reg.CreateInvite(ctx, in.adminID, registry.InviteParams{MaxUses: 1})
+	in.redeem(t, code, "intruder")
+	intruder := in.newBrowser(t)
+	intruder.login(in, "intruder", "correct horse battery")
+	intruderCode := mintHandoffCode(t, in, intruder, "heroes")
+
+	victim := in.newBrowser(t)
+	victim.login(in, "admin", acceptanceAdminPassword)
+	victim.play(in, "heroes")
+
+	login := in.appURL + "/login"
+	plain := body(t, in.newBrowser(t).get(in.playURLFor("/")))
+	if !strings.Contains(plain, login) {
+		t.Fatal("the anonymous gate has no login link")
+	}
+
+	resp := victim.get(in.playURLFor("/handoff?code=" + intruderCode))
+	refused := body(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cross-identity handoff: status = %d, want 400", resp.StatusCode)
+	}
+	if refused == plain {
+		t.Fatal("the refused handoff reads exactly like the anonymous gate")
+	}
+	if !strings.Contains(refused, login) {
+		t.Fatal("the refused handoff lost the login link")
+	}
+}
+
 // A world may be named after a machine endpoint. Its page is still a page, so
 // an anonymous visit gets the gate, while the endpoint path on any world is
 // refused as JSON.

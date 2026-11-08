@@ -206,6 +206,45 @@ func TestAdminLivePushesTheJournalPage(t *testing.T) {
 	live.next(t, []string{`id="admin-journal"`, "2 / 10 rows"})
 }
 
+// The page reads a stored journal schema without trusting it: a key the admin
+// name rule refuses never reaches a card, a path or a script.
+func TestAdminJournalSkipsAnOddDeclaredKey(t *testing.T) {
+	h, queries := setup(t)
+	declareJournal(t, queries,
+		`{"feed":{"max":10,"rules":1},"evil'key":{"max":10,"rules":1}}`)
+
+	body := getAdmin(t, h.AdminJournal, "/admin/journal").Body.String()
+	if !strings.Contains(body, "feed") {
+		t.Fatal("the page does not list the key that follows the name rule")
+	}
+	if strings.Contains(body, "evil") {
+		t.Error("a stored key that fails the name rule reached the page")
+	}
+}
+
+// Holdings come from stored totals too, so they take the same read gate as
+// journal keys.
+func TestAdminHoldingsSkipsAnOddStoredKey(t *testing.T) {
+	h, queries := setup(t)
+	declareState(t, queries, `{"coins":{"op":"counter","scope":"visitor"}}`)
+	for _, query := range []string{
+		`INSERT INTO state_holdings (visitor, key, amount, name) VALUES ('v', 'coins', 3, 'dave')`,
+		`INSERT INTO state_holdings (visitor, key, amount, name) VALUES ('v', 'evil''key', 4, 'dave')`,
+	} {
+		if err := h.ExecForTest(context.Background(), query); err != nil {
+			t.Fatalf("seed holding: %v", err)
+		}
+	}
+
+	body := getAdmin(t, h.AdminJournal, "/admin/journal").Body.String()
+	if !strings.Contains(body, "coins") {
+		t.Fatal("the page does not list the visitor counter that follows the name rule")
+	}
+	if strings.Contains(body, "evil") {
+		t.Error("a stored holding key that fails the name rule reached the page")
+	}
+}
+
 // The overview shows the notes the next prompt will carry, next to the
 // room summary.
 func TestAdminOverviewShowsTheNotes(t *testing.T) {

@@ -25,8 +25,10 @@ const (
 	adminJournalEvery = time.Second
 )
 
-// journalKeyName is what a key can be. Declared keys already follow it; the
-// check keeps a stray row from putting odd text in a path or a script.
+// journalKeyName is what a key can be. The read gate is the strict one on
+// purpose: a stored schema or a stray row is only ever as trustworthy as the
+// write that made it, and the page puts a key in a path and a script. A
+// declared key follows the same rule as the stats, so nothing skips it.
 var journalKeyName = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // journalPanel reads the journal page's selection from a query: the key being
@@ -149,6 +151,9 @@ func (h *Handlers) adminJournal(
 
 	byKey := make(map[string]pages.JournalKeyView, len(stats)+len(schema))
 	for key, def := range schema {
+		if !journalKeyName.MatchString(key) {
+			continue
+		}
 		byKey[key] = pages.JournalKeyView{
 			Key: key, Declared: true, Max: def.Max, Rules: def.Rules, Match: 1,
 		}

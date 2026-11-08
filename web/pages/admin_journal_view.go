@@ -114,14 +114,45 @@ func payloadSize(n int64) string {
 	return short(n) + " B"
 }
 
+// jsString is s as a JavaScript string literal. The attribute that carries it
+// is HTML-escaped on the way out, and the browser decodes that before the JS
+// parser sees it, so HTML escaping alone cannot keep a quote inside: the
+// literal has to escape its own delimiters and line breaks.
+func jsString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('\'')
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '\'':
+			b.WriteString(`\'`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\u2028':
+			b.WriteString(`\u2028`)
+		case '\u2029':
+			b.WriteString(`\u2029`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
+}
+
 // clearConfirm asks before one key is emptied.
 func clearConfirm(key string) string {
-	return "confirm('Delete every row of " + key +
-		"? Open pages start it over. This cannot be undone.')"
+	return "confirm(" + jsString(
+		"Delete every row of "+key+"? Open pages start it over. This cannot be undone.",
+	) + ")"
 }
 
 // clearAction is where a key's clear form posts. The key is a lowercase name,
-// so it is safe in a path and a script string.
+// so it is safe in a path; its script form goes through jsString.
 func clearAction(key string, p Panel) string {
 	return p.Action("/journal/"+key+"/clear") + p.query()
 }
@@ -142,12 +173,14 @@ func holderPath(p Panel, visitor string) string {
 }
 
 func holdingsClearConfirm(key string) string {
-	return "confirm('Delete what every visitor holds of " + key +
-		"? Everyone starts at 0. This cannot be undone.')"
+	return "confirm(" + jsString(
+		"Delete what every visitor holds of "+key+"? Everyone starts at 0. This cannot be undone.",
+	) + ")"
 }
 
-// holdingsClearAction is where a visitor counter's clear form posts. The key
-// is a lowercase name, so it is safe in a path and a script string.
+// holdingsClearAction is where a visitor counter's clear form posts. The key is
+// a lowercase name, so it is safe in a path; its script form goes through
+// jsString.
 func holdingsClearAction(key string, p Panel) string {
 	return p.Action("/holdings/"+key+"/clear") + p.query()
 }

@@ -168,10 +168,44 @@ func (a *App) LoginPage(w http.ResponseWriter, r *http.Request) {
 	a.renderLogin(w, r, r.URL.Query().Get("next"), "")
 }
 
-func (a *App) renderLogin(w http.ResponseWriter, r *http.Request, next, failed string) {
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
-		next = "/"
+// safeNext returns a local path to send the browser to after a successful
+// sign-in, or "/" for anything that could land on another origin. A prefix
+// check alone lets "/\evil.com" through, and a browser turns that backslash
+// into a slash. Parse the value, and refuse a second leading slash, a
+// backslash, a control character or any scheme, host or user info.
+func safeNext(raw string) string {
+	if !strings.HasPrefix(raw, "/") {
+		return "/"
 	}
+	if len(raw) > 1 && (raw[1] == '/' || raw[1] == '\\') {
+		return "/"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return "/"
+	}
+	if !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
+		return "/"
+	}
+	if hasUnsafeRune(raw) || hasUnsafeRune(u.Path) {
+		return "/"
+	}
+	return raw
+}
+
+// hasUnsafeRune reports a backslash or a control character. A backslash is
+// checked after parsing too, so "%5C" cannot smuggle one past.
+func hasUnsafeRune(value string) bool {
+	for _, r := range value {
+		if r == '\\' || r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) renderLogin(w http.ResponseWriter, r *http.Request, next, failed string) {
+	next = safeNext(next)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if failed != "" {
@@ -202,9 +236,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setAppSession(w, r, token, a.cfg.Config.AppSessionTTL)
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
-		next = "/"
-	}
+	next = safeNext(next)
 	a.logger.Info("Identity signed in", slog.String("identity_id", identity.ID))
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
@@ -334,18 +366,48 @@ func (a *App) PlayHandoff(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
+// handoffRefusal explains a refused cross-identity exchange on the gate. The
+// ordinary gate says nothing here, so a refusal is never mistaken for "sign
+// in first".
+const handoffRefusal = "this browser is already entered as another visitor. " +
+	"clear this site's cookies or use a private window, then press enter again."
+
 // ExchangeHandoff spends a code, sets the play cookie and drops the code from
-// the URL.
+// the URL. A code alone cannot replace the browser's current play identity: if
+// a valid play session belongs to another identity, the exchange is refused and
+// the session it just minted is revoked. A request with more than one play
+// cookie is refused the same way, so a shadow cookie cannot turn the check into
+// "no session" and reopen the crossing.
+//
+// Trade-off, accepted: a person who switches app accounts and re-enters the
+// same world in one browser is refused until they clear the play cookie. That
+// is the cost of binding the exchange to the browser's current play identity.
 func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	refuse := func(notice string) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = pages.AppGate(appOrigin(r, a.cfg.Config)+"/login", notice).Render(r.Context(), w)
+	}
+	// Duplicates first: after the session fix authenticatePlay cannot tell them
+	// from no session, and "no session" would let the exchange through.
+	if playCookieCount(r) > 1 {
+		refuse("")
+		return
+	}
 	identity, _, token, worldID, err := a.reg.ExchangeHandoff(r.Context(), code)
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = pages.AppGate(appOrigin(r, a.cfg.Config)+"/login").Render(r.Context(), w)
+		refuse("")
+		return
+	}
+	if current, err := a.authenticatePlay(r); err == nil && current.IdentityID != identity.ID {
+		if err := a.reg.RevokeSession(r.Context(), token); err != nil {
+			a.logger.Warn("Failed to revoke a refused play session", slog.Any("error", err))
+		}
+		refuse(handoffRefusal)
 		return
 	}
 	a.setPlaySession(w, r, token, a.cfg.Config.PlaySessionTTL)
@@ -359,6 +421,17 @@ func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 		slog.String("world_id", worldID),
 	)
 	http.Redirect(w, r, "/worlds/"+url.PathEscape(world.Slug)+"/", http.StatusSeeOther)
+}
+
+// playCookieCount counts every cookie of the play name, duplicates included.
+func playCookieCount(r *http.Request) int {
+	count := 0
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == PlayCookieName {
+			count++
+		}
+	}
+	return count
 }
 
 // AdminWorldRoot sends the world admin mount to its trailing-slash page.

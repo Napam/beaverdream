@@ -23,9 +23,15 @@ func (h *Handlers) adminHoldings(ctx context.Context, site sqlc.SiteVersion) []p
 	schema := parseStateSchema(site.StateSchema)
 	byKey := make(map[string]pages.HoldingView)
 	for _, key := range visitorKeys(schema) {
+		if !journalKeyName.MatchString(key) {
+			continue
+		}
 		byKey[key] = pages.HoldingView{Key: key, Label: schema[key].Label, Declared: true}
 	}
 	for _, total := range h.holdingTotals(ctx) {
+		if !journalKeyName.MatchString(total.Key) {
+			continue
+		}
 		view := byKey[total.Key]
 		view.Key, view.Total, view.Holders = total.Key, total.Total, total.Holders
 		byKey[total.Key] = view

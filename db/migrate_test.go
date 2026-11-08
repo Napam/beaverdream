@@ -24,7 +24,7 @@ func TestMigrationsCreateTheWorldSchema(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := db.RunMigrations(ctx, beaverdream.MigrationsFS, conn, logger); err != nil {
+	if _, err := db.RunMigrations(ctx, beaverdream.WorldMigrationsFS, conn, logger); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 

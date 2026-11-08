@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 )
 
 // datastarAccept is what a Datastar action sends. It includes text/html, so a

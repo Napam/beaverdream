@@ -11,8 +11,6 @@ import (
 )
 
 var (
-	// MigrationsFS is the world migration set, kept for existing callers.
-	MigrationsFS fs.FS
 	// WorldMigrationsFS is the migration set every world file runs.
 	WorldMigrationsFS fs.FS
 	// RegistryMigrationsFS is the migration set for the registry file.
@@ -20,8 +18,7 @@ var (
 )
 
 func init() {
-	MigrationsFS = os.DirFS("db/migrations")
-	WorldMigrationsFS = MigrationsFS
+	WorldMigrationsFS = os.DirFS("db/world/migrations")
 	RegistryMigrationsFS = os.DirFS("db/registry/migrations")
 }
 

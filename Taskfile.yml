@@ -70,7 +70,7 @@ tasks:
 
   gen.db:
     desc: Generate go code from sql queries with sqlc
-    dir: ./db
+    dir: ./db/world
     cmds:
       - go tool sqlc generate
 
@@ -134,7 +134,7 @@ tasks:
 
   dev.sql:
     desc: Watch sql files and regenerate sqlc code
-    dir: ./db
+    dir: ./db/world
     cmds:
       # ignore_error: see dev.tailwind
       - cmd: |

@@ -20,7 +20,7 @@ import (
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
 	"github.com/Napam/beaverdream/db"
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
@@ -63,7 +63,7 @@ func setupWithModel(
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if _, err := db.RunMigrations(
 		context.Background(),
-		beaverdream.MigrationsFS,
+		beaverdream.WorldMigrationsFS,
 		dbConn,
 		logger,
 	); err != nil {

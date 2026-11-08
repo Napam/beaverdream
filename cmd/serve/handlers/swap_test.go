@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 )
 
 // An open page takes a stylesheet in place only when nothing else changed.

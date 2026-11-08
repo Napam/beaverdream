@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 )

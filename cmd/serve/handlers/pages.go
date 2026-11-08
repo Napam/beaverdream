@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/starfederation/datastar-go/datastar"

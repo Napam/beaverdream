@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
 

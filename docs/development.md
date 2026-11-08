@@ -93,15 +93,16 @@ the pause.
 - `lib/env`: reads the environment into one struct. See
   [configuration.md](configuration.md).
 - `lib/hashfs`: content-hashed static files, adapted from benbjohnson/hashfs.
-- `db/`: the goose migration sets (registry and worlds), the sqlc queries, and
-  the generated Go.
+- `db/`: one folder per database. `world/` holds the world migrations, the
+  sqlc queries and config, and the generated Go; `registry/` holds the registry
+  migrations.
 - `web/`: the admin templ pages in `pages/`, the js and ts runtime, tailwind
   input, and `static/` for built assets. `web/lib` is leftover scaffold that no
   page loads.
-- `docs/`: this documentation and the design notes.
+- `docs/`: this documentation.
 - `scripts/`: `dev-run.sh` rebuilds and restarts the dev server.
 - `bin/`: built binaries such as `app` and `dev-app`. Git ignores them.
 - `.hooks/`: the git hooks.
 - `files_embed.go` and `files_noembed.go`: `go:embed` for `web/static` and
-  `db/migrations`. The `noembed` build tag, which `dev-run.sh` uses, reads those
-  files from disk instead.
+  `db/world/migrations`. The `noembed` build tag, which `dev-run.sh` uses, reads
+  those files from disk instead.

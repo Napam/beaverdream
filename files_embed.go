@@ -13,16 +13,13 @@ import (
 //go:embed web/static/*
 var webFS embed.FS
 
-//go:embed db/migrations/*
-var migrationsFS embed.FS
+//go:embed db/world/migrations/*
+var worldMigrationsFS embed.FS
 
 //go:embed db/registry/migrations/*
 var registryMigrationsFS embed.FS
 
 var (
-	// MigrationsFS is the world migration set. It is kept for the existing
-	// world open path; new code can use WorldMigrationsFS, its explicit name.
-	MigrationsFS fs.FS
 	// WorldMigrationsFS is the migration set every world file runs.
 	WorldMigrationsFS fs.FS
 	// RegistryMigrationsFS is the migration set for the registry file. The
@@ -38,11 +35,10 @@ func init() {
 	}
 	hashFS = hashfs.NewFS(stripped)
 
-	MigrationsFS, err = fs.Sub(migrationsFS, "db/migrations")
+	WorldMigrationsFS, err = fs.Sub(worldMigrationsFS, "db/world/migrations")
 	if err != nil {
-		panic("failed to strip migrations prefix: " + err.Error())
+		panic("failed to strip world migrations prefix: " + err.Error())
 	}
-	WorldMigrationsFS = MigrationsFS
 
 	RegistryMigrationsFS, err = fs.Sub(registryMigrationsFS, "db/registry/migrations")
 	if err != nil {

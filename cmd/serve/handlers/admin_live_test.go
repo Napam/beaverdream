@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
-	"github.com/Napam/beaverdream/db/generated/sqlc"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 )
 
 // openAdminLive opens the stream of one admin page, named by its query.

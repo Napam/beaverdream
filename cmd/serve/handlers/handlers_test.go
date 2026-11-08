@@ -1186,7 +1186,15 @@ func setupWithSummarizer(
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(strings.NewReader(string(body)))
-			if strings.Contains(string(body), "Summarize this stretch of the room") {
+			var req struct {
+				ToolChoice string `json:"tool_choice"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("decode model request: %v", err)
+				http.Error(w, "bad model request", http.StatusBadRequest)
+				return
+			}
+			if req.ToolChoice == "" {
 				summary(w, r)
 				return
 			}

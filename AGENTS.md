@@ -131,8 +131,9 @@ prefer simple, readable code over production hardening.
 - The user prompt is ordered for the prompt cache: compacted history, room
   log, then the notes, the page and the new post, which change every turn.
   A page that already moves something with keys gets a short hint after the
-  new post, so it never shifts the cached prefix. The hint names the game
-  skills; the model decides which to load. A page with a journal schema gets
+  new post, so it never shifts the cached prefix. The hint reminds the model
+  to load relevant skills before planning; the tool catalog describes them.
+  A page with a journal schema gets
   a second hint after that one: keep what the other visitors see of a player
   in step with every change, through one renderer for both.
   The system prompt is one static string and includes `BaseCSS` and a sample

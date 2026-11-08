@@ -12,18 +12,19 @@ import (
 // The summarizer is the only extra model call the server makes. It runs once
 // per chunk of old turns, never per changeset, and it writes prose only. The
 // page stays the artifact; this is Naps's memory of it.
-const summarySystemText = `You are the memory of Naps, the webmaster of beaverdream, a
+var summarySystemText = fmt.Sprintf(`You are the memory of Naps, the webmaster of beaverdream, a
 world builder that starts as a small plain page with a post form. Naps answers
 in two ways: by rewriting the page, and by replies it posts in the room.
-Summarize a stretch of the room so it can continue the conversation after
-those turns leave the prompt window.
+Merge the previous summary and the new turns into one replacement memory.
+Keep still-relevant facts from the previous summary; it will be discarded.
+In the room log, "you" and "you replied" mean Naps.
 
 Write third person, past tense, plain prose. Keep what still matters: what
 visitors asked for, the questions they asked and the gist of what Naps
 answered, what it granted or refused, positions it took,
-promises, grudges, running jokes, what the page looked like and why it
-changed, and any server events. Drop small talk and duplicate detail. No
-markup, no quotes, no lists, no headings. Under 5000 characters.`
+promises, grudges, running jokes, what changed on the page and why,
+and any server events. Drop small talk and duplicate detail. No
+markup, no quotes, no lists, no headings. Under %d characters.`, summaryMaxLen)
 
 // Summarize folds a chunk of old turns, plus the previous summary, into one
 // compact memory. A failed summary is not fatal: the room log still works, and
@@ -57,8 +58,6 @@ func (m *ChangesetRunner) Summarize(
 
 func summaryPrompt(previous string, turns []Turn) string {
 	var b strings.Builder
-	b.WriteString("Summarize this stretch of the room so Naps does not forget it.\n\n")
-
 	b.WriteString("PREVIOUS SUMMARY:\n")
 	if notes := strings.TrimSpace(previous); notes != "" {
 		b.WriteString(notes)

@@ -3,6 +3,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -272,6 +273,16 @@ function blend(fps) {
   out.act = [Math.abs(mid + 2) < 0.01, Math.abs(later) < 1e-9, finite(quiet)]
 }
 
+// Hand offsets are relative to the pose, never to the previous frame's act.
+{
+  const r = kit.rig({ plan: 'biped' })
+  r.act('handR', 0.3, () => [0.2, 0, 0])
+  for (let i = 0; i < 9; i++) r.pose(DT)
+  const mid = r.joints.handR.rotation.x
+  for (let i = 0; i < 51; i++) r.pose(DT)
+  out.handAct = [mid, r.joints.handR.rotation.x]
+}
+
 // vehicle: wheels roll the distance driven, the nose lifts while speeding up.
 {
   const r = kit.rig({ plan: 'vehicle', height: 1.5 })
@@ -378,6 +389,7 @@ func TestCharactersReferenceCore(t *testing.T) {
 		Shapes  []bool
 		Look    []bool
 		Act     []bool
+		HandAct []float64
 		Vehicle []any
 		Wings   []any
 		Blob    []bool
@@ -447,6 +459,15 @@ func TestCharactersReferenceCore(t *testing.T) {
 		"[true true true true true true true]",
 	)
 	check("act [mid gone empty-ok]", got.Act, "[true true true]")
+	if len(got.HandAct) != 2 {
+		t.Fatalf("hand action observations = %v, want an active and an expired angle", got.HandAct)
+	}
+	if math.Abs(got.HandAct[0]-0.2) > 1e-9 || math.Abs(got.HandAct[1]) > 1e-9 {
+		t.Errorf(
+			"hand action angles = %v, want a 0.2-radian offset while active and zero after expiry",
+			got.HandAct,
+		)
+	}
 	check("vehicle [wheels-roll nose-up legs eyes]", got.Vehicle, "[true true 0 0]")
 	check("wings [fold-narrower flap hover-flap hover-legs]", got.Wings, "[true true true 0]")
 	check("blob [hops above-ground]", got.Blob, "[true true]")

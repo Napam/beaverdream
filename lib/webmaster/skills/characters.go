@@ -11,7 +11,9 @@ const charactersReference = `CHARACTERS REFERENCE:
 Use this for any character someone plays or meets: players, enemies,
 animals, pets, monsters, robots, vehicles. The kit is a helper: it gives a
 body a skeleton, a walk, a run, a jump and a starting shape. The design is
-yours. This core is tested. Copy it whole, in the module script or a plain
+yours. This core is tested. Reuse helpers already on the page, or copy the
+functions you need with their dependencies intact. For 2D, use motion and its
+helpers without the three.js rig. Put them in the module script or a plain
 script before it.
 
 <script>
@@ -465,6 +467,7 @@ function characterKit(THREE) {
       R.arms.forEach(function (a, i) {
         var g = m.arms[i]
         a.shoulder.rotation.set(-g.swing, 0, a.side * g.raise); a.elbow.rotation.set(-g.elbow, 0, 0)
+        a.hand.rotation.set(0, 0, 0)
       })
       var hd2 = R.joints.head
       if (hd2) {

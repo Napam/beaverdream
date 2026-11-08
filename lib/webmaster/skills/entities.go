@@ -8,8 +8,9 @@ package skills
 // walls, the pool and spawning; change both together.
 const entitiesReference = `ENTITIES REFERENCE:
 Use this when a page has several kinds of characters, enemies, units or
-vehicles, each with its own moves. This core is tested. Copy it whole, then
-write your own KINDS, MOVES, SHOTS and BRAINS.
+vehicles, each with its own moves. This core is tested. Reuse helpers already
+on the page, or copy the functions you need with their dependencies intact.
+Write your own KINDS, MOVES, SHOTS and BRAINS.
 
 <script>
 var world = (function () {
@@ -227,5 +228,7 @@ move. A post about one kind changes that kind's lines and no others.
 - Multiplayer: each visitor runs their own avatar. Rows carry kind, position,
   facing and the moves run; other pages replay those for effects. The
   shooter's page judges its own hits and sends them as rows. Shared enemies
-  follow the controls skill's fixed rule.
+  use the system prompt's recorded owner: only that page runs brains and
+  spawnAway, then publishes snapshots and hits for the others. Math.random
+  in spawnAway is local to that owner; never run it independently in every tab.
 `

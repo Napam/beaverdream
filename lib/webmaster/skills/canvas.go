@@ -10,8 +10,9 @@ package skills
 const canvasReference = `CANVAS REFERENCE:
 Use this for a game, a world or a scene drawn on a 2D canvas: platformers,
 top-down games, roguelikes, sims, pixel art. The other skills decide where
-things are; this one draws them sharp and cheap. This core is tested. Copy
-it whole.
+things are; this one draws them sharp and cheap. This core is tested. Reuse
+helpers already on the page, or copy the functions you need with their
+dependencies intact.
 
 <script>
 var draw2d = (function () {

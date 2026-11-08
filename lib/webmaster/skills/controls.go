@@ -10,7 +10,8 @@ const controlsReference = `CONTROLS REFERENCE:
 Use this when you build or change a world someone moves through. Make it feel
 good without being asked. Pick the genre from the post and use its GENRES line.
 
-This platformer core is tested. Reuse its parts in any genre:
+This platformer core is tested. Reuse helpers already on the page. Copy only
+the functions you need, with their dependencies intact, for any genre:
 
 <script>
 var game = (function () {
@@ -144,13 +145,14 @@ GENRES:
   sideways speed eased to 0 at k 6 (2 to drift). Never instant top speed.
 - Flight, space: chase at k 6. W thrusts along facing, A/D roll, mouse pitch.
   No gravity, drag k 0.3, a top speed, no stop on release.
-- Multiplayer: your avatar, physics and camera are local. Rows carry position,
-  facing and actions; state carries tallies. Others ease to their newest row
+- Multiplayer: your avatar, physics and camera are local. Motion rows carry
+  position, facing and look; action rows carry what happened. Others ease to their newest row
   at k 10 and snap past a few tiles.
 
 ROWS: free movement sends on the journal example's 60ms timer, even while
 still. A grid or step world sends one row per step, and again every 2s while
 still. A world change (a block, a pellet, a lap) is one row in a slow key.
-Shared enemies follow a fixed rule of Date.now() + skew, where skew =
-Date.parse(row.at) - Date.now() each time your own append resolves.
+Only purely time-driven ambient movers can follow the same clock everywhere.
+Reactive enemies use the system prompt's shared-actor owner and published
+snapshots; each tab must not run a separate copy of their AI.
 `

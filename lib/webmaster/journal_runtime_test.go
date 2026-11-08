@@ -8,42 +8,6 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
-// exampleMotion is the motion half of the journal example in journalPrompt
-// (changeset.go). exampleRun in the harness runs these lines. The drift test in
-// journal_test.go checks that the prompt contains this block whole, so change
-// both together.
-const exampleMotion = `var me = { x: 50, y: 50, look: 'hero' }  // fixed spawn, never random
-var pos = {}, ready = false
-function inBounds(x, y) {
-  return isFinite(x) && isFinite(y) && x >= 0 && y >= 0 && x <= 100 && y <= 100
-}
-
-moves.start(function (rows) {
-  var p = {}
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
-    if (!inBounds(x, y)) continue                    // the referee: in bounds only
-    p[r.visitor] = { x: x, y: y, look: String(r.payload.look || '') }  // draw them as they are
-  }
-  return p
-}, function (p) {
-  pos = p
-  if (!ready) {                                  // first render: put the visitor back
-    var back = p[bd.visitor] || bd.load('spot', null)  // newest row, else this browser's save
-    if (back && inBounds(Number(back.x), Number(back.y))) {
-      me.x = Number(back.x); me.y = Number(back.y)
-    }
-    ready = true
-  }
-})
-
-setInterval(function () {
-  if (!ready) return
-  moves.append({ x: me.x, y: me.y, look: me.look })
-  bd.save('spot', me)
-}, 60)
-`
-
 // runtimeHarness runs the real client runtime against a scripted server. Each
 // scenario names the steps a page takes and the rows the live stream pushes;
 // the harness reports the feed, what the server was asked, the beacons sent,
@@ -57,7 +21,8 @@ const config = JSON.stringify({
   visitor: 'me',
   keys: {
     moves: { match: 1, rules: 1 },
-    cut: { match: 1, rules: 1, max: 3 }
+    cut: { match: 1, rules: 1, max: 3 },
+    ...(scenario.startsWith('example') ? { seats: { match: 1, rules: 1 }, acts: { match: 1, rules: 1 } } : {})
   }
 })
 
@@ -143,7 +108,7 @@ function server(url, method) {
   if (state.read === 'fail') return reply(500, { error: 'could not read that' })
   if (state.read === 'rules') return reply(200, { match: 1, rules: 2, rows: [row(5, 1, 2)] })
   if (state.read === 'match') return reply(200, { match: 2, rules: 1, rows: [row(6, 2)] })
-  if (state.read === 'own') return reply(200, { match: 1, rules: 1, rows: [{ id: 1, key: 'moves', visitor: 'me', payload: { x: 20, y: 70 }, match: 1, rules: 1 }] })
+  if (state.read === 'own') return reply(200, { match: 1, rules: 1, rows: [{ id: 1, key: 'moves', visitor: 'me', payload: { x: 20, y: 70, look: 'giant' }, match: 1, rules: 1 }] })
   if (url.indexOf('/journal/cut') >= 0) return reply(200, { match: 1, rules: 1, rows: [cutRow(1), cutRow(2)] })
   return reply(200, { match: 1, rules: 1, rows: [row(1), row(2), ...state.extra] })
 }
@@ -175,8 +140,8 @@ const beforeInit = {
   exampleTickFirst: () => { state.read = 'own'; state.hold = hold },
   exampleReadFirst: () => { state.read = 'own' },
   exampleFallback: () => { state.hold = hold },
-  exampleFromSave: () => { stored['bd:save:spot'] = '{"x":10,"y":30}' },
-  exampleRowBeatsSave: () => { state.read = 'own'; stored['bd:save:spot'] = '{"x":10,"y":30}' },
+  exampleFromSave: () => { stored['bd:save:spot'] = '{"x":10,"y":30,"look":"wizard"}' },
+  exampleRowBeatsSave: () => { state.read = 'own'; stored['bd:save:spot'] = '{"x":10,"y":30,"look":"wizard"}' },
   exampleBadSave: () => { stored['bd:save:spot'] = '{"x":500,"y":30}' }
 }
 if (beforeInit[scenario]) beforeInit[scenario]()
@@ -202,15 +167,16 @@ function startCut() {
     () => {}
   )
 }
-// exampleRun runs the motion half of the journal example. The lines come from
-// exampleMotion, so the page's code is the same text the prompt shows. It
-// returns the tick and the page's variables instead of setting a timer, so a
-// step fires the tick when it wants.
+// exampleRun runs the actual prompt example with drawing stubbed out. It
+// returns the motion tick so a scenario can control when it fires.
 function exampleRun() {
-  const moves = feed
   const ticks = []
   global.setInterval = (fn) => { ticks.push(fn) }
-` + exampleMotion + `
+  const requestAnimationFrame = () => {}
+  function showScore() {}
+  function draw() {}
+  function play() {}
+  /* journal example */
   return { tick: ticks[0], me: () => me, pos: () => pos }
 }
 
@@ -595,7 +561,16 @@ type runtimeResult struct {
 
 func runRuntime(t *testing.T, scenario string) runtimeResult {
 	t.Helper()
-	out := jsrun.Run(t, JournalRuntime, runtimeHarness, scenario)
+	_, example, ok := strings.Cut(journalPrompt, "<script>")
+	if !ok {
+		t.Fatal("journal example has no script")
+	}
+	example, _, ok = strings.Cut(example, "</script>")
+	if !ok {
+		t.Fatal("journal example script is not closed")
+	}
+	harness := strings.Replace(runtimeHarness, "/* journal example */", example, 1)
+	out := jsrun.Run(t, JournalRuntime, harness, scenario)
 	var got runtimeResult
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
@@ -1208,6 +1183,35 @@ func TestJournalExampleSendsTheLook(t *testing.T) {
 	}
 	if payload.Look == "" {
 		t.Errorf("payload %s carries no look", got.Sent[0].Payload)
+	}
+}
+
+func TestJournalExampleRestoresTheLook(t *testing.T) {
+	cases := []struct {
+		scenario string
+		want     string
+	}{
+		{"exampleTickFirst", "giant"},
+		{"exampleReadFirst", "giant"},
+		{"exampleFromSave", "wizard"},
+		{"exampleRowBeatsSave", "giant"},
+	}
+	for _, c := range cases {
+		t.Run(c.scenario, func(t *testing.T) {
+			got := runRuntime(t, c.scenario)
+			if len(got.Sent) != 1 {
+				t.Fatalf("sent %d rows, want one", len(got.Sent))
+			}
+			var payload struct {
+				Look string `json:"look"`
+			}
+			if err := json.Unmarshal(got.Sent[0].Payload, &payload); err != nil {
+				t.Fatalf("decode payload: %v", err)
+			}
+			if payload.Look != c.want {
+				t.Errorf("republished look = %q, want restored %q", payload.Look, c.want)
+			}
+		})
 	}
 }
 

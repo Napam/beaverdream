@@ -14,6 +14,7 @@ type completion struct {
 	Choices []struct {
 		Message struct {
 			ToolCalls []toolCall `json:"tool_calls"`
+			Content   string     `json:"content"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -53,11 +54,36 @@ func TestListsModels(t *testing.T) {
 	}
 }
 
-func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
+func TestTextRequestDoesNotDependOnPromptWording(t *testing.T) {
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()
 
 	status, body := post(t, srv, `{"messages":[{"role":"user","content":"make it matrix"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	var got completion
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Choices) != 1 {
+		t.Fatalf("choices = %d, want one text answer", len(got.Choices))
+	}
+	choice := got.Choices[0]
+	if choice.Message.Content == "" || len(choice.Message.ToolCalls) != 0 ||
+		choice.FinishReason != "stop" {
+		t.Errorf("text request returned %+v, want prose without tool calls", choice)
+	}
+}
+
+func TestMatrixPromptReturnsThemeEdits(t *testing.T) {
+	srv := httptest.NewServer(Handler())
+	defer srv.Close()
+
+	status, body := post(
+		t, srv,
+		`{"tool_choice":"required","messages":[{"role":"user","content":"make it matrix"}]}`,
+	)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", status, body)
 	}
@@ -104,8 +130,11 @@ func TestEditKeywordsSendEditAndDoneTogether(t *testing.T) {
 	defer srv.Close()
 
 	for _, keyword := range []string{"mockedit", "mockpatch", "mockbadedit"} {
-		status, raw := post(t, srv,
-			`{"messages":[{"role":"user","content":"NEW POST: `+keyword+`"}]}`)
+		status, raw := post(
+			t,
+			srv,
+			`{"tool_choice":"required","messages":[{"role":"user","content":"NEW POST: `+keyword+`"}]}`,
+		)
 		if status != http.StatusOK {
 			t.Fatalf("%s: status = %d", keyword, status)
 		}
@@ -125,7 +154,7 @@ func TestToolResultClosesWithDone(t *testing.T) {
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()
 
-	body := `{"messages":[` +
+	body := `{"tool_choice":"required","messages":[` +
 		`{"role":"user","content":"make it matrix"},` +
 		`{"role":"assistant","content":"","tool_calls":[]},` +
 		`{"role":"tool","content":"ok","tool_call_id":"call_css"}]}`
@@ -173,7 +202,10 @@ func TestChaosPromptIncludesScript(t *testing.T) {
 	srv := httptest.NewServer(Handler())
 	defer srv.Close()
 
-	status, raw := post(t, srv, `{"messages":[{"role":"user","content":"make chaos"}]}`)
+	status, raw := post(
+		t, srv,
+		`{"tool_choice":"required","messages":[{"role":"user","content":"make chaos"}]}`,
+	)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d", status)
 	}

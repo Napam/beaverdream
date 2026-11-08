@@ -64,14 +64,6 @@ func TestSystemPromptFormats(t *testing.T) {
 	}
 }
 
-// The runtime harness runs exampleMotion in place of the example. The block
-// must appear in the prompt whole and in order, so the copy cannot drift.
-func TestJournalPromptHasTheExampleMotion(t *testing.T) {
-	if !strings.Contains(systemPrompt(), exampleMotion) {
-		t.Error("prompt does not contain the example motion block the harness runs")
-	}
-}
-
 func TestCleanJournalSchemaRejects(t *testing.T) {
 	cases := map[string][]journalKeyInput{
 		"bad name":   {{Name: "Moves!"}},
@@ -257,16 +249,6 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 		t.Fatalf("done round = %d, want 2", res.DoneRound)
 	}
 
-	first := res.Messages[2]
-	var deferred string
-	for _, call := range first.ToolCalls {
-		if call.Name == "done" {
-			deferred = call.Result
-		}
-	}
-	if !strings.Contains(deferred, "bd.journal for key moves") {
-		t.Fatalf("done result = %q, want the missing key named", deferred)
-	}
 	if res.Site.JournalSchema != "{}" {
 		t.Errorf("schema = %s, want the key removed in round 2", res.Site.JournalSchema)
 	}

@@ -18,42 +18,42 @@ type Skill struct {
 var All = []Skill{
 	{
 		Name:    "controls",
-		Summary: "how a world someone moves through should feel: keys, cameras, genres, and a tested platformer core",
+		Summary: "for movement: keys, cameras, genre defaults and a tested platformer core",
 		Body:    controlsReference,
 	},
 	{
 		Name:    "feel",
-		Summary: "make actions feel physical: shake, hit stop, particles, squash, generated sound and rumble from one impact call",
+		Summary: "for actions and impacts: shake, hit stop, particles, squash, sound and rumble",
 		Body:    feelReference,
 	},
 	{
 		Name:    "space",
-		Summary: "a grid world that can be broken or dug: collision, ray casts, line of sight, area damage and a spatial hash",
+		Summary: "for walls, digging and destruction: grid collision, rays, line of sight, area damage and a spatial hash",
 		Body:    spaceReference,
 	},
 	{
 		Name:    "entities",
-		Summary: "several kinds of characters or enemies from tables: moves per kind, charge, cooldowns, transforms, shots, spawning",
+		Summary: "for character kinds or reactive enemies: moves, charge, cooldowns, transforms, shots and spawning",
 		Body:    entitiesReference,
 	},
 	{
 		Name:    "paths",
-		Summary: "find the way around walls: A* for a few seekers, one flow field for a crowd, path following and spreading apart",
+		Summary: "for finding a way around walls: A*, crowd flow fields, path following and spacing",
 		Body:    pathsReference,
 	},
 	{
 		Name:    "random",
-		Summary: "seeded randomness everyone agrees on: daily seeds, forks, noise terrain, mazes, dungeons, caves and even scatter",
+		Summary: "for generated worlds, puzzles, decks or art: shared seeds, noise, mazes, dungeons, caves and scatter",
 		Body:    randomReference,
 	},
 	{
 		Name:    "canvas",
-		Summary: "sharp, cheap 2D drawing: pixel ratio, a camera with mouse to world, cached autotiled tile maps, sprites from text, parallax, y sorting, light",
+		Summary: "for 2D canvas drawing: pixel ratio, cameras, cached tiles, sprites, parallax, sorting and light",
 		Body:    canvasReference,
 	},
 	{
 		Name:    "characters",
-		Summary: "3D figures that look alive: body plans (biped, quadruped, bug, flyer, blob, vehicle), a walk, run, jump and land from movement, seeded looks, moves; the same gait for 2D",
+		Summary: "for 3D figures or drawn 2D gaits: body plans, movement-driven animation, seeded looks and actions",
 		Body:    charactersReference,
 	},
 }

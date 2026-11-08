@@ -10,7 +10,8 @@ package skills
 const pathsReference = `PATHS REFERENCE:
 Use this when enemies, units, pets or anything else must find its way around
 walls to a target, instead of walking straight into the nearest wall. This
-core is tested. Copy it whole.
+core is tested. Reuse helpers already on the page, or copy the functions you
+need with their dependencies intact.
 
 <script>
 var paths = (function () {
@@ -230,8 +231,9 @@ map never does, and a broken wall changes the way at once.
   Flying things need no map: they steer straight.
 - Size: a flow build visits every open cell once. Keep maps under 250 by 250
   cells, or path on a coarser map than the walls.
-- Multiplayer: each page runs the paths for the enemies it owns. Paths are
-  never rows; positions are.
+- Multiplayer: only the shared actors' recorded owner runs enemy paths and
+  publishes positions. Other pages render those snapshots. Do not send paths
+  or run separate enemy pathfinding in every tab.
 - paths.heap() is a general priority queue, for anything else that needs the
   smallest next: events in time order, the closest of many.
 `

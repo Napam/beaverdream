@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -554,9 +553,6 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	if !strings.Contains(got, "NEW POST #9 from dave") {
 		t.Error("prompt does not name the trigger post")
 	}
-	if !strings.Contains(got, "The poster is looking at this post.") {
-		t.Error("prompt does not anchor the change to the poster")
-	}
 }
 
 func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
@@ -672,9 +668,6 @@ func TestUserPromptCreditsABurstToEveryone(t *testing.T) {
 	if !strings.Contains(got, "#8 kit: one") || !strings.Contains(got, "#9 dave: two") {
 		t.Errorf("burst is missing a poster: %s", got)
 	}
-	if !strings.Contains(got, "The posters are looking at their own posts.") {
-		t.Errorf("burst uses the singular poster line: %s", got)
-	}
 }
 
 func TestRunReportsModelFailure(t *testing.T) {
@@ -691,27 +684,10 @@ func TestRunReportsModelFailure(t *testing.T) {
 	}
 }
 
-// The model styles posts it never writes. Every class the post renderer emits
-// must be named in the static prompt, with the base rules it overrides.
-func TestTheSystemPromptShowsThePageAnatomy(t *testing.T) {
-	rendered := RenderPosts([]Post{{ID: 3, Author: "a", When: "now", Body: "x\n>q\n>>2"}}) +
-		RenderPosts(nil)
-	classes := regexp.MustCompile(`class="([^"]+)"`).FindAllStringSubmatch(rendered, -1)
-	if len(classes) < 8 {
-		t.Fatalf("found only %d classes in %s", len(classes), rendered)
-	}
-
+func TestSystemPromptIsStable(t *testing.T) {
 	prompt := systemPrompt()
 	if prompt != systemPrompt() {
 		t.Fatal("the system prompt is not a stable string")
-	}
-	for _, match := range classes {
-		for _, class := range strings.Fields(match[1]) {
-			if !strings.Contains(prompt, "."+class) &&
-				!strings.Contains(prompt, `class="`+class+`"`) {
-				t.Errorf("class %q is not named in the prompt", class)
-			}
-		}
 	}
 	if !strings.Contains(prompt, strings.TrimSpace(BaseCSS)) {
 		t.Error("the prompt lacks BaseCSS")

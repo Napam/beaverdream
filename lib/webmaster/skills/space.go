@@ -8,7 +8,8 @@ package skills
 const spaceReference = `SPACE REFERENCE:
 Use this for a world whose walls, buildings or ground can be hit, broken, dug,
 seen through or collided with, and for many things that must find each other.
-This core is tested. Copy it whole.
+This core is tested. Reuse helpers already on the page, or copy the functions
+you need with their dependencies intact.
 
 <script>
 var space = (function () {

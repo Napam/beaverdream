@@ -8,7 +8,8 @@ package skills
 const feelReference = `FEEL REFERENCE:
 Use this when a page has actions: hits, shots, jumps, things breaking, a
 score. Make every action answer the player, without being asked. This core is
-tested. Copy it whole and tune only the EVENTS table.
+tested. Reuse helpers already on the page, or copy the functions you need
+with their dependencies intact. Tune effects in the EVENTS table.
 
 <script>
 var fx = (function () {
@@ -167,9 +168,10 @@ WIRING:
 - A body that is hit: fx.pop(body, 0.2 to 0.4), then fx.settle(body, dt) each
   frame. Draw it scaled (1 + pop, 1 - pop), white while body.flash > 0.
 - A mute: the M key and a small button toggle fx.muted, kept with bd.save('muted', fx.muted).
-- Multiplayer: effects are local. When a row says something happened, call
-  fx.impact where it happened, with mine if it happened to you. Rows never
-  carry effects.
+- Multiplayer: share what happened, its actor, position and parameters in an
+  action row. Local and remote actions call the same effect renderer, which
+  calls fx.impact there, with mine if it happened to you. Generate particles,
+  shake, sound and rumble locally; do not send each particle or shake value.
 
 TUNING: a post that asks for more or less of something changes that event's
 row in EVENTS and nothing else. A new kind of event is a new row. Keep the

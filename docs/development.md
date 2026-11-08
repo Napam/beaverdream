@@ -51,6 +51,22 @@ model, so they need no key and no network. Tests create a temporary registry and
 temporary world files, so they never touch `data/`. Run them before you push.
 There is no `task test` target.
 
+### Model prompts and examples
+
+`lib/webmaster/changeset.go` holds the static system prompt, tool descriptions
+and per-turn prompt builders. Tool descriptions explain arguments; the system
+prompt explains when to use them. `summarize.go` holds the compaction prompt.
+Skill descriptions and executable references live in `lib/webmaster/skills/`.
+
+Keep the opening acknowledgment and skill loads ahead of implementation
+planning. Keep contextual hints after the new posts so they do not shift the
+cached history prefix. Reuse existing page helpers instead of copying a skill
+core again for a small change.
+
+The journal and skill examples run in Node or Bun from Go tests. Change their
+behavioral tests with the examples, then run `task check.go` and
+`go test ./...`. Do not test whether prompt prose contains a particular phrase.
+
 ## Git hook
 
 `task init` links `.hooks/` as git's hooks directory. The `pre-push` hook runs

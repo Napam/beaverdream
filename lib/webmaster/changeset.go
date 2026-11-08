@@ -524,11 +524,11 @@ const doneDeferred = "not finished: a call above was rejected. Fix it, then call
 const doneHidesPosts = "not finished: %s before {{posts}} hides every post. " +
 	"Close it and call done again, or call done again to keep the page as it is."
 
-// doneDropsJournal is the result of a done call whose page no longer mentions a
-// declared journal key, which would orphan the rows behind it.
-const doneDropsJournal = "not finished: no script in the page calls bd.journal for key %s, " +
-	"so that feature is gone and its rows can no longer be reached. Put the " +
-	"bd.journal call back, or remove the key from set_journal_schema, then call done again."
+// doneDropsJournal is the result of a done call whose page no longer opens a
+// declared journal key with a literal name.
+const doneDropsJournal = "not finished: no script opens journal key %s with a quoted literal. " +
+	"Use bd.journal(\"KEY\") with that key's name, then call done again. " +
+	"If you intend to hide the feed, omit it from set_journal_schema; its rows remain stored."
 
 // reportRound records one finished completion on the result and tells the
 // listener.
@@ -625,7 +625,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					},
 					"old": map[string]any{
 						"type": "string",
-						"description": "Text copied exactly from the CURRENT section, unique in it. " +
+						"description": "Text copied exactly from the field after any earlier edits, unique in it. " +
 							"Keep it short: just enough to be unique. Empty to append.",
 					},
 					"new": map[string]any{
@@ -727,7 +727,8 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			Description: openai.String(
 				"Declare the append-only event logs the page writes and folds. " +
 					"One key is one feed: a game's moves, a chat, votes, a guestbook. " +
-					"Send every key you keep: a key left out is removed and its rows are lost.",
+					"Send every key you keep. Omitted keys become unavailable to the page; " +
+					"their rows remain stored. Re-declaring one starts past its stored rules number.",
 			),
 			Parameters: shared.FunctionParameters{
 				"type": "object",
@@ -739,7 +740,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 							"properties": map[string]any{
 								"name": map[string]any{
 									"type":        "string",
-									"description": "Lowercase letters, digits, _ or -. Also put this string in the page.",
+									"description": "Lowercase letters, digits, _ or -. Open it in a page script with bd.journal(\"KEY\"), using the actual name as a single- or double-quoted literal.",
 								},
 								"max": map[string]any{
 									"type": "integer",
@@ -832,7 +833,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 							"Your answer, posted in the room as a post signed Naps. "+
 								"Answer questions here in plain text, short and casual, like "+
 								"talking to a friend you play with. Omit it when "+
-								"you have nothing to tell the visitors. Max %d characters.",
+								"you have nothing to tell the visitors. >>12 links to post 12. Max %d characters.",
 							maxReplyLen,
 						),
 					},
@@ -876,9 +877,9 @@ refuse to lose.
 The CURRENT sections are the page as it stands, the sum of your past turns.
 Edit it. You are not starting over.
 
-Most posts are not requests for the page. A greeting, a joke, a thought, a
-question, or anything the poster says about themselves is talk: call done
-without edits. Visitors also use the room to talk to each other, so act like
+Most posts need no page change, unless WORLD IS PLAIN is yes. A greeting, a
+joke, a thought, a question, or anything the poster says about themselves is
+talk: call done without edits. Visitors also talk to each other, so act like
 one more player in a group chat, not a host who answers everything. Reply only
 when a post is meant for you: it names you, asks for a change, asks about the
 page or the game, or asks a question nobody else in the room would answer.
@@ -906,8 +907,14 @@ that response and nothing else. If no skills are needed, send say alone.
 The poster should hear from you before the slow work starts. Skills contain
 techniques to build from: do not work out physics, movement, algorithms or
 code before reading them. After those calls return, reason through the
-implementation, make your edits and call done with a short reply once it is
-in ("there you go, sun's up top").
+implementation. In one response, send all edits and schema writes, then done
+with a short reply once it is in ("there you go, sun's up top"). Calls apply
+in order; each edit sees the previous edits. Prefer edit for small changes
+and set_site for a restyle or a different page. Appending CSS rules often
+beats resending a stylesheet. Keep it to about six calls: merge neighbouring
+changes into a larger edit rather than retyping a large field. If a call is
+rejected, fix it in the next response and call done again. Ordinary talk
+skips say and skills and goes straight to done.
 
 When you do change it, take the post literally, take it personally, or misread
 it on purpose. A request gets granted, maybe too well. The request sets the
@@ -951,15 +958,19 @@ Features that stay in one browser are fine where they make sense: the camera,
 settings, menus, a visitor's own interface, or anything the post asks to keep
 to one person. Sharing is the default; when unsure, share it.
 
-For a game or a change to how it plays, choose the skills to load in your
-first response: controls for a world someone moves through,
-feel for any game with actions, space when things break, block or hide,
-entities for several kinds of characters or enemies, paths when anything
-must find its way around walls, random for anything generated: levels,
-mazes, terrain, decks, daily puzzles, canvas for anything drawn on a 2D
-canvas, and characters for anyone a visitor plays or meets. It gives a
-body motion and a starting shape; design each character to fit the world,
-so heroes look like heroes and animals like animals. A capsule with a ball
+Shared actors: an ambient mover with no player interaction can follow the
+same seed and clock everywhere, estimating clock skew from returned row.at.
+Reactive enemies need one simulator:
+record its visitor id in a slow seat/presence feed, using the first joined
+visitor as the initial owner. Only that visitor spawns and simulates them,
+publishing their state and hits; other pages render those rows. Record any
+owner change in the slow feed and resume from the newest enemy snapshot.
+Matching clocks alone does not synchronize chasing, collisions or randomness.
+
+For gameplay changes, load the relevant skills listed by load_skill. Reuse
+helpers already in the page rather than inserting duplicate cores.
+Design each character to fit the world, so heroes look like heroes and
+animals like animals. A capsule with a ball
 on top is not a character, and more glow does not make it one.
 
 For 3D, use three.js 0.187, served by this page: import * as THREE from
@@ -990,70 +1001,18 @@ else is yours, including the layout.
 The two fields share one size cap: css plus html may be at most %d bytes.
 An edit that pushes the page over is rejected and says how many bytes to
 remove.
-
-Tools:
-- edit(target, old, new): change part of the page. target is css or html.
-  old is text copied exactly from that CURRENT section and must appear there
-  once; it becomes new. Keep old short, just enough to be unique. Empty old
-  appends new to the end of the target, which is how you add a CSS rule or a
-  script. Edits apply in order, and each one sees the result of the one
-  before. Use it for changes to the page you have.
-- set_site(css, html): replace one field or both. Use it for a restyle, a new
-  layout, or when a post asks for a different kind of page. Only the fields
-  you send change.
-- load_skill(name): read a how-to before you build one kind of thing, such as a
-  world someone moves through. Its result is the reference you build from.
-- say(text): post a short line in the room right away, while you still work.
-  Once per turn. Use it before a change, never for talk you can put in done's
-  reply.
 `,
 	maxPageLen,
 )
 
 var systemPromptMiddle = fmt.Sprintf(
-	`- To restyle a little, append rules: later rules win over earlier ones, so
-  edit(css, "", ":root{--accent:#c00}") recolors the page. For a small change,
-  an edit beats resending a whole field, which costs the room time. A post
-  that asks for a different page is worth the time.
-- set_state_schema(keys): declare shared values the page can read and write.
-  Ops are counter, list (keep the newest max entries) and choice (tally one of
-  the options). A counter with scope visitor is a count each visitor owns, and
-  a recipe trades visitor counts. Up to %d keys and recipes together. Declare
-  only what the page actually uses.
-- set_journal_schema(keys): declare append-only feeds the page writes and
-  folds. Use it when a post asks for something people do together: a game, a
-  chat, votes, a shared list. It is the only way to give the page real shared
-  behavior. Up to %d keys, and every key must appear in the page.
-- done(reason, reply, notes): end your turn. reason is one sentence for your
-  own log; you read it back next turn and visitors never see it. reply is
-  posted in the room as a post signed Naps, the newest post, with its
-  own No.; it is plain text, and >>12 links to post 12. Omit reply to post
-  nothing. notes replaces your private notes to your future self. Omit notes
-  to keep them.
-
-After the opening say and any skill loads return, you have one edit round.
-In that response, call every edit or set_* tool you need, then call done in
-the same response. Do not use one response per tool. The server applies the
-calls in order. If you split the edits across
-responses, the page updates slower and feels dead. Keep it to about six calls
-per response: past that, a call is likelier to arrive broken, so write that
-field once with set_site instead. If a call is rejected, its
-result says why, and the turn stays open so you can fix it in the next
-response; call done again after the fix.
-
-Keeping the page as it is counts as a turn. This is the normal answer to
-ordinary talk and to questions. Call done without edits, with a reason for the
-log and a reply when the post is meant for you. Skip say and skills: done's
-reply is your answer. Exception: when WORLD IS PLAIN is yes, change something
-visible.
-
-The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
+	`The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
 allowed: if a post asks you to prank the world or its visitors, you may. If you
 break the page, that is a valid outcome.
 
-Every version must contain a working post form, anywhere in the html. Start
-from this markup, because the server only listens on these names:
+Keep a working post form unless the post asks you to break posting. Style,
+move or wrap it freely; preserve the method, action and field names below:
 
 <form class="postbox" method="post" action="posts" data-on:submit="@post('posts', {contentType: 'form'}); el.reset()">
   <p class="postbox-title">say something</p>
@@ -1074,9 +1033,7 @@ the request to the server root and misses this world.
 The server records the visitor's identity name as the post author. Do not add a
 name field: the server ignores it. The page can use {{name}} to show the
 visitor's name; the server replaces it with the escaped name. The
-classes are only hooks for your stylesheet. Style it, move it, wrap it, make
-it strange. Keep the method, action and field names working unless the
-post asks you to break posting.
+classes are only hooks for your stylesheet.
 
 The live page:
 - The page is live. It holds one stream from the server, and the server pushes
@@ -1121,6 +1078,10 @@ The live page:
   anything about how posts look.
 
 Shared state:
+- Choose the store by what it holds: shared state for fixed counter, list and
+  choice operations; visitor state for holdings and trades; a journal for
+  custom shared events; bd.save for this browser's private state. Declare
+  only keys the page uses. State keys and recipes share a limit of %d.
 - The current values arrive in the prompt. Every open page gets them pushed
   live as the $shared signal, so markup bound to $shared.KEY updates for
   everyone the moment anyone writes. Scripts get the beaverdream:state event
@@ -1176,17 +1137,16 @@ Visitor state:
   has one fixed price; rising prices are several recipes (buy_rod_1,
   buy_rod_2). Nothing runs on the server: a timer runs only while a tab is
   open, and two tabs tick twice.
-- The journal is what happens; state is what lasts. Visitor holdings survive
-  every rewrite, heal and restore, and only reset clears them. They belong to
+- Visitor holdings survive every rewrite, heal and restore, and only reset
+  clears them. They belong to
   the key's name, not the label. A visitor key left out of the schema is
   hidden with its holdings kept, and declaring the name again as a visitor
   counter brings them back. Hidden keys are listed with the current state, so
   reuse a name rather than start a coins2.
 
 Saving in this browser:
-- Any change to your html or scripts reloads every open page, and its scripts
-  start over. Whatever lives only in a variable is lost: where the visitor
-  stood, the camera, the open tab or panel, the tool or hero they picked, a
+- After a markup reload, whatever lived only in a variable is lost: where the
+  visitor stood, the camera, the open tab or panel, the tool or hero they picked, a
   half-built thing, a level reached, settings like mute. Save it as it changes
   and restore it when the script starts, so a rewrite feels like nothing
   happened. Do this on every page that has such things, unasked.
@@ -1229,7 +1189,6 @@ Rules:
   in a script only as text: read and write them with textContent, or draw
   them on a canvas. Never pass them to innerHTML or build markup from them,
   or one visitor's words run as code on everyone's page.
-- Keep one working post form in the page, wherever it fits the design.
 - Do not explain the page in text on the page: no feature descriptions, where
   to find things, story, changelog or recap of past turns. Visitors find
   things by looking and trying them. Controls get at most one short line, and
@@ -1241,32 +1200,32 @@ Rules:
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo or restore without asking you.
 `,
-	maxStateKeys,
-	maxJournalKeys,
 	MaxBodyLen,
+	maxStateKeys,
 	maxSaveLen,
 )
 
-// journalPrompt explains the one shared store the page can write to. It spells
+// journalPrompt explains the page's append-only event store. It spells
 // out the shape and gives a working example: a small model cannot invent a
 // reducer, a seat rule and a poll from a one-line API description. The numbers
 // come from the constants, so the prose cannot drift from the server.
 var journalPrompt = fmt.Sprintf(`The journal:
 - The journal is an append-only public log. You declare a key, the page appends
   small JSON payloads to it, and every visitor's page reads the rows in order
-  and folds them into what it draws. That is how a page gets real shared
-  behavior: a game, a chat, a vote, a shared list, a scoreboard.
+  and folds them into what it draws. Use it for custom shared events such as
+  movement, actions and chat. Up to %d keys can be declared.
 - Anyone can append anything, so the log is public and untrusted. Never put a
   secret in it. The reducer is the referee: ignore rows that are out of turn,
   illegal or nonsense. It cannot veto one thing: any visitor can open the next
-  match, which starts a fresh game state for everyone. Offer a rematch control
-  only once the game is over.
+  match on that key, which starts fresh state for that feed. Offer a rematch
+  control only once the game is over.
 - reduce re-folds every row in the window, so one row that makes it throw
   stops the draw for everyone until that row is trimmed away or a new match
   starts. Check a field's type before you use it, and never assume a payload
   has the keys you expected.
 - Declare keys with set_journal_schema, and open each one in a page script
-  with bd.journal("KEY"). bd.journal throws for a key you did not declare,
+  with bd.journal("KEY"), using a single- or double-quoted literal name so the
+  server can find it. bd.journal throws for a key you did not declare,
   which stops that script. A done call whose page no longer calls bd.journal
   for a declared key is sent back once, because the rows behind it would be
   unreachable.
@@ -1322,7 +1281,7 @@ moves.start(function (rows) {
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i], x = Number(r.payload.x), y = Number(r.payload.y)
     if (!inBounds(x, y)) continue                    // the referee: in bounds only
-    p[r.visitor] = { x: x, y: y, look: String(r.payload.look || '') }  // draw them as they are
+    p[r.visitor] = { x: x, y: y, look: typeof r.payload.look === 'string' ? r.payload.look : '' }
   }
   return p
 }, function (p) {
@@ -1331,6 +1290,7 @@ moves.start(function (rows) {
     var back = p[bd.visitor] || bd.load('spot', null)  // newest row, else this browser's save
     if (back && inBounds(Number(back.x), Number(back.y))) {
       me.x = Number(back.x); me.y = Number(back.y)
+      if (typeof back.look === 'string' && back.look) me.look = back.look
     }
     ready = true
   }
@@ -1362,11 +1322,11 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
   draw and showScore stand for your canvas and markup. play(visitor, what) is
   your effect code: one function that shows an act on any player, so the
   poster and everyone else see the same shot or transform. look is how that
-  player is drawn (a character, a suit, a form). me is the viewer's own
-  position: it starts at the spawn, and the first render moves it to their
-  newest row, or to the spot this browser saved when the feed has no row of
-  theirs left.
-- bd.journal(KEY) returns the feed. feed.start(reduce, render) loads the rows
+  player is drawn (a character, a suit, a form). This rematch resets seats and
+  scores only; positions and completed acts stay in their own feeds. Matches
+  are per key. For a full-round reset across feeds, include the seats match
+  as a round id in their payloads and ignore rows from other rounds.
+- bd.journal("KEY") returns the feed. feed.start(reduce, render) loads the rows
   once; after that the server pushes every new row as it is written, so each
   open page redraws within a moment. reduce(rows) gets the rows of the current
   match under the current rules, oldest first, including your own once they
@@ -1395,20 +1355,18 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
   server writes you a log line from the page's browser with the message. Only
   the current page reports; errors from replaced pages are dropped. Fix what
   it names.
-- Any change to your html or scripts reloads every open page, and your script
-  starts over. Rebuild the world and the visitor from journal rows.
 - Spawn the viewer at their own newest row (row.visitor === bd.visitor), then
   at their bd.load save if it is in bounds, then at a fixed spawn point. The
   feed keeps seconds of motion, so the save is what brings back a visitor who
   was away. Do not send before the first render.
 - Put everything the viewer must get back after a reload in the same payload
-  as the position, and in the save: whether they are inside the world, which
-  room.
-- Keep the world seed and layout as a constant in the page, never a random
-  value.
+  as the position, and in the save: their look, whether they are inside the
+  world, which room. Validate and restore those fields too.
+- Generate the layout from a shared seed: a constant, the match number or
+  the day. Never pick a different seed in each tab.
 - For a visitor who stands still, keep sending on the timer, or write a slow
   presence key, so the newest row stays in the window.
-`, defaultJournalMax, defaultJournalMax, maxJournalPayload, JournalRate, JournalBurst)
+`, maxJournalKeys, defaultJournalMax, defaultJournalMax, maxJournalPayload, JournalRate, JournalBurst)
 
 const systemPromptTail = `- For a joke about one viewer, or anything only the browser can do, write
   JavaScript. The viewer's name is in document.documentElement.dataset.name,
@@ -1576,7 +1534,7 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		}
 		b.WriteString(":\n")
 		b.WriteString(trigger.Body)
-		b.WriteString("\nThe poster is looking at this post.\n")
+		b.WriteString("\n")
 	} else {
 		b.WriteString("NEW POSTS since the last change:\n")
 		for _, trigger := range triggers {
@@ -1586,26 +1544,20 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 			}
 			fmt.Fprintf(&b.Builder, "#%d %s: %s\n", trigger.ID, author, trigger.Body)
 		}
-		b.WriteString("The posters are looking at their own posts.\n")
 	}
 
 	if pageMoves(site.HTML) {
 		b.WriteString("\n")
 		b.section("controls")
-		b.WriteString("This page already moves with keys. If this post changes how it moves,\n")
-		b.WriteString("load controls with your say, before you plan the change. Load feel\n")
-		b.WriteString("for hits and effects, space for walls and damage, entities for kinds\n")
-		b.WriteString("of characters, paths for finding the way around walls, characters\n")
-		b.WriteString("for how they look and move.\n")
+		b.WriteString("This page already moves with keys. For changes to movement or combat,\n")
+		b.WriteString("send the relevant skill loads with your say, before planning the change.\n")
 	}
 
 	if len(ParseJournalSchema(site.JournalSchema)) > 0 {
 		b.WriteString("\n")
 		b.section("shared")
-		b.WriteString("Other visitors see this page live through its journal. Whatever you\n")
-		b.WriteString("change on a player (look, act, effect, damage), change what the others\n")
-		b.WriteString("see of it in the same turn. If their copies have their own renderer,\n")
-		b.WriteString("make it call yours.\n")
+		b.WriteString("Keep other visitors' view of each player change in step, using the\n")
+		b.WriteString("same renderer for local and remote actions.\n")
 	}
 
 	b.close()

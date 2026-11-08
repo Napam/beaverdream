@@ -21,7 +21,8 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Messages []chatMessage `json:"messages"`
+	Messages   []chatMessage `json:"messages"`
+	ToolChoice string        `json:"tool_choice"`
 }
 
 type functionCall struct {
@@ -82,7 +83,7 @@ func completions(w http.ResponseWriter, r *http.Request) {
 	}
 	// The summarizer asks for prose, not tools. A fixed line keeps the
 	// compaction path deterministic without modelling a second mind.
-	if strings.Contains(joined, "summarize this stretch of the room") {
+	if req.ToolChoice == "" {
 		writeTextCompletion(w, "the room changed look twice. dave and kit asked for it.")
 		return
 	}

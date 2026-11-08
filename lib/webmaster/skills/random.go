@@ -10,7 +10,8 @@ const randomReference = `RANDOM REFERENCE:
 Use this when a page generates anything: a level, a maze, a dungeon, terrain,
 a daily puzzle, loot, a deck, stars, art from a post's text. Everyone must see
 the same thing, and the same thing again after a reload. This core is
-tested. Copy it whole.
+tested. Reuse helpers already on the page, or copy the functions you need
+with their dependencies intact.
 
 <script>
 var seeded = (function () {
@@ -255,9 +256,10 @@ var seeded = (function () {
 })()
 </script>
 
-THE RULE: never Math.random for anything two visitors must agree on, or one
-visitor must see again after a reload. Seed a generator instead. Math.random
-is fine for sparks and shake.
+THE RULE: use a seeded generator for anything each page rebuilds independently
+and must agree on, including after a reload. Math.random is fine for local
+sparks and shake, or a sole simulator's choices when it publishes the results
+and restores them from rows rather than generating them again.
 
 - Seed. Everyone must start from the same seed, so take it from what every
   page sees: seeded.day() for a daily puzzle, the journal's match number for

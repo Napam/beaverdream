@@ -1,9 +1,10 @@
 # Configuration
 
 Every setting is an environment variable. Server settings come from
-`lib/env/env.go`; the model limits under [Limits](#limits) are read at startup
-by `lib/webmaster`. `.env.example` lists every one with its default. The
-Taskfile sets a few more for `task` runs.
+`lib/env/env.go`; `TURN_TIMEOUT` is read in `cmd/serve/handlers/handlers.go`,
+and the model limits under [Limits](#limits) by `lib/webmaster`. `.env.example`
+lists these with their defaults, except the dev-only live-reload variables
+below. The Taskfile sets a few more for `task` runs.
 
 ## Where values come from
 
@@ -61,7 +62,8 @@ host and `PLAY_PORT`. Set both to `https://` origins behind a proxy, or set
 cookies are named `__Host-beaverdream_app` and `__Host-beaverdream_play`, and
 the server reads only the prefixed name. One `https` URL and one `http` or
 empty is refused at startup, so set both. A LAN keeps the plain cookie names
-and no `Secure`.
+and no `Secure`. Both cookies are `HttpOnly`, `SameSite=Lax`, `Path=/` and
+host-only with no `Domain`, and `Secure` in secure mode.
 
 ## Storage
 
@@ -151,7 +153,7 @@ at startup. Every other cap is a constant in `lib/webmaster/constants.go` or
 `cmd/serve/handlers`, because changing it changes the game or the code, not the
 deployment.
 
-- `LLM_MAX_OUTPUT_TOKENS` (default `262144`): one completion. It bounds a whole
+- `LLM_MAX_OUTPUT_TOKENS` (default `250000`): one completion. It bounds a whole
   `set_site`; a larger page grows through edits.
 - `COMPACT_AT_PROMPT_TOKENS` (default `200000`): the prompt budget, transcript
   plus page, in estimated tokens at four runes each. Past it the history is

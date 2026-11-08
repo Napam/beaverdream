@@ -52,7 +52,8 @@ across restarts, set `ADMIN_PASSWORD` in `.env`.
   then removes the registry row. A crash halfway is finished on the next start.
 - Reset in the admin panel clears one world file. It keeps the registry, so
   accounts, invites and other worlds survive. Reset deletes the world's posts,
-  turns, notes, shared state, holdings and journal rows.
+  turns, notes, room summaries, shared state, holdings, state ops and journal
+  rows.
 - Back up with `VACUUM INTO` or the SQLite backup API. Copying a live `.db`
   file can miss recent writes that still sit in the WAL.
 
@@ -81,6 +82,7 @@ Public play needs care:
   never reach the app origin's HTML.
 - Keep `ADMIN_PASSWORD` set and strong. The bootstrap password is the way back
   if the admin identity is disabled.
-- Set both daily budgets to values you can afford. There are no rate limits,
-  email, or audit log in this version.
+- Set both daily budgets to values you can afford. There is no login or HTTP
+  rate limit, no email and no audit log in this version; the only limits are
+  the write cooldowns on state and posts, plus the journal burst allowance.
 - Back up the registry and every world file on a schedule.

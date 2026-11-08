@@ -99,8 +99,7 @@ the pause.
   input, and `static/` for built assets. `web/lib` is leftover scaffold that no
   page loads.
 - `docs/`: this documentation and the design notes.
-- `scripts/`: `dev-run.sh` rebuilds and restarts the dev server. `rename.sh` is
-  the template's renamer.
+- `scripts/`: `dev-run.sh` rebuilds and restarts the dev server.
 - `bin/`: built binaries such as `app` and `dev-app`. Git ignores them.
 - `.hooks/`: the git hooks.
 - `files_embed.go` and `files_noembed.go`: `go:embed` for `web/static` and

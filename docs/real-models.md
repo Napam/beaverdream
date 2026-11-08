@@ -35,7 +35,8 @@ turn ends when the model calls `done`, or when it runs out of rounds.
 ## Cost
 
 Every model round is a paid request. A post can take several rounds, up to
-`TURN_MAX_ROUNDS`. Compaction makes one more call when the room log gets long.
+`TURN_MAX_ROUNDS`. Compaction adds up to eight more calls when the room log
+gets long, one per chunk of up to 1,000 turns.
 Friends can post all evening, so set a spend cap with your provider before you
 start. Check the provider's dashboard while you play.
 

@@ -52,6 +52,11 @@ The task passes these from your `.env` (or your shell) into the container:
 `DAILY_TOKENS_GLOBAL`, `MODEL_CONCURRENCY`, `WORLD_IDLE_TIMEOUT`, `APP_URL` and
 `PLAY_URL`.
 
+The task also passes `APP_PORT`, `PLAY_PORT`, `REGISTRY_PATH` and `WORLDS_DIR`,
+so the container writes where your local run does. It does not pass
+`TLS_CERT_FILE`, `TLS_KEY_FILE`, `LLM_MAX_OUTPUT_TOKENS`, `LLM_IDLE_TIMEOUT` or
+`MAX_PAGE_BYTES`; set those in the container yourself.
+
 With no `OPENAI_BASE_URL` set, the container uses the mock model on your host:
 `http://host.docker.internal:6701/v1`. Start it first in another terminal with
 `task dev.mock-llm`. If `.env` sets `OPENAI_BASE_URL` to `localhost`, the
@@ -78,6 +83,7 @@ backup; use `VACUUM INTO` or the SQLite backup API.
 
     docker run -d --name beaverdream \
       --user "$(id -u):$(id -g)" \
+      --add-host=host.docker.internal:host-gateway \
       -e ADMIN_PASSWORD=change-me \
       -e OPENAI_BASE_URL=http://host.docker.internal:6701/v1 \
       -e DAILY_TOKENS_IDENTITY=1000000 \

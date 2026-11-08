@@ -5,9 +5,9 @@
 Nobody designed this world. It got that way one post at a time.
 
 beaverdream is a world builder. Each world starts as a plain page with a
-post form, and a model, the webmaster, rewrites it after every post:
-colors, layout, scripts, even the form it hands you. A world can become a game,
-a shop, a city, a tool, or anything else a page can be.
+post form, and a model, the webmaster, which calls itself Naps, rewrites it
+after every post: colors, layout, scripts, even the form it hands you. A world
+can become a game, a shop, a city, a tool, or anything else a page can be.
 
 Everyone in a world sees the same page. Someone asks for a dark terminal look,
 and the next page is dark for all of them. Someone starts a treehouse, and
@@ -86,8 +86,9 @@ and tune the daily token budgets in `.env`. More in
 
 ## How it works
 
-- Each post goes to the model with the current page and a log of the room. The
-  model answers with tool calls that edit the page, not with a chat reply.
+- Each post goes to the model with the current page and a log of the room. It
+  edits the page with tool calls, and can also speak in the room through `say`
+  before the work or a reply in `done`.
 - Every change is a new version. Old looks stay in the history, and the admin
   panel can restore any of them.
 - The page is the model's own HTML, CSS and JavaScript, and it runs in every

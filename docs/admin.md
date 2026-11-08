@@ -5,7 +5,7 @@ current version, its CSS and HTML, and the version history. It can restore an
 old version, undo the last change, heal the site, or reset it. It shows the
 recent changesets with their prompts, tool calls and results. It also
 has a **talk to Naps** box that sends an instruction straight to the model, and
-a data page for journal feeds.
+a data page for shared state, visitor counters and journal feeds.
 
 The app also has pages for accounts, invites and the world registry. Only an
 identity with the `ADMIN` role can create or delete worlds and create invites.
@@ -59,10 +59,21 @@ app session cookie:
 - Lasts `APP_SESSION_TTL`, 7 days by default.
 - Stored as a hash in the registry, so revoking it takes effect on the next
   request.
-- `Secure` when the app is served over TLS.
+- `Secure`, and named `__Host-beaverdream_app`, in secure cookie mode: both
+  `APP_URL` and `PLAY_URL` are `https` origins behind a proxy, or the binary
+  serves TLS from `TLS_CERT_FILE` and `TLS_KEY_FILE`. LAN mode keeps the plain
+  name and no `Secure`.
 
 App and play cookies have different names, so the play handoff cannot overwrite
 an app session on localhost.
+
+A browser whose app cookie already authenticates gets a page saying it is
+already signed in, with a sign-out form, on `POST /login`, `POST /invite/{code}`
+and `GET /invite/{code}`. More than one app cookie is refused with the login
+page, because the server cannot tell which one is real. Entering a world with a
+handoff code for a different identity than the browser's current play session
+is refused with `400` and the minted session is revoked; more than one play
+cookie is refused the same way.
 
 Log out with the panel's logout button, or log out everywhere from the account
 page. Either path revokes sessions in the registry.
@@ -89,5 +100,6 @@ Never as a query parameter or a form field. The token has `api` scope, works on
 the app port, and is refused on the play port. The old `X-Admin-Token` header
 and the password-as-token are gone.
 
-Admin responses send `Cache-Control: no-store` and
-`Referrer-Policy: no-referrer`, and they refuse framing.
+Admin responses send `Cache-Control: no-store`, `Referrer-Policy:
+no-referrer` and `Cross-Origin-Opener-Policy: same-origin`, and they refuse
+framing.

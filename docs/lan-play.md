@@ -37,6 +37,19 @@ Friends open `http://<IP>:6930` in a browser. Use the IP from step 1.
 The IP can change when your router hands out a new lease. If friends get no
 answer, check it again.
 
+## One host, two ports
+
+In LAN mode the cookies keep their plain names and have no `Secure`. Cookies
+ignore ports, so a world page can send a request to the app port with the app
+cookie attached. The CSRF token and the app's refusal to be framed are what keep
+that from changing state.
+
+## Many open tabs
+
+Without TLS the server speaks HTTP/1.1, and a browser opens at most about six
+connections per origin. Each open tab holds one live stream, so many tabs on one
+world can stall. Over TLS the browser uses HTTP/2 and shares one connection.
+
 ## The admin is on the same address
 
 The admin pages are on the app port too, under `/admin`. Anyone on your network

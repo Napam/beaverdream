@@ -17,8 +17,10 @@ prefer simple, readable code over production hardening.
   Both sets freeze at the first production deploy; after
   that every schema change is a new numbered migration in the matching set,
   because goose will not re-run an applied version and a live world keeps its
-  data. Never edit an applied migration. World reset clears every table a world
-  migration adds, and its `sqlite_sequence` row, in that world file only.
+  data. Never edit an applied migration. World reset keeps the oldest
+  `site_versions` row and rewinds its sequence, and clears the turns, room
+  summaries, shared state, holdings, state ops and journal, in that world file
+  only.
   The registry is never reset wholesale: no full reset drops the auth tables,
   and rolling back the data migration never touches world files.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
@@ -260,8 +262,8 @@ prefer simple, readable code over production hardening.
 - Everyone sees the same page. Personalization happens in the browser: the
   server fills `{{name}}` and `<html data-name>` from the play session's
   identity, and the prompt tells the model to branch on
-  `document.documentElement.dataset.name` in a script. There is no per-visitor
-  server state.
+  `document.documentElement.dataset.name` in a script. The page is one shared
+  document; only holdings, `$mine` and journal rows are per identity.
 - Shared state is model-declared and server-applied. Only keys in the current
   version's `state_schema` are writable, values pass through
   `CleanStateValue`, and the ops are fixed (counter, list, choice). Writes are
@@ -338,9 +340,9 @@ prefer simple, readable code over production hardening.
   check what they load.
 - The admin data page (`/admin/worlds/{slug}/journal`, labelled "data") shows
   the shared state first, then every visitor counter, declared or hidden, with
-  its holders and the picked visitor's state ops, then lists every journal key
-  that has rows, declared or not, with stats
-  from one aggregate query, and browses one key's rows newest first. The site
+  its holders and the picked visitor's state ops, then lists every declared
+  journal key and any undeclared key that still has rows, with stats from one
+  aggregate query, and browses one key's rows newest first. The site
   tab holds only versions and the reset; the overview shows the room summary
   and the latest notes. The selection (`key`, `match`, `visitor`,
   `before`) is in the URL, and the page's stream renders the same selection, so
@@ -379,13 +381,14 @@ prefer simple, readable code over production hardening.
   cookie never authorizes a play route and a play cookie never authorizes an
   app route. Play sessions are minted by the handoff, not by login.
 - Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
-  username is `admin`. The app pages are `/admin` for the lobby, accounts and
-  invites, and `/admin/worlds/{slug}/...` for one world's changesets, site and
-  data.
+  username is `admin`. `/admin` is the world list, `/admin/accounts` and
+  `/admin/invites` hold the accounts and invites, and
+  `/admin/worlds/{slug}/...` one world's changesets, site and data.
   The play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
   redirect, and no separate admin origin. The app refuses framing
-  (`frame-ancestors 'none'` or `X-Frame-Options: DENY`), so a play page cannot
-  frame it.
+  (`frame-ancestors 'none'` or `X-Frame-Options: DENY`) and sends
+  `Cross-Origin-Opener-Policy: same-origin`, so a play page cannot frame it or
+  keep a window-opener reference.
 - `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
   server writes an argon2id hash of it into the admin identity's password
   login, clears `disabled_at`, grants `ADMIN` when missing, and revokes the
@@ -405,10 +408,11 @@ prefer simple, readable code over production hardening.
   update. Send it only as `Authorization: Bearer <token>`, never as a query
   parameter or a form field. It works on the app port and is refused on the play
   port. There is no `X-Admin-Token` and no password-as-token.
-- Pressing enter is an app POST with CSRF (or a GET that only mints the code). It
-  mints a one-time code bound to the identity and the world, valid for
-  `HANDOFF_TTL`. The play port exchanges the code for a play session, redirects
-  to `/worlds/{slug}`, and drops the code from the URL. The code is single-use.
+- Pressing enter is an app POST with CSRF to `POST /worlds/{slug}/play`, the
+  only route that mints a code. It mints a one-time code bound to the identity
+  and the world, valid for `HANDOFF_TTL`. The play port exchanges the code for
+  a play session, redirects to `/worlds/{slug}`, and drops the code from the
+  URL. The code is single-use.
 - Without a play session, a play request gets the gate page and
   `/worlds/{slug}/live` answers 204 so Datastar stops retrying. Revoking an
   identity revokes its sessions and cancels its open streams through every
@@ -470,13 +474,13 @@ prefer simple, readable code over production hardening.
   world keeps its page however long it sits.
 - Reset is the one destructive action, and it touches one world file only. It
   keeps the oldest version, deletes every turn (posts, changesets, events,
-  notes) with the compacted summaries, later versions, shared state and
-  holdings, and rewinds the world's id sequences. The registry is never reset:
-  identities, sessions, invites, roles, usage and other worlds survive, so an
-  old play session still works. It cancels that world's turn in flight and
-  drops its queue before it takes `h.mu`, so it never waits on a model call and
-  cannot race a changeset. Posts that arrive during the reset stay queued and run
-  after it.
+  notes) with the compacted summaries, later versions, shared state, holdings,
+  state ops and journal, and rewinds the world's id sequences. The registry is
+  never reset: identities, sessions, invites, roles, usage and other worlds
+  survive, so an old play session still works. It cancels that world's turn in
+  flight and drops its queue before it takes `h.mu`, so it never waits on a
+  model call and cannot race a changeset. Posts that arrive during the reset
+  stay queued and run after it.
 - A world is created in three steps: insert the registry row with
   `status = 'creating'`, create `<WORLDS_DIR>/<id>.db` and run its migrations,
   then set `status = 'ready'`. On start, finish or remove rows still `creating`
@@ -502,12 +506,16 @@ prefer simple, readable code over production hardening.
   session. A taken username rolls the use back with it. Failures show one
   message whether the code is unknown, expired, used up or revoked. `GET` never
   spends a use. Revoking an invite stops future redemptions only.
-- There is no email, no rate limit and no audit log. Regular application logs
-  only. A public deployment puts the app and the play page on subdomains of one
-  registrable domain over HTTPS. Secure cookie mode names both cookies
-  `__Host-*`, and the server reads only the prefixed name, so the play page
-  cannot write or shadow the app cookie; LAN, one host over plain HTTP, keeps
-  the plain names and has no such boundary.
+- There is no email, no login or HTTP rate limit and no audit log; the only
+  limits are the per-visitor cooldowns on state writes and new posts, plus the
+  journal burst allowance. Regular application logs only. A public deployment
+  puts the app and the play page on subdomains of one registrable domain over
+  HTTPS. Secure cookie mode, which names both cookies `__Host-*` and reads only
+  the prefixed name, is on when `TLS_CERT_FILE` is set or both `APP_URL` and
+  `PLAY_URL` are `https`; one https URL beside a plain or empty one is a
+  startup error. In that mode the play page cannot write or shadow the app
+  cookie; LAN, one host over plain HTTP, keeps the plain names and has no such
+  boundary.
 
 ## Frontend
 
@@ -547,12 +555,13 @@ play behavior there. `web/pages/*.templ` is the place for code-owned UI.
   pushed back. The same stats are stored on each assistant message in
   `turns.messages`. `Changeset finished` sums
   the changeset: rounds, the done round, whether done was called at all, a
-  done-only last round, rejections, truncated rounds, the cached ratio, prompt
-  section sizes in runes, compaction time, and for posts the queue wait and the
-  time from post to version. A changeset that runs out of rounds without done
-  logs `Changeset ended without done` with the round budget, the reason and the last
-  round's outcomes. The reason names what actually stopped the loop: the output
-  cap, a round with no tool call, an empty choice list, or the round budget.
+  done-only last round, rejections, truncated rounds, the cached ratio, the
+  summary, notes, log and page sizes in runes, compaction time, and for posts
+  the queue wait and the time from post to version. A changeset that runs out
+  of rounds without done logs `Changeset ended without done` with the round
+  budget, the reason and the last round's outcomes. The reason names what
+  actually stopped the loop: the output cap, a round with no tool call, an
+  empty choice list, or the round budget.
 - Real model: override `OPENAI_BASE_URL` and `OPENAI_MODEL`. A model that
   supports OpenAI-style tool calls is required. Put the key in `OPENAI_API_KEY`,
   usually via `.env` (gitignored, `.env.example` is the template, loaded by the

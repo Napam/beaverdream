@@ -24,7 +24,7 @@ and the worlds.
 ## Play with friends on your LAN
 
 Run beaverdream on one machine and give friends its address. They open it in a
-browser, sign in, and press play. They install nothing. Posts made at the same
+browser, sign in, and press enter. They install nothing. Posts made at the same
 time get folded into one rewrite, so you are all arguing over the same page.
 Details in [docs/lan-play.md](docs/lan-play.md).
 
@@ -41,7 +41,7 @@ task dev            # terminal 2: the app on 6930, worlds on 6932
 
 Open http://localhost:6930. The log prints the generated admin password. Sign
 in as `admin`, open or create the first world (name it `heroes`), and mint an
-invite for yourself or a friend. Press play, then post something. Try `matrix`, `pink` or
+invite for yourself or a friend. Press enter, then post something. Try `matrix`, `pink` or
 `brutalist`. The fake model picks its theme from keywords in the post, so the
 page changes without a real model. No `.env` file is needed for this. To change
 a setting, copy the template with `cp .env.example .env` and edit the copy. If

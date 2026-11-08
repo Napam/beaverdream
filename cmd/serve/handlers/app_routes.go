@@ -50,7 +50,7 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Use(a.requireAppAdmin)
 			ar.Get("/admin", a.AdminHome)
 			ar.Get("/admin/invites", a.AdminInvites)
-			ar.Get("/admin/people", a.AdminPeople)
+			ar.Get("/admin/accounts", a.AdminAccounts)
 			ar.Get("/admin/model", a.AdminModel)
 			ar.Post("/admin/worlds", a.CreateWorld)
 			ar.Post("/admin/worlds/{slug}/delete", a.DeleteWorld)
@@ -484,9 +484,9 @@ func (a *App) AdminInvites(w http.ResponseWriter, r *http.Request) {
 	a.renderAdmin(w, r, pages.AdminInvites, "", "")
 }
 
-// AdminPeople shows the accounts and their disable buttons.
-func (a *App) AdminPeople(w http.ResponseWriter, r *http.Request) {
-	a.renderAdmin(w, r, pages.AdminPeople, "", "")
+// AdminAccounts shows the accounts and their disable buttons.
+func (a *App) AdminAccounts(w http.ResponseWriter, r *http.Request) {
+	a.renderAdmin(w, r, pages.AdminAccounts, "", "")
 }
 
 // AdminModel shows the skills and tools the webmaster can load and call.
@@ -709,5 +709,5 @@ func (a *App) DisableIdentity(w http.ResponseWriter, r *http.Request) {
 		a.logger.Warn("Failed to disable an identity", slog.Any("error", err))
 	}
 	a.cancelIdentityStreams(id)
-	http.Redirect(w, r, "/admin/people", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
 }

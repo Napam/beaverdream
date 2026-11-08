@@ -18,7 +18,7 @@ scripts off the origin that holds the app session.
 
 - `/admin`: the world list and the create form.
 - `/admin/invites`: invite creation and the current invites.
-- `/admin/people`: the accounts, with a disable button.
+- `/admin/accounts`: the accounts, with a disable button.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
   read from the same definitions the model requests use. Skill bodies open in
   place; tool parameter schemas are shown as JSON.

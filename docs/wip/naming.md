@@ -26,7 +26,7 @@ One word per job. These are the only meanings allowed.
 | **board** | The shared feed at `/worlds/{slug}`, and the seed page. People post for each other, not only for Naps. Never the product. | Visitor copy, routes, seed |
 | **site** | The document the webmaster writes: one `site_versions` row. | Admin, code, DB |
 | **version** | One revision of the site. | Admin, code, DB |
-| **play** | Access to a world: play port, play session, play cookie, play button, handoff. | Code, UI |
+| **play** | Access to a world: play port, play session, play cookie, handoff. The button says **enter**. | Code, UI |
 | **page** | What a browser shows. Prose only, never a type name. | Prose |
 | **post** | A visitor's message. One `turns` row with `kind = 'post'`. | Visitor copy, DB |
 | **turn** | One entry in the room, in order. A post, a changeset, a reply or a server event is a turn. | Code, logs |
@@ -165,7 +165,8 @@ seed directly. Do not test seed wording.
 | "a world gets its own board and its own file" | "a world gets its own page and its own file" |
 | "board ↗" in the admin header | "open world ↗" |
 
-Keep "play", "step in" and "manage". They fit.
+Keep "play" for access, but the button and the gate say "enter". Keep "step
+in" and "manage" too.
 
 ## URL paths
 
@@ -197,7 +198,7 @@ POST   /admin/worlds/{slug}/delete
 
 Everything else on the app port stays: `/`, `/login`, `/logout`, `/account`,
 `/account/name`, `/account/tokens`, `/invite/{code}`, `/admin`,
-`/admin/invites`, `/admin/people`, `/admin/model`, `POST /admin/worlds`.
+`/admin/invites`, `/admin/accounts`, `/admin/model`, `POST /admin/worlds`.
 
 Play port:
 

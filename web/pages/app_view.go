@@ -47,10 +47,10 @@ type AppIdentity struct {
 // The app admin's sections. The URL picks one, so a reload and a bookmark
 // land on the same page instead of the top of one long scroll.
 const (
-	AdminWorlds  = "worlds"
-	AdminInvites = "invites"
-	AdminPeople  = "people"
-	AdminModel   = "model"
+	AdminWorlds   = "worlds"
+	AdminInvites  = "invites"
+	AdminAccounts = "accounts"
+	AdminModel    = "model"
 )
 
 // AppSkill is one registered skill, with the body load_skill returns.
@@ -76,7 +76,7 @@ type AppView struct {
 	// Error is a refusal message. Every invalid invite shares the same one.
 	Error string
 	// AdminSection is which app admin page is showing: worlds, invites or
-	// people. Empty on every other page.
+	// accounts. Empty on every other page.
 	AdminSection string
 	// Next is where a successful login returns.
 	Next string

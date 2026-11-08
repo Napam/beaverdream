@@ -46,7 +46,7 @@ across restarts, set `ADMIN_PASSWORD` in `.env`.
 - Each world is one SQLite file under `WORLDS_DIR`, named by its random id.
   The slug is only a label in the registry, so renaming or reusing a slug never
   touches a path.
-- The play URL is `/worlds/{slug}`. The app shows a play button that hands the
+- The play URL is `/worlds/{slug}`. The app shows an enter button that hands the
   browser to the play port with a one-time code.
 - Deleting a world closes its database, cancels its turn, removes its file and
   then removes the registry row. A crash halfway is finished on the next start.

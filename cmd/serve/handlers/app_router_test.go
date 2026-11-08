@@ -93,7 +93,7 @@ func TestInviteConcurrentMaxUses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list identities: %v", err)
 	}
-	// admin plus three people.
+	// admin plus three accounts.
 	if len(identities) != 4 {
 		t.Fatalf("identities = %d, want 4", len(identities))
 	}
@@ -765,7 +765,7 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 	for _, want := range []string{
 		`id="app-admin"`,
 		`href="/admin/invites"`,
-		`href="/admin/people"`,
+		`href="/admin/accounts"`,
 		`href="/admin/worlds/heroes/"`,
 		`action="/admin/worlds"`,
 	} {
@@ -786,13 +786,13 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 		t.Error("invites page shows the world form")
 	}
 
-	resp = admin.get(in.appURLFor("/admin/people"))
+	resp = admin.get(in.appURLFor("/admin/accounts"))
 	page = body(t, resp)
 	if !strings.Contains(page, "signed out everywhere") {
-		t.Error("people page is missing the disable note")
+		t.Error("accounts page is missing the disable note")
 	}
 	if strings.Contains(page, `action="/admin/invites"`) {
-		t.Error("people page shows the invite form")
+		t.Error("accounts page shows the invite form")
 	}
 
 	// A second world turns the breadcrumb into a switcher.

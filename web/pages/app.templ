@@ -221,7 +221,7 @@ templ AppGate(login string) {
 templ gateCard(login string) {
 	<section class={ appUserCard + " p-6" }>
 		<h1 class="text-xl font-semibold tracking-tight">this world opens in the app</h1>
-		<p class={ appUserMuted + " mt-2" }>sign in there, then press play. the world keeps the app's account.</p>
+		<p class={ appUserMuted + " mt-2" }>sign in there, then press enter. the world keeps the app's account.</p>
 		<a class={ appUserButton + " mt-5 w-full" } href={ templ.SafeURL(login) }>go to the app</a>
 	</section>
 }
@@ -277,7 +277,7 @@ templ inviteCard(err string, username string, displayName string) {
 	</section>
 }
 
-// AppLobby lists every ready world as a card with a play button.
+// AppLobby lists every ready world as a card with an enter button.
 templ AppLobby(view AppView) {
 	@userShell("worlds · beaverdream", lobbyBody(view))
 }
@@ -316,7 +316,7 @@ templ worldCard(view AppView, world AppWorld) {
 		<div class="flex w-full items-center gap-2 sm:w-auto">
 			<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="min-w-0 flex-1 sm:flex-none">
 				@csrfInput(view.CSRF)
-				<button type="submit" class={ appUserButton + " w-full" }>play</button>
+				<button type="submit" class={ appUserButton + " w-full" }>enter</button>
 			</form>
 			if view.Admin {
 				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
@@ -408,7 +408,7 @@ const (
 	appEmpty      = "rounded-md border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-gray-500 dark:border-neutral-800 dark:text-neutral-400"
 )
 
-// AppAdmin manages worlds, invites and people. The URL picks one section, so
+// AppAdmin manages worlds, invites and accounts. The URL picks one section, so
 // the header's tabs are real pages instead of one long scroll.
 templ AppAdmin(view AppView) {
 	@adminAppShell(appAdminTitle(view), adminAppBody(view))
@@ -429,8 +429,8 @@ templ adminAppBody(view AppView) {
 		switch view.AdminSection {
 			case AdminInvites:
 				@invitesSection(view)
-			case AdminPeople:
-				@peopleSection(view)
+			case AdminAccounts:
+				@accountsSection(view)
 			case AdminModel:
 				@modelSection(view)
 			default:
@@ -446,7 +446,7 @@ templ adminAppHeader(view AppView) {
 			<nav class="flex shrink-0 gap-1 self-stretch overflow-x-auto text-sm">
 				@adminAppTab(view, AdminWorlds, "/admin", "worlds")
 				@adminAppTab(view, AdminInvites, "/admin/invites", "invites")
-				@adminAppTab(view, AdminPeople, "/admin/people", "people")
+				@adminAppTab(view, AdminAccounts, "/admin/accounts", "accounts")
 				@adminAppTab(view, AdminModel, "/admin/model", "model")
 			</nav>
 			<div class="ml-auto flex items-center gap-1.5">
@@ -621,10 +621,10 @@ templ inviteRow(view AppView, invite AppInviteRow) {
 	</div>
 }
 
-templ peopleSection(view AppView) {
+templ accountsSection(view AppView) {
 	<section class={ adminCard }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
-			<p class={ adminLabel }>people</p>
+			<p class={ adminLabel }>accounts</p>
 			<p class={ adminMuted }>{ plural(len(view.Identities), "account") }</p>
 		</div>
 		<p class={ adminMuted + " mt-2" }>disabling an account signs it out everywhere and closes its open boards.</p>
@@ -633,14 +633,14 @@ templ peopleSection(view AppView) {
 		} else {
 			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
 				for _, identity := range view.Identities {
-					@personRow(view, identity)
+					@accountRow(view, identity)
 				}
 			</div>
 		}
 	</section>
 }
 
-templ personRow(view AppView, identity AppIdentity) {
+templ accountRow(view AppView, identity AppIdentity) {
 	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
 		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
 			<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">{ identity.DisplayName }</p>

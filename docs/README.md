@@ -20,12 +20,7 @@ Start with the [README](../README.md). These pages go deeper.
 `wip/` holds design notes: how a feature was designed and what was decided, or
 a plan that is not built yet. The code is the source of truth.
 
-- [journal.md](wip/journal.md): the journal, where the model declares append-only
-  feeds.
-- [live.md](wip/live.md): the one live stream each open page holds.
 - [reload-persistence.md](wip/reload-persistence.md): assessment and plan for keeping
   a visitor's place and the page state across reloads.
-- [worlds-and-invites.md](wip/worlds-and-invites.md): invite-only access with daily
-  budgets, then many worlds on one instance. Not built.
 - [naming.md](wip/naming.md): the vocabulary contract, the Naps persona, the
-  URL paths, the renames and the seed. Not built.
+  URL paths, the renames and the seed.

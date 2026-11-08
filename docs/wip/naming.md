@@ -320,8 +320,7 @@ Call sites that move together: `lib/webmaster/site.go:192` (render),
 
 - `AGENTS.md` first line: "a world builder whose webmaster rewrites the page as
   people post", not "a message board whose site is rewritten".
-- `AGENTS.md` line 65 and `docs/wip/live.md`: remove `inject`. No such handler
-  exists.
+- `AGENTS.md`: remove `inject`. No such handler exists.
 - `summarize.go`: "a world builder that starts as a small anonymous message
   board".
 - The squash removes `000002`, so its stale cookie-id comment goes with it.

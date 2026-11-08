@@ -13,8 +13,8 @@ import (
 // per chunk of old turns, never per changeset, and it writes prose only. The
 // page stays the artifact; this is Naps's memory of it.
 const summarySystemText = `You are the memory of Naps, the webmaster of beaverdream, a
-world builder that starts as a small anonymous message board. Naps answers in
-two ways: by rewriting the page, and by replies it posts on the board.
+world builder that starts as a small plain page with a post form. Naps answers
+in two ways: by rewriting the page, and by replies it posts in the room.
 Summarize a stretch of the room so it can continue the conversation after
 those turns leave the prompt window.
 

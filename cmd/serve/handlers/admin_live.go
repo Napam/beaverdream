@@ -16,7 +16,7 @@ import (
 
 // AdminLive is an admin page's one stream. The page names itself in the query,
 // and the stream patches the fragments that page rendered, so the panel
-// follows the board without polling. The app session cookie authenticates it;
+// follows the world without polling. The app session cookie authenticates it;
 // an anonymous or non-admin request answers 204, which tells Datastar to stop
 // retrying a page the browser cannot fix.
 func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +34,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 	case pages.PageOverview, pages.PageSite:
 	case pages.PageJournal:
 		panel = h.journalPanel(r.URL.Query())
-	case pages.PageTurns:
+	case pages.PageChangesets:
 		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
 		// The page says whether it rendered the turn in flight, so a turn
 		// that lands before this stream connects still replaces it.
@@ -140,10 +140,17 @@ func (h *Handlers) syncAdmin(
 				return err
 			}
 		}
-	case pages.PageTurns:
+	case pages.PageChangesets:
 		switch {
 		case t&(topicSite|topicTurns|topicBusy) != 0:
-			if err := h.patchAdminTurns(ctx, sse, panel.Turn, wasLive, csrf, panel); err != nil {
+			if err := h.patchAdminChangesets(
+				ctx,
+				sse,
+				panel.Turn,
+				wasLive,
+				csrf,
+				panel,
+			); err != nil {
 				return err
 			}
 		case t&topicDraft != 0:
@@ -264,11 +271,11 @@ func (h *Handlers) patchAdminMetrics(
 	)
 }
 
-// patchAdminTurns brings the turn list forward, and the inspector when it
+// patchAdminChangesets brings the changeset list forward, and the inspector when it
 // follows the newest or holds the running turn, plus once more when that
 // turn is stored. One read covers both, so a reset cannot leave deleted runs
 // on a second admin tab. Any other picked turn stays as it was loaded.
-func (h *Handlers) patchAdminTurns(
+func (h *Handlers) patchAdminChangesets(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
 	picked int64,

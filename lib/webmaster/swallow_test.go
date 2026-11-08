@@ -94,7 +94,7 @@ func TestRunPausesOnceWhenAnEditHidesThePosts(t *testing.T) {
 
 // A page that already hid its posts before the turn is not this turn's
 // accident, so done ends the turn at once.
-func TestRunDoesNotPauseForAnAlreadyHiddenBoard(t *testing.T) {
+func TestRunDoesNotPauseForAnAlreadyHiddenPage(t *testing.T) {
 	m, calls := scriptedChangesetRunner(t, [][2]string{
 		{"edit", `{"target":"css","old":"","new":"h1{color:red}"}`},
 		{"done", `{"reason":"red"}`},
@@ -114,18 +114,18 @@ func TestRunDoesNotPauseForAnAlreadyHiddenBoard(t *testing.T) {
 }
 
 func TestPostsSwallowedBy(t *testing.T) {
-	board := `<main><form class="postbox" method="post" action="/posts">` +
+	page := `<main><form class="postbox" method="post" action="/posts">` +
 		`<textarea name="body"></textarea></form>` +
 		`<div class="thread">` + PostsPlaceholder + `</div></main>`
 
 	cases := []struct {
 		name, start, rest, want string
 	}{
-		{name: "seed page", start: "<h1>beaverdream</h1>", rest: board},
+		{name: "seed page", start: "<h1>beaverdream</h1>", rest: page},
 		{
 			name:  "closed raw text",
 			start: "<script>if (a < b) document.title = '<!--'</script><style>p{}</style>",
-			rest:  board,
+			rest:  page,
 		},
 		{
 			name:  "a comment closed before the posts",
@@ -140,13 +140,13 @@ func TestPostsSwallowedBy(t *testing.T) {
 		{
 			name:  "unclosed comment",
 			start: "<h1>beaverdream</h1><!-- todo",
-			rest:  board,
+			rest:  page,
 			want:  "an unclosed <!-- comment",
 		},
 		{
 			name:  "unclosed script",
 			start: "<script>let x = 1",
-			rest:  board,
+			rest:  page,
 			want:  "an unclosed <script>",
 		},
 		{
@@ -164,7 +164,7 @@ func TestPostsSwallowedBy(t *testing.T) {
 		{
 			name:  "unclosed title",
 			start: "<title>beaverdream",
-			rest:  board,
+			rest:  page,
 			want:  "an unclosed <title>",
 		},
 		{
@@ -178,7 +178,7 @@ func TestPostsSwallowedBy(t *testing.T) {
 			// browser still reaches the posts.
 			name:  "attribute quote closed later",
 			start: `<h1 class="big>beaverdream</h1>`,
-			rest:  board,
+			rest:  page,
 		},
 		{
 			name:  "no placeholder",

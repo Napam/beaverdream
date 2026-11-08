@@ -1,7 +1,7 @@
 # Worlds, accounts and invites
 
 One beaverdream instance holds many worlds. Each world starts as a plain page
-with a message board, and a model rewrites its site. The app port owns accounts
+with a post form, and a model rewrites its site. The app port owns accounts
 and the lobby; the play port serves the worlds.
 
 ## First start

@@ -134,10 +134,10 @@ func NewQueue(posts []sqlc.Post, instructions []string) QueueView {
 	return view
 }
 
-// historyCount is the turns table's subtitle: the stored turns, plus the
-// queued rows waiting for a turn.
+// historyCount is the changeset list's subtitle: the stored changesets, plus
+// the queued rows waiting for a turn.
 func historyCount(turns, queued int) string {
-	count := plural(turns, "turn")
+	count := plural(turns, "changeset")
 	if queued > 0 {
 		count += " · " + itoa(queued) + " queued"
 	}
@@ -578,8 +578,8 @@ func (d TurnDetail) MaxInput() int {
 	return largest
 }
 
-// MetricsView is the recent turns, oldest first, with the scales and totals
-// the charts need.
+// MetricsView is the recent changesets, oldest first, with the scales and
+// totals the charts need.
 type MetricsView struct {
 	Turns          []TurnRow
 	MaxTokens      int64
@@ -816,9 +816,10 @@ func turnAuthor(row TurnRow) string {
 }
 
 // triggerLabel names what started the turn: a visitor's post, or an
-// instruction typed in the admin panel.
+// instruction typed in the admin panel. Only an admin instruction is stored in
+// the body, so an author named admin stays a post.
 func triggerLabel(row TurnRow) string {
-	if row.Run.Author == "admin" {
+	if row.Run.Body != "" {
 		return "instruction"
 	}
 	if row.Batched {

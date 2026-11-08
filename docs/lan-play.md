@@ -21,14 +21,14 @@ devices. If you run the binary instead, set `HOST=0.0.0.0` yourself. The binary
 listens on `localhost` by default. See [configuration.md](configuration.md).
 
 The app runs on `APP_PORT` (default `6930`) and the worlds on `PLAY_PORT`
-(default `6932`). Friends only need the app address. Pressing play sends them to
+(default `6932`). Friends only need the app address. Pressing enter sends them to
 the play port with a one-time handoff and sets a play cookie there.
 
 ## 3. Create an account for each friend
 
 Open `http://<IP>:6930`, sign in as the admin, create a world, and mint an
 invite. Send the link. The friend picks a username and a password, then presses
-play. See [worlds.md](worlds.md).
+enter. See [worlds.md](worlds.md).
 
 ## 4. Share the address
 

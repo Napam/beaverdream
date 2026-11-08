@@ -18,7 +18,7 @@ const (
 	// quiet connections. Datastar ignores events it does not know.
 	liveKeepalive = 20 * time.Second
 	// livePostBatch is how many posts one push may prepend. A page further
-	// behind than that gets the board again, the same 200 the page shows.
+	// behind than that gets the whole page again, the same 200 the page shows.
 	livePostBatch = 200
 	// liveJournalBatch is how many rows one push may carry. A page further
 	// behind reads its feeds again instead.
@@ -40,7 +40,7 @@ type liveView struct {
 	clears int64
 }
 
-// Live is the read side of the board: one Datastar stream per open page.
+// Live is the read side of the world: one Datastar stream per open page.
 // Commands never answer with page content. They write, then publish a topic;
 // every stream reads the database again for that topic and pushes only what
 // its page lacks. GET never calls the model.
@@ -188,8 +188,8 @@ func (h *Handlers) syncSite(
 	))
 }
 
-// syncPosts puts new posts at the top of the board. A page that is far
-// behind, or holds posts a reset deleted, gets the whole board again.
+// syncPosts puts new posts at the top of the page. A page that is far
+// behind, or holds posts a reset deleted, gets the whole page again.
 func (h *Handlers) syncPosts(
 	ctx context.Context,
 	sse *datastar.ServerSentEventGenerator,
@@ -226,7 +226,7 @@ func (h *Handlers) syncPosts(
 		mode, modeName = datastar.WithModeInner(), "replace"
 	}
 
-	// Both queries return newest first, the order the board reads.
+	// Both queries return newest first, the order the page reads.
 	posts := make([]webmaster.Post, len(rows))
 	ids := make([]int64, len(rows))
 	for i, row := range rows {

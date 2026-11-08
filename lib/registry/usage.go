@@ -14,7 +14,7 @@ type Budget struct {
 	Global   int64
 }
 
-// BudgetStatus is what the board's GET /budget returns: today's usage and
+// BudgetStatus is what the world's GET /budget returns: today's usage and
 // the configured limits. A zero limit is unlimited.
 type BudgetStatus struct {
 	IdentityUsed  int64
@@ -49,7 +49,7 @@ func (r *Registry) CheckBudget(ctx context.Context, identityID string, budget Bu
 	return nil
 }
 
-// BudgetStatus reports usage and limits for the board. An admin gets the same
+// BudgetStatus reports usage and limits for the world. An admin gets the same
 // numbers but is never refused.
 func (r *Registry) BudgetStatus(
 	ctx context.Context,

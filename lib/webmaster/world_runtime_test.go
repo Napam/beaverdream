@@ -128,7 +128,7 @@ func runWorld(t *testing.T, scenario string) worldResult {
 	return got
 }
 
-// A world runtime prefixes every board route with the world mount path.
+// A world runtime prefixes every route with the world mount path.
 func TestWorldRuntimePrefixesItsRoutes(t *testing.T) {
 	got := runWorld(t, "world")
 	for _, want := range []string{

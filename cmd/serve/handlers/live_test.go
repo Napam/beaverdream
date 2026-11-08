@@ -17,7 +17,7 @@ import (
 )
 
 // datastarAccept is what a Datastar action sends. It includes text/html, so a
-// handler that redirects on it would get the board patched into the page.
+// handler that redirects on it would get the body patched into the page.
 const datastarAccept = "text/event-stream, text/html, application/json"
 
 type sseEvent struct {
@@ -36,7 +36,7 @@ type cursor struct {
 	Journal int64 `json:"journal"`
 }
 
-// openLive opens the board stream the way a page does: with its name cookie
+// openLive opens the live stream the way a page does: with its name cookie
 // and its cursor in the datastar query parameter.
 func openLive(t *testing.T, h *handlers.Handlers, at cursor) *liveClient {
 	t.Helper()
@@ -219,7 +219,7 @@ func cursorSignal(c cursor) string {
 
 // A post reaches every open page in place. The poster gets 204, not a
 // redirect: the post arrives over the stream like everyone else's. The first
-// post replaces the empty board; later ones are prepended alone.
+// post replaces the empty post list; later ones are prepended alone.
 func TestLiveStreamPushesPostsInPlace(t *testing.T) {
 	h, queries := setup(t)
 	version := currentVersion(t, queries)
@@ -251,7 +251,7 @@ func TestLiveStreamPushesPostsInPlace(t *testing.T) {
 
 // A page that reconnects sends the cursor it holds and gets only what it
 // lacks. A cursor past the newest post means a reset deleted posts, so the
-// page gets the whole board again.
+// page gets the whole post list again.
 func TestLiveStreamResumesFromThePagesCursor(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -275,9 +275,9 @@ func TestLiveStreamResumesFromThePagesCursor(t *testing.T) {
 	current.quiet(t, "#bd-posts", 300*time.Millisecond)
 }
 
-// A page more than one batch behind gets the whole board instead of every
+// A page more than one batch behind gets the whole post list instead of every
 // missed post. The replacement is what the page would have been served.
-func TestLiveStreamReplacesTheBoardWhenThePageIsFarBehind(t *testing.T) {
+func TestLiveStreamReplacesThePostListWhenThePageIsFarBehind(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 	version := currentVersion(t, queries)
@@ -454,7 +454,7 @@ func TestLiveStreamAdoptsAMissingVersion(t *testing.T) {
 }
 
 // Shared state is pushed as the $shared signal to every open page. The
-// Datastar click that wrote it gets 204, not a redirect to the board.
+// Datastar click that wrote it gets 204, not a redirect to the page.
 func TestLiveStreamPushesSharedState(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -510,7 +510,7 @@ func TestLiveStreamPushesJournalRows(t *testing.T) {
 	again.quiet(t, "bd._rows(", 300*time.Millisecond)
 }
 
-// The stream is for people with a name, like the board. 204 tells Datastar
+// The stream is for people with a name, like the page. 204 tells Datastar
 // not to retry.
 func TestLiveStreamNeedsAName(t *testing.T) {
 	h, _ := setup(t)
@@ -522,7 +522,7 @@ func TestLiveStreamNeedsAName(t *testing.T) {
 }
 
 // A plain form post still works without Datastar: it is stored and sent back
-// to the board.
+// to the page.
 func TestAPlainFormPostStillRedirects(t *testing.T) {
 	h, _ := setup(t)
 	rec := postForm(t, h.CreatePost, "/posts", url.Values{"body": {"plain mocknoop"}})

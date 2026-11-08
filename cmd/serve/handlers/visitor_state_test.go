@@ -17,7 +17,7 @@ import (
 )
 
 // Reset must reach every table a migration adds, not only the ones it was
-// written for: anything left behind outlives the board it belonged to.
+// written for: anything left behind outlives the world it belonged to.
 func TestResetLeavesOnlyTheSeed(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -438,7 +438,7 @@ func TestClearHoldingsDeletesOneKeyAndRecordsAnEvent(t *testing.T) {
 }
 
 // A model turn declares visitor counters and a recipe through the real tool
-// path, and the board can earn and trade with them right after.
+// path, and the page can earn and trade with them right after.
 func TestModelDeclaredWalletWorksEndToEnd(t *testing.T) {
 	h, queries := setup(t)
 	h.NoStateCooldown()
@@ -467,7 +467,7 @@ func TestModelDeclaredWalletWorksEndToEnd(t *testing.T) {
 	}
 }
 
-// A board request without a play session cannot own counts. Shared keys still
+// A state request without a play session cannot own counts. Shared keys still
 // work from a signed-in request, because they are not tied to an owner.
 func TestStateWritesWithoutTheVisitorCookie(t *testing.T) {
 	h, queries := setup(t)

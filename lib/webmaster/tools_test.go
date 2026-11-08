@@ -208,8 +208,8 @@ func TestEditToleratesPunctuationSpacing(t *testing.T) {
 		},
 		{
 			name:  "space after a tag",
-			field: "<h1>beaverdream</h1>\n<p class=\"tagline\">\n  a small board</p>",
-			old:   `<p class="tagline">a small board</p>`,
+			field: "<h1>beaverdream</h1>\n<p class=\"tagline\">\n  a small page</p>",
+			old:   `<p class="tagline">a small page</p>`,
 			want:  "<h1>beaverdream</h1>\na{color:blue}",
 		},
 	}
@@ -244,15 +244,15 @@ func TestEditPunctuationMatchStillRejectsAmbiguity(t *testing.T) {
 }
 
 func TestEditCannotRemoveThePlaceholder(t *testing.T) {
-	board := `<main><div class="thread">` + PostsPlaceholder + `</div></main>`
-	ed := newEditor(Site{HTML: board})
+	page := `<main><div class="thread">` + PostsPlaceholder + `</div></main>`
+	ed := newEditor(Site{HTML: page})
 	got := ed.run("edit", args(t, map[string]string{
 		"target": "html", "old": PostsPlaceholder, "new": "",
 	}))
 	if !strings.HasPrefix(got, "rejected: html must contain {{posts}}") {
 		t.Fatalf("got %q, want a placeholder rejection", got)
 	}
-	if ed.site.HTML != board {
+	if ed.site.HTML != page {
 		t.Fatalf("html changed: %q", ed.site.HTML)
 	}
 }
@@ -420,7 +420,7 @@ func TestDoneStopsAndKeepsReason(t *testing.T) {
 }
 
 // A deferred done can be called again without its reply; the reply given
-// first still goes on the board. A long reply is cut to the cap.
+// first still goes in the room. A long reply is cut to the cap.
 func TestDoneKeepsTheFirstReply(t *testing.T) {
 	ed := newEditor(Site{})
 	ed.run("done", args(t, map[string]string{"reason": "a", "reply": " the answer "}))
@@ -507,7 +507,7 @@ func TestBaseCSSHasNoLayout(t *testing.T) {
 	}
 }
 
-func TestRenderPostsAddsBoardConventions(t *testing.T) {
+func TestRenderPostsAddsPostConventions(t *testing.T) {
 	got := RenderPosts([]Post{{
 		ID:     3,
 		Author: "dave",
@@ -569,7 +569,7 @@ func TestSiteDocHasInPlaceStyleTargets(t *testing.T) {
 		}
 	}
 	if strings.Contains(doc, "beaver-note") {
-		t.Error("the page still renders a note above the board")
+		t.Error("the page still renders a note above the posts")
 	}
 	if strings.Index(doc, "beaverdream:update") > strings.Index(doc, "</head>") {
 		t.Error("live script is not in the head, where model markup cannot swallow it")

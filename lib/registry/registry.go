@@ -1,6 +1,6 @@
 // Package registry owns the instance-wide sqlite file: identities, logins,
 // sessions, invites, roles, daily usage and the world index. World files hold
-// their own boards and live in WORLDS_DIR; no transaction spans the two.
+// their own world data and live in WORLDS_DIR; no transaction spans the two.
 //
 // Every id in this file is 128 random bits written as lowercase hex. Times are
 // the same UTC text form the world migrations use

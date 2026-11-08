@@ -24,20 +24,20 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-store")
 	p := principalFrom(r)
 	if p == nil {
-		http.Error(w, "open a board with a play session", http.StatusUnauthorized)
+		http.Error(w, "enter a world with a play session", http.StatusUnauthorized)
 		return
 	}
 
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
 		h.logger.Error("Failed to load current site", slog.Any("error", err))
-		http.Error(w, "The board is not here.", http.StatusInternalServerError)
+		http.Error(w, "The world is not here.", http.StatusInternalServerError)
 		return
 	}
 	posts, err := h.recentPosts(r.Context(), livePostBatch)
 	if err != nil {
 		h.logger.Error("Failed to load posts", slog.Any("error", err))
-		http.Error(w, "The board is not here.", http.StatusInternalServerError)
+		http.Error(w, "The world is not here.", http.StatusInternalServerError)
 		return
 	}
 
@@ -45,7 +45,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	for i, post := range posts {
 		converted[i] = h.postFromRow(r.Context(), post)
 	}
-	// The board reads newest first. The model still gets the conversation
+	// The page reads newest first. The model still gets the conversation
 	// oldest first, which is easier to follow.
 	for i, j := 0, len(converted)-1; i < j; i, j = i+1, j-1 {
 		converted[i], converted[j] = converted[j], converted[i]
@@ -90,7 +90,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 // CreatePost appends the post, then asks the model to redecorate in the
 // background. The response does not wait for the model and carries no page:
 // every open page, the poster's included, gets the post from its live stream.
-// A plain form post is redirected back to the board; a Datastar post gets 204.
+// A plain form post is redirected back to the world; a Datastar post gets 204.
 func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
@@ -101,10 +101,10 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
 	if p == nil {
 		if isDatastar(r) {
-			_ = datastar.NewSSE(w, r).Redirect(h.boardPath())
+			_ = datastar.NewSSE(w, r).Redirect(h.worldPath())
 			return
 		}
-		http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
+		http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 		return
 	}
 	if body == "" {
@@ -156,7 +156,7 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 
 // budgetRefused answers an over-budget post. Datastar and JSON callers get a
 // 429 with reason budget; a plain form gets the typed text back in a small
-// app-owned page, without a board render, so a reload does not lose it.
+// app-owned page, without a world render, so a reload does not lose it.
 func (h *Handlers) budgetRefused(w http.ResponseWriter, r *http.Request, body string) {
 	if isDatastar(r) {
 		w.Header().Set("Content-Type", "application/json")
@@ -176,7 +176,7 @@ func (h *Handlers) budgetRefused(w http.ResponseWriter, r *http.Request, body st
 <p>No tokens are left for today. Your message was not posted.</p>
 <form method="post" action="%s"><textarea name="body" rows="4" style="width:100%%">%s</textarea>
 <p><button type="submit">try again</button></p></form>
-<p><a href="%s/">back to the board</a></p></main>`,
+<p><a href="%s/">back to the world</a></p></main>`,
 			html.EscapeString(action), html.EscapeString(body),
 			html.EscapeString(h.basePath()))
 		return
@@ -188,18 +188,18 @@ func (h *Handlers) budgetRefused(w http.ResponseWriter, r *http.Request, body st
 	})
 }
 
-// postDone answers a post. The board shows newest first, so a plain form
+// postDone answers a post. The page shows newest first, so a plain form
 // lands on the new post at the top.
 func (h *Handlers) postDone(w http.ResponseWriter, r *http.Request) {
 	if isDatastar(r) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
+	http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 }
 
 // isDatastar reports a request sent by a Datastar action. Its reply must not
-// be a redirect to the board: Datastar would follow it and patch the whole
+// be a redirect to the world: Datastar would follow it and patch the whole
 // page into the document.
 func isDatastar(r *http.Request) bool {
 	return r.Header.Get("Datastar-Request") == "true"

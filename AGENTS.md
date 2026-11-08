@@ -45,7 +45,7 @@ prefer simple, readable code over production hardening.
 - `turns` is the room: one ordered row for every post, every changeset
   (`kind = 'changeset'`) and every server event (heal, undo, restore). `id` is
   the conversation order. The `posts` view exposes `kind = 'post'` and
-  `kind = 'reply'` (the webmaster's board answers) with their `kind`; the board
+  `kind = 'reply'` (the webmaster's answers) with their `kind`; the page
   reads posts through it, so other model text (said, notes, changes) cannot
   reach the page by accident. `site_versions` is the render, append-only; the
   current site is `MAX(id)` and `turn_id` names the turn that produced it.
@@ -88,14 +88,14 @@ prefer simple, readable code over production hardening.
   so the admin sees what a crashed turn read and did. A failed turn with no
   saved prompt shows the posts it answered, read back from `turns` the way a
   retry reads them.
-- The webmaster answers on the board through `done`'s optional `reply`
+- The webmaster answers in the room through `done`'s optional `reply`
   (`maxReplyLen`). `reason` stays the short log line, stored as `said`, and
   visitors never see it. Naps is the model's name; webmaster stays the role. A
   turn that did not fail and has a reply inserts one `kind = 'reply'`, author
   `Naps` row as the last write of its finish transaction, so the reply takes the
   newest id and the stream's post cursor cannot have passed it, then publishes
   `topicPosts`. Old replies keep author `webmaster` and render fine, because the
-  board tells a reply by its kind, not its author. A `silent` turn posts the
+  page tells a reply by its kind, not its author. A `silent` turn posts the
   reply of a deferred `done`; error and stopped turns post nothing.
   `SummaryStats` counts a reply whole, as the log shows it. A reply is never
   a trigger: `ListPostsForTurn` reads `kind = 'post'` only. A later `done`
@@ -106,7 +106,7 @@ prefer simple, readable code over production hardening.
   and publishes `topicPosts`, the same path as a visitor post. One per turn,
   capped at `maxSayLen`; the prompt has the model send it alone (with any
   skill loads) before the edit round, then reply again through `done`. A say
-  stays on the board even if the turn later fails.
+  stays in the room even if the turn later fails.
 - The room log is words and field names only: `#id author: body`, one line per
   changeset turn with its `said` and `changes`, one `#id you replied: "..."`
   line per reply, kept whole, and one line per server event.
@@ -141,7 +141,7 @@ prefer simple, readable code over production hardening.
   the room.
 - Keeping the page is a real turn. `done` with no edits writes no version and
   records `status = 'kept'`; no `done` at all records `silent`. Do not reject a
-  no-op: the plain-board rule lives in the prompt, not in code.
+  no-op: the plain-world rule lives in the prompt, not in code.
 - A version is two model fields: `css` and `html` (everything inside body).
   Enforce only what keeps the site working as an ever-changing page: the
   `{{posts}}` placeholder, the form contract in the prompt, the size caps and
@@ -238,7 +238,7 @@ prefer simple, readable code over production hardening.
   page already shows and gets nothing twice.
 - New posts are patched into `#bd-posts`: a prepend, or an inner replace when
   the page is more than one batch behind or a reset rewound the ids. A new
-  post never reloads the page. The client drops a post id the board already
+  post never reloads the page. The client drops a post id the page already
   shows, so a reconnect cannot double a prepend. `bdLive.posts` emits
   `beaverdream:post` with `mode` (`prepend` or `replace`) and the patched
   `ids`, so a script that places posts knows which ones to place. A
@@ -255,7 +255,7 @@ prefer simple, readable code over production hardening.
   page that connected without one would reload forever. A stream without a
   name answers 204, which tells Datastar to stop retrying. Datastar commands
   answer 204 and never a redirect, because Datastar follows a redirect and
-  would patch the board into the document. A plain form post still gets 303.
+  would patch the page into the document. A plain form post still gets 303.
   `/version` stays as a plain JSON read for tools and tests; nothing polls it.
 - Everyone sees the same page. Personalization happens in the browser: the
   server fills `{{name}}` and `<html data-name>` from the play session's
@@ -361,7 +361,7 @@ prefer simple, readable code over production hardening.
   beacon carries the page's version; an error from a page that is no longer
   current is dropped. Refusals the page did not cause (closed match, 409, 429,
   401) resolve `append` with null and never reach the beacon.
-- The seed page reads like a plain light message board. Do not mention
+- The seed page reads like a plain light page with a post form. Do not mention
   rewriting, AI, or the gimmick in its header, form or footer; the first post is
   the reveal. Keep the seed in the world's `000001_init.sql` and the form
   example in the system prompt in sync.
@@ -380,7 +380,8 @@ prefer simple, readable code over production hardening.
   app route. Play sessions are minted by the handoff, not by login.
 - Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
   username is `admin`. The app pages are `/admin` for the lobby, accounts and
-  invites, and `/admin/worlds/{slug}/...` for one world's turns, site and data.
+  invites, and `/admin/worlds/{slug}/...` for one world's changesets, site and
+  data.
   The play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
   redirect, and no separate admin origin. The app refuses framing
   (`frame-ancestors 'none'` or `X-Frame-Options: DENY`), so a play page cannot
@@ -404,7 +405,7 @@ prefer simple, readable code over production hardening.
   update. Send it only as `Authorization: Bearer <token>`, never as a query
   parameter or a form field. It works on the app port and is refused on the play
   port. There is no `X-Admin-Token` and no password-as-token.
-- Pressing play is an app POST with CSRF (or a GET that only mints the code). It
+- Pressing enter is an app POST with CSRF (or a GET that only mints the code). It
   mints a one-time code bound to the identity and the world, valid for
   `HANDOFF_TTL`. The play port exchanges the code for a play session, redirects
   to `/worlds/{slug}`, and drops the code from the URL. The code is single-use.
@@ -425,7 +426,7 @@ prefer simple, readable code over production hardening.
   (a plain request renders the whole page), so no redirect needs a secret. Each
   page opens its own stream for its own panels. A turn's conversation is stored
   whole when it finishes (a running turn saves only the prompt and its rounds,
-  for crashes), so the turns page shows the running turn from memory: the
+  for crashes), so the changesets page shows the running turn from memory: the
   prompt and every finished round in full as `ChangesetRunner.OnMessage` hears
   them, and the round being written as `#admin-draft`, which `OnDraft` fills chunk by
   chunk. A draft publishes `topicDraft` at most every 100 ms and patches only
@@ -524,7 +525,7 @@ play behavior there. `web/pages/*.templ` is the place for code-owned UI.
   paths. `mockskill` loads the controls skill in its first round.
   `mockwallet` declares two visitor counters and a recipe and ships a purse
   page that earns, trades and lists the top holders.
-  `mockreply` keeps the page and posts a reply on the board.
+  `mockreply` keeps the page and posts a reply in the room.
   `mocksay` says a line first, then appends a CSS rule and replies again.
   `mockedit` appends one CSS rule, `mockpatch` replaces the default
   theme's accent, and `mockbadedit` sends an edit that misses, so the `done`

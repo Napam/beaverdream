@@ -226,9 +226,9 @@ func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 		t.Fatal("anonymous admin request is not the login page")
 	}
 
-	board := b.get(in.playURLFor("/worlds/heroes/"))
-	if board.StatusCode != http.StatusOK || strings.Contains(body(t, board), "data-version=") {
-		t.Fatal("anonymous board shows the gate page")
+	page := b.get(in.playURLFor("/worlds/heroes/"))
+	if page.StatusCode != http.StatusOK || strings.Contains(body(t, page), "data-version=") {
+		t.Fatal("anonymous request did not get the gate page")
 	}
 	live := b.get(in.playURLFor("/worlds/heroes/live"))
 	if live.StatusCode != http.StatusNoContent {
@@ -270,6 +270,7 @@ func TestMachinePathsReadTheSegmentAfterTheSlug(t *testing.T) {
 		"/worlds/heroes/state",
 		"/worlds/heroes/journal/moves",
 		"/worlds/heroes/budget",
+		"/worlds/heroes/version",
 	} {
 		resp := anonymous.get(in.playURLFor(target))
 		if resp.StatusCode != http.StatusUnauthorized {
@@ -388,7 +389,7 @@ func TestRoutesStayOnTheirPlane(t *testing.T) {
 
 	resp := admin.get(in.appURLFor("/worlds/heroes/live"))
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("app serves a board route: status = %d", resp.StatusCode)
+		t.Errorf("app serves a play route: status = %d", resp.StatusCode)
 	}
 	_ = resp.Body.Close()
 
@@ -440,9 +441,9 @@ func TestBudgetRefusesBeforeStoringAndAdminIsExempt(t *testing.T) {
 	}
 	b := in.newBrowser(t)
 	b.login(in, "payer", "correct horse battery")
-	boardURL, _ := b.play(in, "heroes")
+	worldURL, _ := b.play(in, "heroes")
 	before := countWorldRows(t, in, in.heroesID, "turns")
-	resp := b.postBoard(boardURL, url.Values{"body": {"this cannot run"}})
+	resp := b.postWorld(worldURL, url.Values{"body": {"this cannot run"}})
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("over budget: status = %d, want 429", resp.StatusCode)
 	}
@@ -462,8 +463,8 @@ func TestBudgetRefusesBeforeStoringAndAdminIsExempt(t *testing.T) {
 	adminIn := newInstance(t, instanceOptions{budget: registry.Budget{Identity: 1, Global: 1}})
 	admin := adminIn.newBrowser(t)
 	admin.login(adminIn, "admin", acceptanceAdminPassword)
-	adminBoard, _ := admin.play(adminIn, "heroes")
-	resp = admin.postBoard(adminBoard, url.Values{"body": {"mockedit admin is exempt"}})
+	adminWorld, _ := admin.play(adminIn, "heroes")
+	resp = admin.postWorld(adminWorld, url.Values{"body": {"mockedit admin is exempt"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("admin post: status = %d, body %s", resp.StatusCode, body(t, resp))
 	}
@@ -491,7 +492,7 @@ func TestResetKeepsTheRegistryAndOtherWorlds(t *testing.T) {
 	b := in.newBrowser(t)
 	b.login(in, "player", "correct horse battery")
 	heroesURL, _ := b.play(in, "heroes")
-	if resp := b.postBoard(
+	if resp := b.postWorld(
 		heroesURL,
 		url.Values{"body": {"mocknoop heroes"}},
 	); resp.StatusCode != http.StatusSeeOther {
@@ -551,7 +552,7 @@ func TestResetKeepsTheRegistryAndOtherWorlds(t *testing.T) {
 	if page.StatusCode != http.StatusOK || !strings.Contains(body(t, page), "data-version=") {
 		t.Fatal("the old play session no longer opens another world")
 	}
-	resp = b.postBoard(in.playURLFor("/worlds/atlas"), url.Values{"body": {"after reset"}})
+	resp = b.postWorld(in.playURLFor("/worlds/atlas"), url.Values{"body": {"after reset"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("post to atlas: status = %d", resp.StatusCode)
 	}
@@ -568,7 +569,7 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 	in.redeem(t, code, "player")
 	b := in.newBrowser(t)
 	b.login(in, "player", "correct horse battery")
-	boardURL, page := b.play(in, "heroes")
+	worldURL, page := b.play(in, "heroes")
 	for _, want := range []string{
 		`data-world="` + in.heroesID + `"`,
 		`data-world-slug="heroes"`,
@@ -585,7 +586,7 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 		t.Error("the seed still posts to an absolute root path")
 	}
 	if !strings.Contains(page, in.appURL+"/account") {
-		t.Error("the board account link does not point at the app")
+		t.Error("the page's account link does not point at the app")
 	}
 
 	// The same play session opens atlas without another handoff.
@@ -597,7 +598,7 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 	if strings.Contains(atlasPage, `data-world="`+in.heroesID+`"`) {
 		t.Error("atlas rendered heroes' world id")
 	}
-	_ = boardURL
+	_ = worldURL
 }
 
 func TestHandoffIsSingleUse(t *testing.T) {
@@ -673,7 +674,7 @@ func TestDisablingAnIdentityClosesStreamsInEveryWorld(t *testing.T) {
 	// stop retrying.
 	page := player.get(in.playURLFor("/worlds/heroes/"))
 	if !strings.Contains(body(t, page), "go to the app") {
-		t.Error("a disabled identity still gets the board")
+		t.Error("a disabled identity still gets the page")
 	}
 	live := player.get(in.playURLFor("/worlds/atlas/live"))
 	if live.StatusCode != http.StatusNoContent {
@@ -724,7 +725,7 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 	page := body(t, resp)
 	for _, want := range []string{
 		`id="admin-body"`,
-		`/admin/worlds/heroes/turns`,
+		`/admin/worlds/heroes/changesets`,
 		`/admin/worlds/heroes/site`,
 		`/admin/worlds/heroes/journal`,
 		in.playURL + "/worlds/heroes/",
@@ -733,9 +734,54 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 			t.Errorf("world admin page is missing %q", want)
 		}
 	}
-	if strings.Contains(page, `href="/admin/turns"`) {
+	if strings.Contains(page, `href="/admin/changesets"`) {
 		t.Error("world admin page links to the root admin")
 	}
+
+	// The renamed routes answer through the router, not only as handlers.
+	csrf := admin.csrf(in, "/admin/worlds/heroes/")
+	resp = admin.post(in.appURLFor("/admin/worlds/heroes/changeset"), url.Values{
+		"csrf":        {csrf},
+		"instruction": {"mocknoop keep it"},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("send instruction: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	handle := in.worldDB(t, in.heroesID)
+	var turnID int64
+	if err := handle.DB.QueryRowContext(
+		context.Background(),
+		`SELECT COALESCE(MAX(id), 0) FROM turns WHERE kind = 'changeset'`,
+	).Scan(&turnID); err != nil {
+		t.Fatalf("newest changeset: %v", err)
+	}
+	if turnID == 0 {
+		t.Fatal("the instruction turn was not stored")
+	}
+
+	resp = admin.get(in.appURLFor("/admin/worlds/heroes/changesets"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("changeset list: status = %d", resp.StatusCode)
+	}
+	if list := body(t, resp); !strings.Contains(list, `id="admin-body"`) {
+		t.Error("changeset list did not render the admin panel")
+	}
+
+	resp = admin.get(in.appURLFor(fmt.Sprintf("/admin/worlds/heroes/changesets/%d", turnID)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("changeset detail: status = %d", resp.StatusCode)
+	}
+	if detail := body(t, resp); !strings.Contains(detail, `id="admin-body"`) {
+		t.Error("changeset detail did not render the admin panel")
+	}
+
+	resp = admin.get(in.appURLFor("/admin/worlds/heroes/turns"))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("retired turns route: status = %d, want 404", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
 
 	// A member cannot reach another world's admin.
 	_, code, _ := in.reg.CreateInvite(
@@ -953,12 +999,12 @@ func TestDisplayNameIsOnTheIdentityAndPostAuthorHasStableID(t *testing.T) {
 	id, _, _ := in.redeem(t, code, "player")
 	one := in.newBrowser(t)
 	one.login(in, "player", "correct horse battery")
-	boardURL, _ := one.play(in, "heroes")
+	worldURL, _ := one.play(in, "heroes")
 	two := in.newBrowser(t)
 	two.login(in, "player", "correct horse battery")
 	two.play(in, "heroes")
 
-	resp := one.postBoard(boardURL, url.Values{"body": {"hello from one"}})
+	resp := one.postWorld(worldURL, url.Values{"body": {"hello from one"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("post: status = %d", resp.StatusCode)
 	}
@@ -1002,9 +1048,9 @@ func TestInvitedCredentialsWorkFromANewBrowser(t *testing.T) {
 	two := in.newBrowser(t)
 	two.login(in, "alice", "correct horse battery")
 	for i, b := range []*browser{one, two} {
-		boardURL, _ := b.play(in, "heroes")
-		if boardURL == "" {
-			t.Fatalf("browser %d has no board", i)
+		worldURL, _ := b.play(in, "heroes")
+		if worldURL == "" {
+			t.Fatalf("browser %d has no page", i)
 		}
 	}
 	if _, err := in.reg.GetIdentity(context.Background(), id.ID); err != nil {
@@ -1021,7 +1067,7 @@ func TestIdleWorldUnloadsAndReopens(t *testing.T) {
 	waitFor(t, "the idle unload", func() bool { return in.app.LoadedForTest() == 0 })
 	page := admin.get(in.playURLFor("/worlds/heroes/"))
 	if page.StatusCode != http.StatusOK || !strings.Contains(body(t, page), "data-version=") {
-		t.Fatal("a reloaded world does not serve its board")
+		t.Fatal("a reloaded world does not serve its page")
 	}
 }
 
@@ -1067,7 +1113,7 @@ func TestCookieContractAndScopeSeparation(t *testing.T) {
 		t.Errorf("app session expiry = %v, want about 7 days", appSession.ExpiresAt)
 	}
 
-	// Press play manually, so the handoff's Set-Cookie is visible.
+	// Press enter manually, so the handoff's Set-Cookie is visible.
 	csrf := admin.csrf(in, "/")
 	playResp := admin.post(in.appURLFor("/worlds/heroes/play"), url.Values{"csrf": {csrf}})
 	target := playResp.Header.Get("Location")
@@ -1111,7 +1157,7 @@ func TestCookieContractAndScopeSeparation(t *testing.T) {
 	)
 	resp := appOnly.get(in.playURLFor("/worlds/heroes/"))
 	if strings.Contains(body(t, resp), "data-version=") {
-		t.Error("the app cookie opened a board")
+		t.Error("the app cookie opened a world")
 	}
 
 	playOnly := in.newBrowser(t)
@@ -1285,7 +1331,7 @@ func TestBudgetStatusRouteAndGlobalLimit(t *testing.T) {
 
 	one := in.newBrowser(t)
 	one.login(in, "first", "correct horse battery")
-	boardURL, _ := one.play(in, "heroes")
+	worldURL, _ := one.play(in, "heroes")
 	resp := one.get(in.playURLFor("/worlds/heroes/budget"))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("budget: status = %d", resp.StatusCode)
@@ -1298,7 +1344,7 @@ func TestBudgetStatusRouteAndGlobalLimit(t *testing.T) {
 	// The global total is already at its limit, so a different identity with
 	// room of its own is still refused.
 	before := countWorldRows(t, in, in.heroesID, "turns")
-	resp = one.postBoard(boardURL, url.Values{"body": {"global is full"}})
+	resp = one.postWorld(worldURL, url.Values{"body": {"global is full"}})
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("global refusal: status = %d, want 429", resp.StatusCode)
 	}
@@ -1456,7 +1502,7 @@ func TestModelConcurrencyIsCappedAcrossWorlds(t *testing.T) {
 		wg.Add(1)
 		go func(target string) {
 			defer wg.Done()
-			resp := admin.postBoard(target, url.Values{"body": {"mocknoop concurrency"}})
+			resp := admin.postWorld(target, url.Values{"body": {"mocknoop concurrency"}})
 			if resp.StatusCode != http.StatusSeeOther {
 				t.Errorf("post: status = %d", resp.StatusCode)
 			}
@@ -1537,8 +1583,8 @@ func TestRevokingOneSessionLeavesTheOtherPlaneAlone(t *testing.T) {
 	if strings.Contains(body(t, resp), "sign out everywhere") {
 		t.Error("the revoked app session still works")
 	}
-	board := b.get(in.playURLFor("/worlds/heroes/"))
-	if !strings.Contains(body(t, board), "data-version=") {
+	page := b.get(in.playURLFor("/worlds/heroes/"))
+	if !strings.Contains(body(t, page), "data-version=") {
 		t.Error("revoking the app session closed the play session")
 	}
 }
@@ -1556,11 +1602,11 @@ func TestRevokingAnInviteDoesNotDisableTheIdentity(t *testing.T) {
 	}
 	b := in.newBrowser(t)
 	b.login(in, "player", "correct horse battery")
-	boardURL, page := b.play(in, "heroes")
+	worldURL, page := b.play(in, "heroes")
 	if !strings.Contains(page, "data-version=") {
 		t.Fatal("revoking the invite disabled the identity")
 	}
-	resp := b.postBoard(boardURL, url.Values{"body": {"still allowed"}})
+	resp := b.postWorld(worldURL, url.Values{"body": {"still allowed"}})
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("post after invite revocation: status = %d", resp.StatusCode)
 	}

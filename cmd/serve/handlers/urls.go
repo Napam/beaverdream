@@ -26,9 +26,9 @@ func origin(scheme, host, port, path string) string {
 	return scheme + "://" + net.JoinHostPort(name, port) + path
 }
 
-// accountURL is the app account page, seen from a board request. It follows
+// accountURL is the app account page, seen from a world request. It follows
 // the APP_URL setting when a proxy gives the app its own name, and otherwise
-// derives the origin from the board's host and APP_PORT.
+// derives the origin from the world's host and APP_PORT.
 func (h *Handlers) accountURL(r *http.Request) string {
 	if h.cfg.AppURL != "" {
 		return h.cfg.AppURL + "/account"
@@ -36,7 +36,7 @@ func (h *Handlers) accountURL(r *http.Request) string {
 	return origin(scheme(r), r.Host, h.cfg.AppPort, "/account")
 }
 
-// playOrigin is the board origin, seen from an app request.
+// playOrigin is the world origin, seen from an app request.
 func playOrigin(r *http.Request, cfg Config) string {
 	if cfg.PlayURL != "" {
 		return cfg.PlayURL
@@ -44,7 +44,7 @@ func playOrigin(r *http.Request, cfg Config) string {
 	return origin(scheme(r), r.Host, cfg.PlayPort, "")
 }
 
-// appOrigin is the management origin, seen from a board request.
+// appOrigin is the management origin, seen from a world request.
 func appOrigin(r *http.Request, cfg Config) string {
 	if cfg.AppURL != "" {
 		return cfg.AppURL

@@ -49,4 +49,4 @@ charged. See [configuration.md](configuration.md#daily-token-budgets).
 Post once before you invite anyone. The terminal logs each model round with its
 time, token counts and tool calls. The page should change. If it does not, the
 model may not be calling tools. Then check the spend on the provider's dashboard.
-The admin turns page shows each turn in full. See [admin.md](admin.md).
+The admin changesets page shows each turn in full. See [admin.md](admin.md).

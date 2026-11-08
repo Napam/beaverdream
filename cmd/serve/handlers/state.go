@@ -119,12 +119,12 @@ func stateValueMatches(def webmaster.StateKey, raw string) bool {
 // key takes its op; a visitor counter takes add=N or spend=N; a recipe
 // trades. The value comes from the query string or a form field. A Datastar
 // action gets 204, because every open page gets the new value from its live
-// stream. A plain form is sent back to the board; a fetch gets JSON.
+// stream. A plain form is sent back to the world; a fetch gets JSON.
 func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r)
 	if p == nil {
 		if wantsHTML(r) {
-			http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
+			http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 			return
 		}
 		writeStateError(w, http.StatusUnauthorized, "sign in to play")
@@ -139,7 +139,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
-		writeStateError(w, http.StatusInternalServerError, "could not load the board")
+		writeStateError(w, http.StatusInternalServerError, "could not load the world")
 		return
 	}
 	schema := parseStateSchema(site.StateSchema)
@@ -161,7 +161,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	if !h.allowStateWrite(slot, key) {
 		if def.Global() {
 			if wantsHTML(r) {
-				http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
+				http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 				return
 			}
 			writeStateError(w, http.StatusTooManyRequests, "slow down")
@@ -209,7 +209,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wantsHTML(r) {
-		http.Redirect(w, r, h.boardPath(), http.StatusSeeOther)
+		http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

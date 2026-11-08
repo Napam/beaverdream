@@ -13,7 +13,7 @@ import (
 
 // resetConfirm asks before the one destructive action. Both the plain form and
 // the Datastar click ask the same question.
-const resetConfirm = "confirm('Reset the world: delete every post, journal row, shared value and later version, and clear the changeset history? This cannot be undone.')"
+const resetConfirm = "confirm('Reset the world: delete every post, journal row, shared value, holding and later version, and clear the changeset history? This cannot be undone.')"
 
 // StateView is one value in the model-declared shared state.
 type StateView struct {
@@ -71,7 +71,7 @@ const (
 	adminInput  = "w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:border-gray-500 focus:outline-none dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200 dark:placeholder:text-neutral-600 dark:focus:border-neutral-600"
 	adminButton = "cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-default disabled:opacity-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
 	adminChip   = "inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-0.5 font-mono text-xs text-gray-700 dark:bg-neutral-800 dark:text-neutral-300"
-	// historyGrid is one set of column tracks for the turns list's header and
+	// historyGrid is one set of column tracks for the changeset list's header and
 	// every row, so a status badge or a missing version cannot shift the
 	// columns behind it.
 	historyGrid = "grid grid-cols-[2.25rem_4.25rem_4.5rem_minmax(0,1fr)_2.5rem_3.5rem_3rem] items-center gap-x-3"
@@ -118,14 +118,14 @@ func width(part, whole int64) string {
 // The admin pages. Each one has its own path, and the panel links between them
 // with a fetch that carries the remembered login as a cookie.
 const (
-	PageOverview = "overview"
-	PageTurns    = "turns"
-	PageSite     = "site"
-	PageJournal  = "journal"
+	PageOverview   = "overview"
+	PageChangesets = "changesets"
+	PageSite       = "site"
+	PageJournal    = "journal"
 )
 
-// Panel names one admin page. Turn is the turn the turns page shows, or 0 to
-// follow the newest.
+// Panel names one admin page. Turn is the turn the changesets page shows, or 0
+// to follow the newest.
 type Panel struct {
 	// Base is the world's admin mount path, for example
 	// "/admin/worlds/heroes". Empty uses "/admin", which keeps the root panel
@@ -161,10 +161,10 @@ func (p Panel) Action(path string) string {
 
 func (p Panel) Path() string {
 	switch {
-	case p.Page == PageTurns && p.Turn > 0:
-		return p.Action("/turns/" + i64(p.Turn))
-	case p.Page == PageTurns:
-		return p.Action("/turns")
+	case p.Page == PageChangesets && p.Turn > 0:
+		return p.Action("/changesets/" + i64(p.Turn))
+	case p.Page == PageChangesets:
+		return p.Action("/changesets")
 	case p.Page == PageSite:
 		return p.Action("/site")
 	case p.Page == PageJournal:
@@ -173,12 +173,12 @@ func (p Panel) Path() string {
 	return p.base()
 }
 
-// turnPath is one turn under this panel's base.
-func (p Panel) turnPath(id int64, newest bool) string {
+// changesetPath is one turn under this panel's base.
+func (p Panel) changesetPath(id int64, newest bool) string {
 	if newest {
-		return p.Action("/turns")
+		return p.Action("/changesets")
 	}
-	return p.Action("/turns/" + i64(id))
+	return p.Action("/changesets/" + i64(id))
 }
 
 // query is the journal selection as a query string, empty when nothing is
@@ -253,10 +253,10 @@ type AdminView struct {
 	// CSRF is the token every action form carries for this login. Empty when
 	// the request has no login cookie, which is why login redirects.
 	CSRF string
-	// BoardURL is the world's page as seen from the admin port, for the
+	// WorldURL is the world's page as seen from the admin port, for the
 	// header link. The admin runs on its own port, so a relative link would
 	// 404.
-	BoardURL string
+	WorldURL string
 	// Stream is the data-init that opens this page's stream.
 	Stream string
 	// Run is the turn in flight, for the inspector to show before the
@@ -334,14 +334,14 @@ templ AdminBody(view AdminView) {
 				</div>
 				<nav class="flex shrink-0 gap-1 self-stretch overflow-x-auto text-sm">
 					@navLink(view.Panel, PageOverview, view.Panel.Action(""), "overview")
-					@navLink(view.Panel, PageTurns, view.Panel.Action("/turns"), "turns")
+					@navLink(view.Panel, PageChangesets, view.Panel.Action("/changesets"), "changesets")
 					@navLink(view.Panel, PageSite, view.Panel.Action("/site"), "site")
 					@navLink(view.Panel, PageJournal, view.Panel.Action("/journal"), "data")
 				</nav>
 				<div class="ml-auto flex items-center gap-1.5">
 					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href="/admin">← back office</a>
 					@themeToggle()
-					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.BoardURL } target="_blank" rel="noopener">open world ↗</a>
+					<a class="rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200" href={ view.WorldURL } target="_blank" rel="noopener">open world ↗</a>
 					<form method="post" action="/logout" class="contents">
 						@csrfInput(view.CSRF)
 						<button type="submit" class="cursor-pointer rounded-sm px-2 py-1.5 text-sm text-gray-500 hover:bg-gray-200/70 hover:text-gray-900 dark:text-neutral-500 dark:hover:bg-neutral-800/70 dark:hover:text-neutral-200">sign out</button>
@@ -360,8 +360,8 @@ templ AdminBody(view AdminView) {
 			}
 		</div>
 		switch view.Panel.Page {
-			case PageTurns:
-				@turnsPage(view)
+			case PageChangesets:
+				@changesetsPage(view)
 			case PageSite:
 				@sitePage(view)
 			case PageJournal:
@@ -401,8 +401,8 @@ templ worldSwitcher(view AdminView) {
 	}
 }
 
-// overviewPage is the glance, top to bottom: talk to the webmaster, how
-// recent turns went, how close the room is to compaction, and what it
+// overviewPage is the glance, top to bottom: talk to Naps, how
+// recent changesets went, how close the room is to compaction, and what it
 // remembers: the compacted history and its own notes.
 templ overviewPage(view AdminView) {
 	<div class="flex flex-col gap-6">
@@ -413,9 +413,9 @@ templ overviewPage(view AdminView) {
 	</div>
 }
 
-// turnsPage shows the list of recent turns, then one of them: the newest or
-// the one in the URL.
-templ turnsPage(view AdminView) {
+// changesetsPage shows the list of recent changesets, then one turn: the newest
+// or the one in the URL.
+templ changesetsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
 		@AdminHistory(view.Turns, view.Panel.Turn, view.Queue, view.Panel)
@@ -448,7 +448,7 @@ templ sitePage(view AdminView) {
 				>reset the world</button>
 			</form>
 			<p class={ adminMuted }>
-				Resets the world: deletes every post, journal row, shared value and later version, and clears the changeset history. The original version stays.
+				Resets the world: deletes every post, journal row, shared value, holding and later version, and clears the changeset history. The original version stays.
 			</p>
 		</div>
 	</section>
@@ -456,7 +456,7 @@ templ sitePage(view AdminView) {
 
 templ adminInstruct(panel Panel, csrf string) {
 	<section class={ adminCard }>
-		<p class={ adminLabel }>talk to the webmaster</p>
+		<p class={ adminLabel }>talk to Naps</p>
 		<form method="post" action={ templ.SafeURL(panel.Action("/changeset")) } class="mt-2 flex flex-col gap-2" data-on:submit={ "@post('" + panel.Action("/changeset") + "', {contentType: 'form'}); setTimeout(() => evt.target.elements.instruction.value = '', 0)" } data-indicator:_sending>
 			@csrfInput(csrf)
 			<textarea
@@ -501,19 +501,19 @@ templ AdminLiveCard(live LiveView) {
 	</div>
 }
 
-// AdminMetrics charts the recent finished turns: what each one cost in tokens
-// and how long it took. A column opens its turn in the inspector.
+// AdminMetrics charts the recent finished changesets: what each one cost in
+// tokens and how long it took. A column opens its turn in the inspector.
 templ AdminMetrics(m MetricsView, panel Panel) {
 	<section id="admin-metrics" class={ adminCard + " flex flex-col gap-5" }>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
-			<p class={ adminLabel }>recent turns</p>
-			<p class={ adminMuted }>last { plural(m.Finished, "finished turn") }</p>
+			<p class={ adminLabel }>recent changesets</p>
+			<p class={ adminMuted }>last { plural(m.Finished, "finished changeset") }</p>
 		</div>
 		if m.Finished == 0 {
-			<p class="text-sm text-gray-400 dark:text-neutral-600">no finished turns yet</p>
+			<p class="text-sm text-gray-400 dark:text-neutral-600">no finished changesets yet</p>
 		} else {
 			<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-				@statTile("avg time", millis(m.TotalMs/int64(m.Finished)), "per turn")
+				@statTile("avg time", millis(m.TotalMs/int64(m.Finished)), "per changeset")
 				@statTile("avg rounds", strconv.FormatFloat(float64(m.TotalRounds)/float64(m.Finished), 'f', 1, 64), "most "+itoa(m.MaxRoundsCount))
 				@statTile("cache hit", ratio(m.CachedTokens, m.PromptTokens), "of prompt tokens")
 				@statTile("tokens in", short(m.PromptTokens), short(m.PromptTokens-m.CachedTokens)+" uncached")
@@ -522,7 +522,7 @@ templ AdminMetrics(m MetricsView, panel Panel) {
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<div class="flex flex-wrap items-baseline justify-between gap-2">
-					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">tokens per turn</p>
+					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">tokens per changeset</p>
 					<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
 						@legend("bg-sky-200 dark:bg-sky-900", "prompt, cached")
 						@legend("bg-sky-500", "prompt, uncached")
@@ -540,9 +540,9 @@ templ AdminMetrics(m MetricsView, panel Panel) {
 				>
 					for _, row := range m.Turns {
 						<a
-							href={ templ.SafeURL(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							href={ templ.SafeURL(panel.changesetPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							title={ turnTitle(row) }
-							data-on:click={ navTo(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							data-on:click={ navTo(panel.changesetPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
 						>
 							<span class="flex w-full flex-col overflow-hidden rounded-t-sm" style={ height(row.PromptTokens+row.CompletionTokens, m.MaxTokens) }>
@@ -557,7 +557,7 @@ templ AdminMetrics(m MetricsView, panel Panel) {
 			</div>
 			<div class="flex flex-col gap-1.5">
 				<div class="flex flex-wrap items-baseline justify-between gap-2">
-					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">time per turn <span class="font-normal text-gray-500 dark:text-neutral-500">· the number is rounds</span></p>
+					<p class="text-sm font-medium text-gray-900 dark:text-neutral-100">time per changeset <span class="font-normal text-gray-500 dark:text-neutral-500">· the number is rounds</span></p>
 					<div class="flex flex-wrap gap-3 text-xs text-gray-500 dark:text-neutral-400">
 						@legend(statusBar("changed"), "changed")
 						@legend(statusBar("kept"), "kept")
@@ -568,9 +568,9 @@ templ AdminMetrics(m MetricsView, panel Panel) {
 				<div class="flex h-28 items-end gap-0.5 border-b border-gray-200 dark:border-neutral-800">
 					for _, row := range m.Turns {
 						<a
-							href={ templ.SafeURL(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							href={ templ.SafeURL(panel.changesetPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							title={ turnTitle(row) }
-							data-on:click={ navTo(panel.turnPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
+							data-on:click={ navTo(panel.changesetPath(row.Run.ID, row.Run.ID == m.NewestTurnID)) }
 							class="flex h-full max-w-16 min-w-0 flex-1 cursor-pointer flex-col items-center justify-end rounded-t-sm hover:bg-gray-100 dark:hover:bg-neutral-800"
 						>
 							<span class="text-[10px] leading-4 text-gray-400 tabular-nums dark:text-neutral-500">{ itoa(row.Rounds) }</span>
@@ -672,7 +672,7 @@ templ AdminMemory(summary string, through int64, notes string) {
 			} else {
 				<details class="mt-2" data-preserve-attr="open">
 					<summary class="cursor-pointer text-sm text-gray-600 dark:text-neutral-400">
-						left by the last finished turn · { tokens(utf8.RuneCountInString(notes)) } tokens
+						left by the last finished changeset · { tokens(utf8.RuneCountInString(notes)) } tokens
 					</summary>
 					<pre class={ adminPre + " mt-2 max-h-96" }>{ notes }</pre>
 				</details>
@@ -681,14 +681,14 @@ templ AdminMemory(summary string, through int64, notes string) {
 	</section>
 }
 
-// AdminHistory lists the queued batch and the newest turns as a table, one
-// link per turn. The stream patches it when a run ends or a post arrives, so
-// a turn appears without a reload. picked is the turn the page shows, or 0
-// for the newest.
+// AdminHistory lists the queued batch and the newest changesets as a table,
+// one link per turn. The stream patches it when a run ends or a post arrives,
+// so a changeset appears without a reload. picked is the turn the page shows,
+// or 0 for the newest.
 templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) {
 	<section id="admin-history" class={ adminCard + " p-0" }>
 		<div class="flex items-baseline justify-between border-b border-gray-200 px-4 py-2.5 dark:border-neutral-800">
-			<p class={ adminLabel }>turns</p>
+			<p class={ adminLabel }>changesets</p>
 			<p class={ adminMuted }>{ historyCount(len(turns), queue.Count()) }</p>
 		</div>
 		if len(turns) == 0 && queue.Count() == 0 {
@@ -740,8 +740,8 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 					for i, row := range turns {
 						<li>
 							<a
-								href={ templ.SafeURL(panel.turnPath(row.Run.ID, i == 0)) }
-								data-on:click={ navTo(panel.turnPath(row.Run.ID, i == 0)) }
+								href={ templ.SafeURL(panel.changesetPath(row.Run.ID, i == 0)) }
+								data-on:click={ navTo(panel.changesetPath(row.Run.ID, i == 0)) }
 								title={ turnTitle(row) }
 								class={ historyGrid + " border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-neutral-800/60 " + pickedRow(row.Run.ID, picked, i == 0) }
 							>
@@ -774,7 +774,7 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 }
 
 // csrfInput is the hidden field every action form carries. The value is
-// derived from the login cookie, so the board, which cannot read this page,
+// derived from the login cookie, so the world, which cannot read this page,
 // cannot forge an action.
 templ csrfInput(token string) {
 	<input type="hidden" name="csrf" value={ token }/>
@@ -821,7 +821,7 @@ templ AdminTurn(
 	<div id="admin-turn">
 		if detail == nil {
 			<div class={ adminCard }>
-				<p class="text-sm text-gray-400 dark:text-neutral-600">No turns yet. Post on the board or talk to the webmaster, and the first turn shows here.</p>
+				<p class="text-sm text-gray-400 dark:text-neutral-600">No changesets yet. Post in the world or talk to Naps, and the first changeset shows here.</p>
 			</div>
 		} else {
 			<div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-neutral-500">
@@ -833,7 +833,7 @@ templ AdminTurn(
 				}
 				@stepTurn(newer, false, panel)
 				if !following {
-					<a href={ templ.SafeURL(panel.Action("/turns")) } data-on:click={ navTo(panel.Action("/turns")) } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
+					<a href={ templ.SafeURL(panel.Action("/changesets")) } data-on:click={ navTo(panel.Action("/changesets")) } class="ml-auto text-sky-700 hover:underline dark:text-sky-400">follow the newest</a>
 				}
 			</div>
 			@turnInspector(*detail, run, csrf, panel)
@@ -846,8 +846,8 @@ templ AdminTurn(
 templ stepTurn(id int64, older bool, panel Panel) {
 	if id > 0 {
 		<a
-			href={ templ.SafeURL(panel.turnPath(id, false)) }
-			data-on:click={ navTo(panel.turnPath(id, false)) }
+			href={ templ.SafeURL(panel.changesetPath(id, false)) }
+			data-on:click={ navTo(panel.changesetPath(id, false)) }
 			title={ "turn #" + i64(id) }
 			class="rounded-sm border border-gray-200 px-1.5 py-0.5 font-mono hover:bg-gray-50 dark:border-neutral-800 dark:hover:bg-neutral-800"
 		>

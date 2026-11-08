@@ -241,7 +241,7 @@ func TestDoneDefersWhenThePageDropsAJournalKey(t *testing.T) {
 	res, err := m.Run(
 		context.Background(),
 		Site{
-			HTML:          journalBoard,
+			HTML:          journalPage,
 			JournalSchema: `{"moves":{"rules":1}}`,
 		},
 		Room{},
@@ -303,8 +303,8 @@ func TestJournalSchemaKeepsOmittedNumbers(t *testing.T) {
 	}
 }
 
-// journalBoard is a board whose script opens the moves feed.
-const journalBoard = `<main><h2>moves</h2><div id="game"></div>` +
+// journalPage is a page whose script opens the moves feed.
+const journalPage = `<main><h2>moves</h2><div id="game"></div>` +
 	`<script>var feed = bd.journal("moves")</script>{{posts}}</main>`
 
 func runChangesetWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
@@ -330,7 +330,7 @@ func runChangesetWith(t *testing.T, site Site, rounds [][]fakeToolCall) Result {
 // call is still there, so done ends the turn at once.
 func TestDoneKeepsAProseEditWhenTheCallStays(t *testing.T) {
 	res := runChangesetWith(t, Site{
-		HTML:          journalBoard,
+		HTML:          journalPage,
 		JournalSchema: `{"moves":{"rules":1}}`,
 	}, [][]fakeToolCall{{
 		{name: "edit", args: `{"target":"html","old":"<h2>moves</h2>","new":"<h2>play</h2>"}`},
@@ -349,7 +349,7 @@ func TestDoneKeepsAProseEditWhenTheCallStays(t *testing.T) {
 // keeping the declared number keeps the old rows.
 func TestJournalSchemaSkipsStoredRules(t *testing.T) {
 	site := Site{
-		HTML:             journalBoard,
+		HTML:             journalPage,
 		JournalSchema:    `{"moves":{"max":300,"rules":1}}`,
 		JournalRulesUsed: map[string]int{"moves": 3, "chat": 2},
 	}

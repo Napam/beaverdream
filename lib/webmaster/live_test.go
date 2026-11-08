@@ -315,8 +315,8 @@ func TestLiveScriptSavesTheDraftBeforeReloading(t *testing.T) {
 	}
 }
 
-// A reconnect can prepend a post the board already shows. The id keeps the
-// board unique instead of stacking the same post twice.
+// A reconnect can prepend a post the page already shows. The id keeps the
+// page unique instead of stacking the same post twice.
 func TestLiveScriptDropsDuplicatePosts(t *testing.T) {
 	got := runLiveScript(t, "dedupe")
 	if strings.Join(got.Posts, ",") != "p9,p8,p7" {
@@ -333,7 +333,7 @@ func TestLiveScriptUsesTheWorldBaseForReloads(t *testing.T) {
 }
 
 // A draft is read and cleared under the world's storage root, never the root
-// board's keys.
+// page's keys.
 func TestLiveScriptUsesTheWorldStorageForDrafts(t *testing.T) {
 	got := runLiveScript(t, "worlddraft")
 	if got.Text != "hello" {

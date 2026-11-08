@@ -13,7 +13,7 @@ type Turn struct {
 	Author string
 	Body   string
 	// Said is the done reason, the webmaster's one log sentence. What it
-	// posts on the board is a separate TurnReply row, with the text in Body.
+	// posts in the room is a separate TurnReply row, with the text in Body.
 	Said      string
 	Changes   string
 	Status    string
@@ -83,7 +83,7 @@ func renderTurn(turn Turn) string {
 		return fmt.Sprintf("#%d %s: %s", turn.ID, author, clip(turn.Body, historyPostLen))
 
 	case TurnChangeset:
-		return renderWebmasterTurn(turn)
+		return renderChangesetTurn(turn)
 
 	case TurnReply:
 		// Kept whole: a follow-up question needs the full answer it follows.
@@ -102,7 +102,7 @@ func renderTurn(turn Turn) string {
 	return ""
 }
 
-func renderWebmasterTurn(turn Turn) string {
+func renderChangesetTurn(turn Turn) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "#%d you", turn.ID)
 	if turn.VersionID > 0 {

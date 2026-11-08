@@ -77,7 +77,7 @@ func TestFailedTurnWithoutMessagesShowsItsPost(t *testing.T) {
 
 	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
 		Author: "dave",
-		Body:   "give the board a moon",
+		Body:   "give the world a moon",
 	}); err != nil {
 		t.Fatalf("create post: %v", err)
 	}
@@ -92,11 +92,11 @@ func TestFailedTurnWithoutMessagesShowsItsPost(t *testing.T) {
 		t.Fatalf("fail running turns: %v", err)
 	}
 
-	rec := getAdmin(t, h.AdminTurns, "/admin/turns")
+	rec := getAdmin(t, h.AdminChangesets, "/admin/changesets")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("turns page: status = %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "give the board a moon") {
+	if !strings.Contains(rec.Body.String(), "give the world a moon") {
 		t.Errorf("turn %d: the turns page does not show the post it answered", turn.ID)
 	}
 }

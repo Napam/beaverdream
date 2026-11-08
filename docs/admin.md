@@ -4,8 +4,8 @@ The admin panel is code-owned. The model never writes it. It lists a world's
 current version, its CSS and HTML, and the version history. It can restore an
 old version, undo the last change, heal the site, or reset it. It shows the
 recent changesets with their prompts, tool calls and results. It also
-sends an instruction straight to the model, and has a data page for journal
-feeds.
+has a **talk to Naps** box that sends an instruction straight to the model, and
+a data page for journal feeds.
 
 The app also has pages for accounts, invites and the world registry. Only an
 identity with the `ADMIN` role can create or delete worlds and create invites.
@@ -22,8 +22,8 @@ scripts off the origin that holds the app session.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
   read from the same definitions the model requests use. Skill bodies open in
   place; tool parameter schemas are shown as JSON.
-- `/admin/worlds/{slug}/...`: one world's turns, site tools and data page.
-  `/admin/worlds/{slug}/turns`, `/admin/worlds/{slug}/site` and
+- `/admin/worlds/{slug}/...`: one world's changesets, site tools and data page.
+  `/admin/worlds/{slug}/changesets`, `/admin/worlds/{slug}/site` and
   `/admin/worlds/{slug}/journal` are the main ones.
 - The header links back to the back office (`/admin`) and to the world's page
   (`open world ↗`).

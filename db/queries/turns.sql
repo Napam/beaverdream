@@ -11,7 +11,7 @@ RETURNING
   kind;
 
 -- name: CreateReply :one
--- Naps's words on the board: done's reply, written in its turn's finish
+-- Naps's words in the room: done's reply, written in its turn's finish
 -- transaction so it takes the newest id, or a say while the turn runs.
 INSERT INTO
   turns (kind, author, body)
@@ -89,7 +89,7 @@ WHERE
   AND id < ?;
 
 -- name: ListPostsAfter :many
--- The posts an open page has not shown yet, newest first, the order the board
+-- The posts an open page has not shown yet, newest first, the order the page
 -- reads.
 SELECT
   *

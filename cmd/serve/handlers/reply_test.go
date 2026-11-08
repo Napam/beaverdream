@@ -33,10 +33,10 @@ func heldCall(t *testing.T) (func(http.Handler) http.Handler, func()) {
 	return wrap, stop
 }
 
-// A reply lands on the board as the newest post, even when a post arrived
+// A reply lands on the page as the newest post, even when a post arrived
 // while the turn ran and open pages already moved past the turn's id. It is
 // never read back as a post that triggers a turn.
-func TestReplyReachesTheBoardAfterPostsDuringTheRun(t *testing.T) {
+func TestReplyReachesThePageAfterPostsDuringTheRun(t *testing.T) {
 	wrap, stop := heldCall(t)
 	h, queries := setupWithModel(t, handlers.Config{}, wrap)
 	t.Cleanup(stop)
@@ -91,9 +91,9 @@ func TestReplyReachesTheBoardAfterPostsDuringTheRun(t *testing.T) {
 	}
 }
 
-// A say lands on the board while the turn still runs, before the edit, and
+// A say lands on the page while the turn still runs, before the edit, and
 // done's reply follows it once the page has changed.
-func TestSayReachesTheBoardBeforeTheTurnEnds(t *testing.T) {
+func TestSayReachesThePageBeforeTheTurnEnds(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	stop := func() { once.Do(func() { close(release) }) }
@@ -182,7 +182,7 @@ func TestReplyAuthorIsNapsAndLegacyRowsStillRender(t *testing.T) {
 	h.Index(rec, req)
 	page := rec.Body.String()
 	if !strings.Contains(page, `<span class="post-author">Naps</span>`) {
-		t.Error("the board does not sign the new reply Naps")
+		t.Error("the page does not sign the new reply Naps")
 	}
 	if !strings.Contains(page, "from the old page") ||
 		!strings.Contains(page, `data-kind="reply"`) ||

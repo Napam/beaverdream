@@ -19,7 +19,7 @@ const (
 )
 
 // securityHeaders are on every app response. The app may be framed by nobody:
-// a board is another origin and must not be able to trick an admin click.
+// the world is another origin and must not be able to trick an admin click.
 func (a *App) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -146,7 +146,7 @@ func (a *App) requireAppAdmin(next http.Handler) http.Handler {
 	}))
 }
 
-// requirePlay authenticates a board request. A stream without a session gets
+// requirePlay authenticates a world request. A stream without a session gets
 // 204 so Datastar stops retrying; every other path gets the gate page.
 func (a *App) requirePlay(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +185,7 @@ func isMachinePath(path string) bool {
 	}
 	segment, _, _ := strings.Cut(endpoint, "/")
 	switch segment {
-	case "state", "journal", "errors", "budget":
+	case "state", "journal", "errors", "budget", "version":
 		return true
 	}
 	return false
@@ -282,7 +282,7 @@ func (a *App) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // cancelIdentityStreams reaches every loaded world's hub. Disabling an identity
-// must close its boards everywhere, not just the world it happens to use.
+// must close its streams everywhere, not just the world it happens to use.
 func (a *App) cancelIdentityStreams(identityID string) {
 	a.mu.Lock()
 	runtimes := make([]*worldRuntime, 0, len(a.runtimes))

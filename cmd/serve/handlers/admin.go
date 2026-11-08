@@ -63,33 +63,33 @@ func (h *Handlers) basePath() string {
 	return "/worlds/" + h.world.Slug
 }
 
-// boardPath is the board page with the trailing slash relative model links
+// worldPath is the world page with the trailing slash relative model links
 // resolve against.
-func (h *Handlers) boardPath() string {
+func (h *Handlers) worldPath() string {
 	return h.basePath() + "/"
 }
 
-// Admin, AdminTurns, AdminTurn and AdminSite are the admin pages. Each one
+// Admin, AdminChangesets, AdminChangeset and AdminSite are the admin pages. Each one
 // shows the password form until the browser remembers a login. The password
 // form POSTs back to the same path; a correct password sets the signed,
 // HttpOnly cookie and the page renders, so nothing ever puts the token in a
-// URL. These routes are only served on the admin host, which has no board and
-// so never runs the model's JavaScript.
+// URL. These routes are only served on the admin host, which has no world page
+// and so never runs the model's JavaScript.
 func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageOverview})
 }
 
-func (h *Handlers) AdminTurns(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageTurns})
+func (h *Handlers) AdminChangesets(w http.ResponseWriter, r *http.Request) {
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets})
 }
 
-func (h *Handlers) AdminTurn(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) AdminChangeset(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
 		http.NotFound(w, r)
 		return
 	}
-	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id})
+	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets, Turn: id})
 }
 
 func (h *Handlers) AdminSite(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +145,7 @@ func (h *Handlers) adminDone(
 ) {
 	h.adminHeaders(w)
 	view, err := h.loadAdmin(r.Context(), panel, message)
-	view.BoardURL = playOrigin(r, h.cfg) + h.boardPath()
+	view.WorldURL = playOrigin(r, h.cfg) + h.worldPath()
 	h.fillWorldHeader(r, &view)
 	if p := principalFrom(r); p != nil {
 		view.CSRF = p.CSRFToken
@@ -212,7 +212,7 @@ func (h *Handlers) loadAdmin(
 		view.Budget = h.adminBudget(ctx, site)
 		view.Summary, view.SummaryThrough = h.adminSummary(ctx)
 		view.Notes = h.adminNotes(ctx)
-	case pages.PageTurns:
+	case pages.PageChangesets:
 		// The list always shows the running turn's progress. The inspector
 		// is live when it follows the newest or holds the running turn; any
 		// other picked turn stays as it was loaded. One snapshot covers the
@@ -465,7 +465,7 @@ func (h *Handlers) adminLiveView(ctx context.Context) pages.LiveView {
 	case running != nil:
 		authors := strings.Join(running.Authors, ", ")
 		if authors == "" {
-			authors = "the board"
+			authors = "the room"
 		}
 		view.State = "running"
 		view.Detail = fmt.Sprintf(
@@ -575,10 +575,10 @@ func (h *Handlers) HealSite(w http.ResponseWriter, r *http.Request) {
 	h.adminDone(w, r, h.panel(pages.PageSite), "the site went back to the seed")
 }
 
-// AdminChangeset sends a free-form instruction straight to the model. It can also
-// store the instruction as a real post, which is useful for setting up a mood
-// without pretending to be a visitor.
-func (h *Handlers) AdminChangeset(w http.ResponseWriter, r *http.Request) {
+// SendInstruction sends a free-form instruction straight to the model. It can
+// also store the instruction as a real post, which is useful for setting up a
+// mood without pretending to be a visitor.
+func (h *Handlers) SendInstruction(w http.ResponseWriter, r *http.Request) {
 	if !h.requireAdmin(w, r) {
 		return
 	}
@@ -632,7 +632,7 @@ func (h *Handlers) StopTurn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad turn id", http.StatusBadRequest)
 		return
 	}
-	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id}
+	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets, Turn: id}
 	if h.stopTurn(id) {
 		h.adminDone(w, r, panel, "stop sent, the turn is ending")
 		return
@@ -656,7 +656,7 @@ func (h *Handlers) RetryTurn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad turn id", http.StatusBadRequest)
 		return
 	}
-	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageTurns, Turn: id}
+	panel := pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets, Turn: id}
 
 	res, refusal, err := h.runRetry(r.Context(), id)
 	switch {
@@ -670,14 +670,14 @@ func (h *Handlers) RetryTurn(w http.ResponseWriter, r *http.Request) {
 		h.adminDone(
 			w,
 			r,
-			pages.Panel{Base: h.adminBase(), Page: pages.PageTurns},
+			pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets},
 			"retried: "+res.Reason,
 		)
 	default:
 		h.adminDone(
 			w,
 			r,
-			pages.Panel{Base: h.adminBase(), Page: pages.PageTurns},
+			pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets},
 			"retried, no change: "+res.Reason,
 		)
 	}

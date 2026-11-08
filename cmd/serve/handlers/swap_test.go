@@ -78,20 +78,20 @@ func TestHubCoalescesTopics(t *testing.T) {
 	}
 }
 
-// A board stream does not ask for drafts, so a streaming round many times a
+// A play stream does not ask for drafts, so a streaming round many times a
 // second never wakes it.
 func TestHubWakesOnlyForWantedTopics(t *testing.T) {
 	h := newHub()
-	board, cancelBoard := h.subscribe(topicAll)
-	defer cancelBoard()
+	play, cancelPlay := h.subscribe(topicAll)
+	defer cancelPlay()
 	admin, cancelAdmin := h.subscribe(topicAll | topicDraft)
 	defer cancelAdmin()
 
 	h.publish(topicDraft)
 
 	select {
-	case <-board.wake:
-		t.Fatal("a draft woke a board stream")
+	case <-play.wake:
+		t.Fatal("a draft woke a play stream")
 	default:
 	}
 	select {

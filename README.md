@@ -5,7 +5,7 @@
 Nobody designed this world. It got that way one post at a time.
 
 beaverdream is a world builder. Each world starts as a plain page with a
-message board, and a model, the webmaster, rewrites it after every post:
+post form, and a model, the webmaster, rewrites it after every post:
 colors, layout, scripts, even the form it hands you. A world can become a game,
 a shop, a city, a tool, or anything else a page can be.
 

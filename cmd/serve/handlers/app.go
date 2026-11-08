@@ -389,7 +389,7 @@ func (a *App) withWorldSlug(next http.Handler) http.Handler {
 	})
 }
 
-// worldMissing answers a board request for a world that is gone, not ready or
+// worldMissing answers a play request for a world that is gone, not ready or
 // never existed. It never recreates a file.
 func (a *App) worldMissing(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

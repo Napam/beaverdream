@@ -16,8 +16,8 @@ const (
 	// ScopeApp is the management plane: account, invites, API tokens,
 	// admin pages. App sessions expire after DefaultAppSessionTTL.
 	ScopeApp Scope = "app"
-	// ScopePlay is one world's board. Play sessions have no expiry by
-	// default and cannot change credentials.
+	// ScopePlay is a play session on one world's page. Play sessions have no
+	// expiry by default and cannot change credentials.
 	ScopePlay Scope = "play"
 	// ScopeAPI is a script token. It skips CSRF and only an admin may hold
 	// one for now.

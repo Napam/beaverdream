@@ -119,16 +119,16 @@ func TestNewQueueCountsInstructionsSeparately(t *testing.T) {
 	}
 }
 
-func TestHistoryCountNamesTurnsAndQueue(t *testing.T) {
+func TestHistoryCountNamesChangesetsAndQueue(t *testing.T) {
 	for _, tc := range []struct {
 		turns  int
 		queued int
 		want   string
 	}{
-		{0, 0, "0 turns, newest first"},
-		{1, 0, "1 turn, newest first"},
-		{2, 1, "2 turns · 1 queued, newest first"},
-		{0, 3, "0 turns · 3 queued, newest first"},
+		{0, 0, "0 changesets, newest first"},
+		{1, 0, "1 changeset, newest first"},
+		{2, 1, "2 changesets · 1 queued, newest first"},
+		{0, 3, "0 changesets · 3 queued, newest first"},
 	} {
 		if got := historyCount(tc.turns, tc.queued); got != tc.want {
 			t.Errorf("historyCount(%d, %d) = %q, want %q",
@@ -190,9 +190,15 @@ func TestTriggerAndStatusLabels(t *testing.T) {
 	if got := triggerLabel(row); got != "posts" {
 		t.Errorf("a batch = %q, want posts", got)
 	}
+	row.Batched = false
 	row.Run.Author = "admin"
+	if got := triggerLabel(row); got != "post" {
+		t.Errorf("an author named admin with no instruction = %q, want post", got)
+	}
+	row.Batched = true
+	row.Run.Body = "make the header blue"
 	if got := triggerLabel(row); got != "instruction" {
-		t.Errorf("admin = %q, want instruction", got)
+		t.Errorf("an admin instruction = %q, want instruction", got)
 	}
 	if got := statusLabel("silent"); got != "unfinished" {
 		t.Errorf("silent = %q, want unfinished", got)
@@ -314,7 +320,7 @@ func TestTurnNeighboursStopsAtTheEnds(t *testing.T) {
 	if older, newer := view.turnNeighbours(); older != 7 || newer != 0 {
 		t.Errorf("newest: older = %d, newer = %d", older, newer)
 	}
-	view.Panel = Panel{Page: PageTurns, Turn: 7}
+	view.Panel = Panel{Page: PageChangesets, Turn: 7}
 	if older, newer := view.turnNeighbours(); older != 5 || newer != 9 {
 		t.Errorf("middle: older = %d, newer = %d", older, newer)
 	}
@@ -380,7 +386,7 @@ func TestRunProgressLaysOutTheDraft(t *testing.T) {
 // Arguments can be cut anywhere. Every cut reads as the fields so far, never
 // as raw JSON, and a half-sent escape is held back.
 func TestStreamingArgsReadsEveryCut(t *testing.T) {
-	whole := `{"target": "board", "old": "a\"b", "keys": [{"name":"x"}], "new": "line\none \u00e9"}`
+	whole := `{"target": "html", "old": "a\"b", "keys": [{"name":"x"}], "new": "line\none \u00e9"}`
 	for cut := 0; cut <= len(whole); cut++ {
 		for _, arg := range streamingArgs(whole[:cut]) {
 			if arg.Key == "arguments" {
@@ -392,7 +398,7 @@ func TestStreamingArgsReadsEveryCut(t *testing.T) {
 		}
 	}
 	got := streamingArgs(whole)
-	want := []string{"board", `a"b`, `[{"name":"x"}]`, "line\none é"}
+	want := []string{"html", `a"b`, `[{"name":"x"}]`, "line\none é"}
 	if len(got) != len(want) {
 		t.Fatalf("args = %+v", got)
 	}

@@ -72,7 +72,7 @@ the reply:
 - `mockprose`: replies in words with no tool call.
 - `mockgame`: ships a small game script.
 - `mockwallet`: declares visitor counters and a recipe, and ships a purse page.
-- `mockreply` and `mocksay`: reply on the board, with or without a line first.
+- `mockreply` and `mocksay`: reply in the room, with or without a line first.
 
 The mock takes a `-delay` flag (default `15ms`) that pauses before each streamed
 chunk. Run it with `go run ./cmd/mockllm -addr localhost:6701 -delay 0` to skip

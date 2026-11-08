@@ -341,11 +341,11 @@ func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
 	}
 }
 
-func TestAdminChangesetDoesNotCreatePost(t *testing.T) {
+func TestSendInstructionDoesNotCreatePost(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -399,7 +399,7 @@ func TestIndexServesTheModelPageInline(t *testing.T) {
 		}
 	}
 	if !strings.Contains(body, "no posts yet") {
-		t.Error("empty board does not say it has no posts")
+		t.Error("empty page does not say it has no posts")
 	}
 	if strings.Contains(body, "rewrite") {
 		t.Error("seed page gives away the gimmick")
@@ -479,7 +479,7 @@ func TestVersionReportsTheNewestPost(t *testing.T) {
 
 	before := getVersion(t, h, "/version")
 	if before.Post != 0 {
-		t.Errorf("post = %d on an empty board, want 0", before.Post)
+		t.Errorf("post = %d on an empty page, want 0", before.Post)
 	}
 
 	first, err := queries.CreatePost(ctx, sqlc.CreatePostParams{Author: "dave", Body: "one"})
@@ -541,7 +541,7 @@ func TestAdminPanelNeedsAnAdminPrincipal(t *testing.T) {
 	if anonymous.Code != http.StatusNotFound {
 		t.Fatalf("without principal: status = %d, want 404", anonymous.Code)
 	}
-	if strings.Contains(anonymous.Body.String(), "talk to the webmaster") {
+	if strings.Contains(anonymous.Body.String(), "talk to Naps") {
 		t.Fatal("an anonymous request carries admin data")
 	}
 
@@ -557,7 +557,7 @@ func TestAdminPanelNeedsAnAdminPrincipal(t *testing.T) {
 	req = withAdmin(httptest.NewRequest(http.MethodGet, "/admin", nil))
 	h.Admin(admin, req)
 	if admin.Code != http.StatusOK ||
-		!strings.Contains(admin.Body.String(), "talk to the webmaster") {
+		!strings.Contains(admin.Body.String(), "talk to Naps") {
 		t.Fatalf("admin: status = %d, want the panel", admin.Code)
 	}
 	if got := admin.Header().Get("Referrer-Policy"); got != "no-referrer" {
@@ -590,7 +590,7 @@ func TestStateReadsAndWritesDeclaredKeys(t *testing.T) {
 	pageReq = withIdentity(pageReq, "dave")
 	h.Index(page, pageReq)
 	if !strings.Contains(page.Body.String(), `id="bd-state"`) {
-		t.Error("board page does not carry the shared-state tag")
+		t.Error("page does not carry the shared-state tag")
 	}
 
 	read := httptest.NewRecorder()
@@ -684,7 +684,7 @@ func TestUndoLastRestoresThePreviousVersion(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -722,7 +722,7 @@ func TestHealSiteReturnsToTheSeed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current site: %v", err)
 	}
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -781,7 +781,7 @@ func TestHealSiteReturnsToTheSeed(t *testing.T) {
 		t.Fatalf("current site: %v", err)
 	}
 	if after.ID != healed.ID {
-		t.Errorf("healing a plain board appended version %d", after.ID)
+		t.Errorf("healing a plain page appended version %d", after.ID)
 	}
 }
 
@@ -832,7 +832,7 @@ func TestResetWorldClearsPostsAndHistory(t *testing.T) {
 		t.Fatalf("list posts: %v", err)
 	}
 	if len(posts) != 0 {
-		t.Fatalf("posts after reset = %d, want an empty board", len(posts))
+		t.Fatalf("posts after reset = %d, want an empty page", len(posts))
 	}
 
 	site, err := queries.CurrentSite(ctx)
@@ -895,7 +895,7 @@ func TestResetWorldRequiresToken(t *testing.T) {
 		t.Fatalf("list posts: %v", err)
 	}
 	if len(posts) != 1 {
-		t.Fatalf("unauthenticated reset changed the board: %d posts", len(posts))
+		t.Fatalf("unauthenticated reset changed the page: %d posts", len(posts))
 	}
 }
 
@@ -1020,7 +1020,7 @@ func TestHealRecordsATurn(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	rec := postAdmin(t, h.HealSite, "/admin/heal", url.Values{})
@@ -1095,7 +1095,7 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -1113,7 +1113,7 @@ func TestCompactionReplacesTheHistoryWithOneMessage(t *testing.T) {
 		t.Error("summary is empty")
 	}
 
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"mocknoop"},
 	})
 	turns, err := queries.ListChangesets(ctx, 10)
@@ -1160,7 +1160,7 @@ func TestCompactionLeavesQueuedPostsOut(t *testing.T) {
 	}
 	h.HoldPost(createdPostRow(queued))
 
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	summary, err := queries.GetLatestSummary(ctx)
@@ -1215,7 +1215,7 @@ func TestFailedSummaryStillLandsTheTurn(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 
@@ -1290,7 +1290,7 @@ func TestCompactionTriggersOnTokenEstimate(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -1313,7 +1313,7 @@ func TestResetClearsCompactedMemory(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
@@ -1347,7 +1347,7 @@ func TestCompactionFiresAtDefaultThresholds(t *testing.T) {
 		}
 	}
 
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -1381,7 +1381,7 @@ func TestRoomLogKeepsEveryTurnBelowTheBackstop(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"mocknoop"},
 	})
 
@@ -1525,7 +1525,7 @@ func TestCompactionSkipsWhenThePageAloneIsOverBudget(t *testing.T) {
 			t.Fatalf("create post %d: %v", i, err)
 		}
 	}
-	rec := postAdmin(t, h.AdminChangeset, "/admin/changeset", url.Values{
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
 		"instruction": {"make it pink"},
 	})
 	if rec.Code != http.StatusOK {
@@ -1589,7 +1589,7 @@ func TestAdminShowsTheJournalAndSharedState(t *testing.T) {
 }
 
 // A reset must not wait behind a model call. It cancels the turn in flight and
-// wipes the board, so the admin request answers now instead of minutes later.
+// wipes the page, so the admin request answers now instead of minutes later.
 func TestResetCancelsTheRunningTurn(t *testing.T) {
 	var hold atomic.Bool
 	hold.Store(true)
@@ -1710,10 +1710,14 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 
 	// Only an errored turn offers the button.
 	page := func(id int64) string {
-		req := httptest.NewRequest(http.MethodGet, "/admin/turns/"+strconv.FormatInt(id, 10), nil)
+		req := httptest.NewRequest(
+			http.MethodGet,
+			"/admin/changesets/"+strconv.FormatInt(id, 10),
+			nil,
+		)
 		req = withAdmin(req)
 		rec := httptest.NewRecorder()
-		h.AdminTurn(rec, withURLParam(req, "id", strconv.FormatInt(id, 10)))
+		h.AdminChangeset(rec, withURLParam(req, "id", strconv.FormatInt(id, 10)))
 		return rec.Body.String()
 	}
 	if !strings.Contains(page(turn.ID), "/admin/worlds/test/retry/"+id) {
@@ -1725,7 +1729,7 @@ func TestRetryRunsAnErroredAdminTurn(t *testing.T) {
 }
 
 // A post-triggered turn answers exactly the posts it had, not the ones that
-// arrived while it ran. The board as it is now is what the retry rewrites.
+// arrived while it ran. The page as it is now is what the retry rewrites.
 func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -1864,7 +1868,7 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 	}
 }
 
-func TestBoardsRenderWithAMissingIdentity(t *testing.T) {
+func TestPagesRenderWithAMissingIdentity(t *testing.T) {
 	h, queries := setup(t)
 	if _, err := queries.CreatePost(context.Background(), sqlc.CreatePostParams{
 		Author: "ghost-identity", Body: "still readable",

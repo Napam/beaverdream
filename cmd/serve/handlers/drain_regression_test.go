@@ -19,7 +19,7 @@ import (
 
 func TestPinnedStreamAfterDrainStarts(t *testing.T) {
 	for _, shutdown := range []string{"delete", "close"} {
-		for _, plane := range []string{"board", "admin"} {
+		for _, plane := range []string{"play", "admin"} {
 			t.Run(shutdown+"/"+plane, func(t *testing.T) {
 				ctx := context.Background()
 				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -106,7 +106,7 @@ func TestPinnedStreamAfterDrainStarts(t *testing.T) {
 				rec := httptest.NewRecorder()
 				done := make(chan struct{})
 				go func() {
-					if plane == "board" {
+					if plane == "play" {
 						rt.h.Live(rec, req)
 					} else {
 						rt.h.AdminLive(rec, req)

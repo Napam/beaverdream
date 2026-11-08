@@ -241,7 +241,7 @@ var JournalRuntime = `<script>
   var cache = Object.create(null)
 
   // The world mount path and browser-key root come from the same code-owned
-  // config. A board served under /worlds/SLUG/ must call its own routes and keep
+  // config. A page served under /worlds/SLUG/ must call its own routes and keep
   // its saves apart from every other world on this origin.
   var base = String(conf.base || '').replace(/\/+$/, '')
   var store = String(conf.store || 'bd:')
@@ -415,7 +415,7 @@ var JournalRuntime = `<script>
   }
 
   // load reads the whole feed. The rules number is not taken from the reply:
-  // a different one expires the page instead. A failed read leaves the board
+  // a different one expires the page instead. A failed read leaves the page
   // as it was, so a server hiccup never draws an empty game. A feed that
   // never loaded tries once more after a second, then on the next push. Only
   // one read is out at a time; rows pushed meanwhile wait in held. preloaded
@@ -446,7 +446,7 @@ var JournalRuntime = `<script>
       if (held.length && self.loaded) self.receive(held)
       // A first read that fails is tried once more after a second, so a page
       // that waits on the feed before its first write still loads on a quiet
-      // board.
+      // page.
       if (!self.loaded && !self.retried) {
         self.retried = true
         setTimeout(function () { if (!self.loaded) self.load() }, 1000)

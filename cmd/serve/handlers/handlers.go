@@ -40,7 +40,7 @@ const (
 	// draftEvery bounds how often a streaming round repaints the admin panel.
 	// A fast model sends dozens of chunks a second; the panel needs a few.
 	draftEvery = 100 * time.Millisecond
-	// personaName is the webmaster's name on the board. Reply rows stored
+	// personaName is the webmaster's name on the page. Reply rows stored
 	// before the rename carry the role word "webmaster"; the kind tells them
 	// apart, so they show the current name without a data migration.
 	personaName = "Naps"
@@ -54,7 +54,7 @@ var changesetTimeout = env.GetEnvPositiveDuration("TURN_TIMEOUT", time.Hour)
 
 // Config holds the environment knobs one world's handlers enforce.
 type Config struct {
-	// AppPort and AppURL locate the management plane for board links. Empty
+	// AppPort and AppURL locate the management plane for world links. Empty
 	// AppURL derives the origin from the request's host and AppPort.
 	AppPort string
 	AppURL  string
@@ -62,7 +62,7 @@ type Config struct {
 	// browser-session cookie.
 	AppSessionTTL  time.Duration
 	PlaySessionTTL time.Duration
-	// PlayPort and PlayURL locate the board for the admin panel.
+	// PlayPort and PlayURL locate the world for the admin panel.
 	PlayPort string
 	PlayURL  string
 	// CompactAfterTokens is the estimated whole-prompt size that triggers
@@ -71,7 +71,7 @@ type Config struct {
 	// CompactAfterTurns is the turn-count backstop for very short turns.
 	// Zero uses the default.
 	CompactAfterTurns int
-	// DatastarSrc is the script path the board loads Datastar from, content
+	// DatastarSrc is the script path the world loads Datastar from, content
 	// hashed in production. Empty uses webmaster.DatastarPath.
 	DatastarSrc string
 	// ThreeSrc is the path the import map gives "three", content hashed in
@@ -117,7 +117,7 @@ type runState struct {
 	Finishing bool `json:"-"`
 }
 
-// Handlers serves the board and the admin panel.
+// Handlers serves the world and the admin panel.
 type Handlers struct {
 	logger  *slog.Logger
 	reg     *registry.Registry
@@ -131,7 +131,7 @@ type Handlers struct {
 	modelSem chan struct{}
 
 	// hub tells the open pages' live streams what changed. Every write to
-	// the board publishes; the streams do the reading.
+	// the world publishes; the streams do the reading.
 	hub *hub
 
 	// mu serializes changesets. One process, one site: a second changeset
@@ -306,7 +306,7 @@ func normalizeSchema(schema string) string {
 	return schema
 }
 
-// authorName resolves a stored identity id to the display name the board and
+// authorName resolves a stored identity id to the display name the world and
 // the model read. A missing or disabled identity keeps the id, so a world
 // restored without its registry still shows something.
 func (h *Handlers) authorName(ctx context.Context, id string) string {
@@ -336,7 +336,7 @@ func (h *Handlers) turnAuthorName(ctx context.Context, kind, author string) stri
 	return author
 }
 
-// replyAuthor names the webmaster on the board. A legacy reply row stores the
+// replyAuthor names the webmaster on the page. A legacy reply row stores the
 // role word, so it reads as the current name.
 func (h *Handlers) replyAuthor(ctx context.Context, author string) string {
 	if author == "webmaster" {
@@ -464,7 +464,7 @@ func (h *Handlers) runChangesetLocked(
 	ctx, cancel := changesetContext(ctx)
 	defer cancel(nil)
 	if !h.startRun(cancel) {
-		return webmaster.Result{}, errors.New("the board is resetting")
+		return webmaster.Result{}, errors.New("the world is resetting")
 	}
 	defer h.clearRun()
 
@@ -658,7 +658,7 @@ func (h *Handlers) runChangesetHeld(
 	)
 	defer cancel()
 
-	// A reply goes on the board from any turn that did not fail. A silent turn
+	// A reply goes on the page from any turn that did not fail. A silent turn
 	// can carry one: its done was deferred and never called again, and the
 	// reply it gave is still what the visitors asked for. It is written last
 	// in the transaction, so it takes the newest id and reaches every open
@@ -1331,15 +1331,15 @@ func (h *Handlers) stopWork() {
 	h.cancelRun = nil
 	h.liveMu.Unlock()
 	if cancel != nil {
-		cancel(errBoardReset)
+		cancel(errWorldReset)
 	}
 	h.hub.publish(topicBusy)
 }
 
-// errBoardReset and errAdminStop are the causes a turn's context carries when
+// errWorldReset and errAdminStop are the causes a turn's context carries when
 // it is canceled on purpose.
 var (
-	errBoardReset = errors.New("the board was reset")
+	errWorldReset = errors.New("the world was reset")
 	errAdminStop  = errors.New("stopped by admin")
 )
 
@@ -1473,7 +1473,7 @@ func (h *Handlers) saveRunningMessages(turnID int64, messages []webmaster.Messag
 	}
 }
 
-// say posts the webmaster's say call on the board while its turn still runs,
+// say posts the webmaster's say call on the page while its turn still runs,
 // so a visitor hears back before the work is done. It runs under h.mu, inside
 // the turn, so a reset cannot delete the room around it.
 func (h *Handlers) say(ctx context.Context, text string) error {
@@ -1660,7 +1660,7 @@ const (
 )
 
 // heal copies the seed version forward. It is a restore, not a model call.
-// Only the admin panel asks for it; a board left alone keeps its page.
+// Only the admin panel asks for it; a world left alone keeps its page.
 func (h *Handlers) heal(ctx context.Context) (bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1714,7 +1714,7 @@ func (h *Handlers) allowStateWrite(visitor, key string) bool {
 	if last, ok := h.lastStateAt[slot]; ok && now.Sub(last) < h.stateCooldown {
 		return false
 	}
-	// An entry past its cooldown decides nothing, so a long-running board
+	// An entry past its cooldown decides nothing, so a long-running world
 	// sweeps them out instead of keeping every browser it ever saw.
 	if len(h.lastStateAt) >= stateSlotsSweep {
 		for old, at := range h.lastStateAt {

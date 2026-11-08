@@ -8,8 +8,8 @@ type AppWorld struct {
 	Slug      string
 	Status    string
 	CreatedAt time.Time
-	// BoardURL is the world's page on the play port, seen from the app.
-	BoardURL string
+	// WorldURL is the world's page on the play port, seen from the app.
+	WorldURL string
 }
 
 // AppInviteRow is one invite row. The raw code is never stored, so it is absent.

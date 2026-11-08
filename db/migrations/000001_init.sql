@@ -1,6 +1,6 @@
 -- +goose Up
 -- The whole world schema in one file. beaverdream starts as a plain page with
--- a message board: no posts, a light seed design, and empty model-declared
+-- a post form: no posts, a light seed design, and empty model-declared
 -- state.
 --
 -- turns is the room. Everything anyone says lives here in one order: visitor
@@ -13,7 +13,7 @@ CREATE TABLE turns (
   kind TEXT NOT NULL,
   author TEXT NOT NULL DEFAULT '',
   -- What prompted a changeset (an admin instruction, empty for posts), or
-  -- the text of a server event. Never rendered on the board.
+  -- the text of a server event. Never rendered on the page.
   body TEXT NOT NULL DEFAULT '',
   -- The webmaster's own sentence from done. Read back to it next turn.
   said TEXT NOT NULL DEFAULT '',
@@ -34,9 +34,9 @@ CREATE INDEX turns_kind_id ON turns (kind, id);
 
 CREATE INDEX turns_kind_created_at ON turns (kind, created_at);
 
--- The board shows posts and the webmaster's replies. The view is the
+-- The page shows posts and the webmaster's replies. The view is the
 -- code-owned post list: model text (said, notes, changes) can never reach it
--- by accident. kind tells the board which is which, never the author name.
+-- by accident. kind tells the page which is which, never the author name.
 CREATE VIEW posts AS
 SELECT
   id,
@@ -101,7 +101,7 @@ CREATE TABLE shared_state (
 -- declared again gets its balances back. Heal keeps them; only reset and an
 -- admin clear delete them.
 CREATE TABLE state_holdings (
-  -- The identity id as the board sees it (publicVisitor). Display names are
+  -- The identity id as the world sees it (publicVisitor). Display names are
   -- not unique, so this is the stable key.
   visitor TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -141,7 +141,7 @@ CREATE INDEX state_ops_created_at ON state_ops (created_at);
 CREATE TABLE journal (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   key TEXT NOT NULL,
-  -- The identity id as the board sees it (publicVisitor). Display names are
+  -- The identity id as the world sees it (publicVisitor). Display names are
   -- not unique, so this is the stable key.
   visitor TEXT NOT NULL DEFAULT '',
   -- Compact JSON written by the page. Never rendered by the server.
@@ -157,7 +157,7 @@ CREATE TABLE journal (
 
 CREATE INDEX journal_key_id ON journal (key, id);
 
--- The seed is a plain light board: a title, one lede, a simple post form, and
+-- The seed is a plain light page: a title, one lede, a simple post form, and
 -- an empty thread. The model takes it from here. Its layout lives in its own
 -- stylesheet, not in the base, so a rewrite starts from nothing it did not
 -- write. The form posts through Datastar, so the page stays put and the post

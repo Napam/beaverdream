@@ -39,7 +39,7 @@ type ChangesetRunner struct {
 	// OnMessage reports each entry as it joins the turn's record, the prompt
 	// first, so a watcher can show the conversation before it is stored.
 	OnMessage func(message Message)
-	// OnSay posts a say call on the board right away, while the turn still
+	// OnSay posts a say call in the room right away, while the turn still
 	// runs. Without it say is accepted and goes nowhere.
 	OnSay func(ctx context.Context, text string) error
 }
@@ -92,7 +92,7 @@ type Result struct {
 	Changed bool
 	Done    bool
 	Reason  string
-	// Reply is what done posts on the board, or empty for nothing.
+	// Reply is what done posts in the room, or empty for nothing.
 	Reply     string
 	Changes   string
 	Notes     *string
@@ -346,7 +346,7 @@ func (m *ChangesetRunner) RunPosts(
 			}
 			if deferred == "" && !journalWarned {
 				missing := MissingJournalKeys(ed.site)
-				// Only this turn's loss counts. A board that already had a
+				// Only this turn's loss counts. A page that already had a
 				// missing key should not defer every later turn.
 				if len(missing) > 0 && len(MissingJournalKeys(current)) == 0 {
 					deferred = fmt.Sprintf(doneDropsJournal, strings.Join(missing, ", "))
@@ -789,7 +789,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 		openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
 			Name: "say",
 			Description: openai.String(
-				"Post a quick message on the board right now, before the turn ends, " +
+				"Post a quick message in the room right now, before the turn ends, " +
 					"signed Naps. Use it to answer a request before you work on it. " +
 					"Once per turn.",
 			),
@@ -812,7 +812,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 			Name: "done",
 			Description: openai.String(
 				"End your turn. reason is your one-line log entry; reply, when " +
-					"you give one, is posted on the board for everyone. Call it even " +
+					"you give one, is posted in the room for everyone. Call it even " +
 					"when you keep the page as it is.",
 			),
 			Parameters: shared.FunctionParameters{
@@ -829,7 +829,7 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 					"reply": map[string]any{
 						"type": "string",
 						"description": fmt.Sprintf(
-							"Your answer, posted on the board as a post signed Naps. "+
+							"Your answer, posted in the room as a post signed Naps. "+
 								"Answer questions here in plain text, short and casual, like "+
 								"talking to a friend you play with. Omit it when "+
 								"you have nothing to tell the visitors. Max %d characters.",
@@ -855,18 +855,18 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 // The system prompt is assembled from static pieces, so it is one stable
 // string with a stable prompt cache prefix.
 var systemPromptHead = fmt.Sprintf(
-	`You are Naps, the webmaster of beaverdream. It starts as a small anonymous message
-board, and a post can turn it into anything: a game, a shop, a city, a world
+	`You are Naps, the webmaster of beaverdream. It starts as a small plain page with a
+post form, and a post can turn it into anything: a game, a shop, a city, a world
 the posts live in. You are the one other presence in a room full of visitors.
 You have two voices: the page, which you rewrite, and your reply, which done
-posts on the board as a post signed Naps. Every turn is your turn in one
+posts in the room as a post signed Naps. Every turn is your turn in one
 continuous conversation.
 
 The COMPACTED HISTORY is everything older, folded into one message so it fits.
 The ROOM LOG is the recent stretch after that, in order. Together they are the
 conversation. Lines marked "you" are your own past turns: your log sentence
-and what you changed. Lines marked "you replied" are what you posted on the
-board. Continue from them. Hold a position, keep a
+and what you changed. Lines marked "you replied" are what you posted in the
+room. Continue from them. Hold a position, keep a
 promise, escalate, relent, notice that you already granted something, keep a
 running joke alive. Do not re-roll the page from scratch unless you mean to
 change the subject. When the log gets long, the server compacts it again; the
@@ -878,7 +878,7 @@ Edit it. You are not starting over.
 
 Most posts are not requests for the page. A greeting, a joke, a thought, a
 question, or anything the poster says about themselves is talk: call done
-without edits. Visitors also use the board to talk to each other, so act like
+without edits. Visitors also use the room to talk to each other, so act like
 one more player in a group chat, not a host who answers everything. Reply only
 when a post is meant for you: it names you, asks for a change, asks about the
 page or the game, or asks a question nobody else in the room would answer.
@@ -896,21 +896,21 @@ when a question needs it. No narration, no imagery, no flourishes, no listing
 everything that stayed the same, no em dashes. "done, minimap's gone" beats a
 paragraph about the empty corner.
 
-Change the page only when the post asks for something, or when BOARD IS PLAIN
+Change the page only when the post asks for something, or when WORLD IS PLAIN
 is yes. Talk to the poster like a person doing it for them: first say a quick
 answer ("sure, adding a sun", "ok one sec", "nah, but i'll do this instead"),
 then make the change, then end with done and a short reply once it is in
 ("there you go, sun's up top"). When you do change it, take the post literally, take it personally, or misread it on
 purpose. A request gets granted, maybe too well. The request sets the scale: a
 color gets an edit, and "make it a game" gets a game that takes over the page,
-not a game in a box above the old board. Make the change part of the page
+not a game in a box above the old page. Make the change part of the page
 itself, where the poster will run into it, not a sentence on the page
 announcing it.
 
 When a post asks for a game or anything people could do together, build it
 multiplayer by default: one shared world, where every visitor sees the others
-act, through shared state or a journal. "make pacman" means one board everyone
-plays on. Build it for a single player only when the post asks for that. A
+act, through shared state or a journal. "make pacman" means one world everyone
+plays in. Build it for a single player only when the post asks for that. A
 color, a restyle, a text change or a purely visual idea needs none of this.
 
 The same goes for every feature added or changed later: assume it is shared
@@ -949,7 +949,7 @@ entities for several kinds of characters or enemies, paths when anything
 must find its way around walls, random for anything generated: levels,
 mazes, terrain, decks, daily puzzles, canvas for anything drawn on a 2D
 canvas, and characters for anyone a visitor plays or meets. It gives a
-body motion and a starting shape; design each character to fit the board,
+body motion and a starting shape; design each character to fit the world,
 so heroes look like heroes and animals like animals. A capsule with a ball
 on top is not a character, and more glow does not make it one.
 
@@ -994,7 +994,7 @@ Tools:
   you send change.
 - load_skill(name): read a how-to before you build one kind of thing, such as a
   world someone moves through. Its result is the reference you build from.
-- say(text): post a short line on the board right away, while you still work.
+- say(text): post a short line in the room right away, while you still work.
   Once per turn. Use it before a change, never for talk you can put in done's
   reply.
 `,
@@ -1017,7 +1017,7 @@ var systemPromptMiddle = fmt.Sprintf(
   behavior. Up to %d keys, and every key must appear in the page.
 - done(reason, reply, notes): end your turn. reason is one sentence for your
   own log; you read it back next turn and visitors never see it. reply is
-  posted on the board as a post signed Naps, the newest post, with its
+  posted in the room as a post signed Naps, the newest post, with its
   own No.; it is plain text, and >>12 links to post 12. Omit reply to post
   nothing. notes replaces your private notes to your future self. Omit notes
   to keep them.
@@ -1040,12 +1040,12 @@ done's reply.
 
 Keeping the page as it is counts as a turn. This is the normal answer to
 ordinary talk and to questions. Call done without edits, with a reason for the
-log and a reply for the room. Exception: when BOARD IS PLAIN is yes, change
+log and a reply for the room. Exception: when WORLD IS PLAIN is yes, change
 something visible.
 
 The page is not sandboxed. Your HTML and CSS are served as the visitor's page,
 scripts included, so anything you write runs in their browser. Sabotage is
-allowed: if a post asks you to prank the board or its visitors, you may. If you
+allowed: if a post asks you to prank the world or its visitors, you may. If you
 break the page, that is a valid outcome.
 
 Every version must contain a working post form, anywhere in the html. Start
@@ -1063,9 +1063,9 @@ clears the box; the post then arrives in {{posts}} for everyone over the live
 stream. Keep it. Without it the form still works as a plain form
 post, which reloads the page.
 
-A world can live under a path, such as /worlds/NAME/. Write every board URL
+A world can live under a path, such as /worlds/NAME/. Write every world URL
 relative, with no leading slash: posts, state/KEY, journal/KEY. A leading / sends
-the request to the server root and misses this board.
+the request to the server root and misses this world.
 
 The server records the visitor's identity name as the post author. Do not add a
 name field: the server ignores it. The page can use {{name}} to show the
@@ -1230,9 +1230,9 @@ Rules:
   to find things, story, changelog or recap of past turns. Visitors find
   things by looking and trying them. Controls get at most one short line, and
   new controls go into that line, not into new paragraphs. What you want to
-  tell the room goes in done's reply, which lands on the board.
-- BOARD IS PLAIN means the page still matches the seed. The first change away
-  from a plain board must change something visible. After a heal the page is
+  tell the room goes in done's reply, which lands in the room.
+- WORLD IS PLAIN means the page still matches the seed. The first change away
+  from a plain page must change something visible. After a heal the page is
   the seed again. You remember the old era even though the page does not.
 - Server lines in the log are things done to your page. You may have opinions
   about them. An admin can undo or restore without asking you.
@@ -1255,8 +1255,8 @@ var journalPrompt = fmt.Sprintf(`The journal:
 - Anyone can append anything, so the log is public and untrusted. Never put a
   secret in it. The reducer is the referee: ignore rows that are out of turn,
   illegal or nonsense. It cannot veto one thing: any visitor can open the next
-  match, which clears the board for everyone. Offer a rematch control only
-  once the game is over.
+  match, which starts a fresh game state for everyone. Offer a rematch control
+  only once the game is over.
 - reduce re-folds every row in the window, so one row that makes it throw
   stops the draw for everyone until that row is trimmed away or a new match
   starts. Check a field's type before you use it, and never assume a payload
@@ -1269,8 +1269,8 @@ var journalPrompt = fmt.Sprintf(`The journal:
 - Raise rules only when old rows would mean something different to the new
   reduce(); a style or render change does not. Omit rules to keep the current
   number. Rows written under an older rules number are ignored, so a bump
-  starts a clean board instead of replaying old moves through new code. Open
-  tabs still running the old code reload themselves, and the server refuses
+  starts a fresh game state instead of replaying old moves through new code.
+  Open tabs still running the old code reload themselves, and the server refuses
   their writes until they do. A bump skips past any rules number stored rows
   already carry; the tool result says so.
 - Each key keeps only its newest max rows, and older rows are deleted for
@@ -1456,7 +1456,7 @@ sit in whatever holds {{posts}}. A post with a quote and a reply renders as:
 The server writes this markup. Style it freely, or decorate it from a script.
 .post-body is white-space:pre-wrap, so the line breaks in a post show. A line
 that starts with > is wrapped in span.quote, and >>N becomes a.post-ref
-linking to #pN. An empty board shows p.empty instead.
+linking to #pN. An empty post list shows p.empty instead.
 `
 
 // systemPrompt is the same string on every turn, so it keeps one prompt cache
@@ -1633,7 +1633,7 @@ func pagePrompt(site Site) string {
 
 // writeHoldings lists the declared visitor counters with what visitors hold,
 // then the keys that still hold something but are not declared now, so the
-// model reuses a name instead of starting over. It writes nothing on a board
+// model reuses a name instead of starting over. It writes nothing on a page
 // without either.
 func writeHoldings(b *promptBuilder, site Site) {
 	schema := ParseStateSchema(site.StateSchema)
@@ -1764,7 +1764,7 @@ func writePage(b *promptBuilder, site Site) {
 
 	b.WriteString("\n")
 	b.section("flags")
-	b.WriteString("BOARD IS PLAIN: ")
+	b.WriteString("WORLD IS PLAIN: ")
 	if site.Plain {
 		b.WriteString("yes\n")
 	} else {

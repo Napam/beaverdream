@@ -87,7 +87,7 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
-		writeStateError(w, http.StatusInternalServerError, "could not load the board")
+		writeStateError(w, http.StatusInternalServerError, "could not load the world")
 		return
 	}
 	schema := webmaster.ParseJournalSchema(site.JournalSchema)
@@ -188,7 +188,7 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
-		writeStateError(w, http.StatusInternalServerError, "could not load the board")
+		writeStateError(w, http.StatusInternalServerError, "could not load the world")
 		return
 	}
 	schema := webmaster.ParseJournalSchema(site.JournalSchema)

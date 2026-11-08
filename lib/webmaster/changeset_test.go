@@ -276,7 +276,7 @@ func TestRunPatchesAValueInPlace(t *testing.T) {
 		t.Errorf("accent was not patched: %q", res.Site.CSS)
 	}
 	if res.Site.HTML != first.Site.HTML {
-		t.Error("a stylesheet edit changed the board")
+		t.Error("a stylesheet edit changed the page")
 	}
 }
 
@@ -545,8 +545,8 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	if strings.Contains(got, strings.Repeat("x", historyPostLen+1)) {
 		t.Error("old post was not shortened")
 	}
-	if !strings.Contains(got, "BOARD IS PLAIN: no") {
-		t.Error("prompt does not say whether the board is plain")
+	if !strings.Contains(got, "WORLD IS PLAIN: no") {
+		t.Error("prompt does not say whether the world is plain")
 	}
 	if !strings.Contains(got, "CHANGES SINCE THE LAST HEAL: 7") {
 		t.Error("prompt does not carry the change count")
@@ -573,7 +573,7 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 		"CURRENT STYLESHEET:",
 		"CURRENT HTML:",
 		"CURRENT SHARED STATE:",
-		"BOARD IS PLAIN:",
+		"WORLD IS PLAIN:",
 		"NEW POST #9",
 	}
 	last := -1
@@ -584,7 +584,7 @@ func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
 		}
 		last = at
 	}
-	if strings.LastIndex(got, "NEW POST") < strings.Index(got, "BOARD IS PLAIN:") {
+	if strings.LastIndex(got, "NEW POST") < strings.Index(got, "WORLD IS PLAIN:") {
 		t.Error("NEW POST is not the final section")
 	}
 }
@@ -609,7 +609,7 @@ func TestUserPromptSectionsTileThePrompt(t *testing.T) {
 		"html":              "CURRENT HTML:\n<h1>hi</h1>{{posts}}",
 		"shared state":      "CURRENT SHARED STATE:",
 		"journal":           "CURRENT JOURNAL:",
-		"flags":             "BOARD IS PLAIN:",
+		"flags":             "WORLD IS PLAIN:",
 		"new post":          "NEW POST #9 from dave",
 	}
 	if len(sections) != len(starts) {

@@ -103,7 +103,7 @@ RETURNING
   id
 `
 
-// Naps's words on the board: done's reply, written in its turn's finish
+// Naps's words in the room: done's reply, written in its turn's finish
 // transaction so it takes the newest id, or a say while the turn runs.
 func (q *Queries) CreateReply(ctx context.Context, body string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, createReply, body)
@@ -456,7 +456,7 @@ type ListPostsAfterParams struct {
 	Limit int64
 }
 
-// The posts an open page has not shown yet, newest first, the order the board
+// The posts an open page has not shown yet, newest first, the order the page
 // reads.
 func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) ([]Post, error) {
 	rows, err := q.db.QueryContext(ctx, listPostsAfter, arg.ID, arg.Limit)

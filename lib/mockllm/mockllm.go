@@ -1,5 +1,5 @@
 // Package mockllm is a deterministic OpenAI-compatible chat completions server
-// used for tests and for developing the board without spending real tokens.
+// used for tests and for developing a world without spending real tokens.
 //
 // It answers with the same changeset tools the real webmaster uses, chosen from
 // keywords in the newest prompt, so a whole changeset can run offline.
@@ -143,7 +143,7 @@ func usage(req chatRequest, replyBytes int) map[string]any {
 // exercise the multi-round loop. An edit keyword sends the edit and done in
 // one response.
 func decide(prompt string, toolResultSeen bool) []toolCall {
-	// mockreply keeps the page and answers on the board.
+	// mockreply keeps the page and answers in the room.
 	if strings.Contains(prompt, "mockreply") {
 		call := doneCall("answered a question")
 		call.Function.Arguments = mustJSON(map[string]string{
@@ -317,7 +317,7 @@ const GameScript = `<style>
 </script>`
 
 // walletCalls declares two visitor counters and a recipe and ships a page
-// that earns, spends and shows the top holders, so the dev board shows
+// that earns, spends and shows the top holders, so the dev world shows
 // visitor state end to end.
 func walletCalls() []toolCall {
 	schema := map[string]any{"keys": []map[string]any{
@@ -450,8 +450,8 @@ func pickTheme(prompt string) theme {
 				`body{animation:hue 9s linear infinite}` +
 				`@keyframes hue{to{filter:hue-rotate(360deg)}}` +
 				`h1{letter-spacing:.2em;text-transform:uppercase}`,
-			title:  "chaos board",
-			header: `<h1>beaverdream</h1><script>document.title="chaos board"</script>`,
+			title:  "chaos world",
+			header: `<h1>beaverdream</h1><script>document.title="chaos world"</script>`,
 		}
 	case strings.Contains(prompt, "pink") || strings.Contains(prompt, "cute"):
 		return theme{
@@ -459,7 +459,7 @@ func pickTheme(prompt string) theme {
 				`--panel:#241019;--border:#5a2a44;` +
 				`--font:Georgia,"Times New Roman",serif}` +
 				`h1{letter-spacing:.02em}.post{border-color:#3a1b2c;border-radius:12px;padding-left:.9em}`,
-			title: "soft board",
+			title: "soft world",
 		}
 	case strings.Contains(prompt, "brutalist") || strings.Contains(prompt, "concrete"):
 		return theme{
@@ -473,12 +473,12 @@ func pickTheme(prompt string) theme {
 	default:
 		return theme{
 			css:   `:root{--bg:#0b0b0f;--fg:#e6e6e6;--accent:#9db4ff;--muted:#6d7280;--panel:#15151b;--border:#2a2a33}`,
-			title: "the board",
+			title: "the world",
 		}
 	}
 }
 
-// calls renders a theme as the edits the webmaster tools expect. The board
+// calls renders a theme as the edits the webmaster tools expect. The page
 // keeps the {{posts}} placeholder, so the real posts stay in place.
 const postForm = `<form class="postbox" method="post" action="posts" ` +
 	`data-on:submit="@post('posts', {contentType: 'form'}); el.reset()">` +

@@ -26,12 +26,12 @@ func TestThePageSwitchesWithoutATransition(t *testing.T) {
 	}
 }
 
-// The board carries the beaver icon, so the tab is not blank.
+// The page carries the beaver icon, so the tab is not blank.
 func TestThePageCarriesTheBeaverIcon(t *testing.T) {
 	icon := `<link rel="icon" type="image/svg+xml" href="` + FaviconPath + `">`
 	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
 	if !strings.Contains(doc, icon) {
-		t.Errorf("the board page is missing %s", icon)
+		t.Errorf("the page is missing %s", icon)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestThePageCarriesTheViewersName(t *testing.T) {
 }
 
 // data-post is the newest post id on the page, so the live script can tell
-// when the board has posts it does not show.
+// when the page has posts it does not show.
 func TestThePageCarriesTheNewestPostID(t *testing.T) {
 	posts := []Post{
 		{ID: 7, Author: "a", Body: "newest"},
@@ -145,7 +145,7 @@ func TestThePageCarriesTheNewestPostID(t *testing.T) {
 
 	empty := SiteDoc(Site{Version: 4, HTML: PostsPlaceholder}, nil)
 	if !strings.Contains(empty, `data-post="0"`) {
-		t.Errorf("empty board does not carry data-post=0: %.200s", empty)
+		t.Errorf("empty page does not carry data-post=0: %.200s", empty)
 	}
 }
 
@@ -253,22 +253,22 @@ func TestSiteDocNamespacesStorageByWorldID(t *testing.T) {
 	}
 }
 
-// A board without a world keeps the root routes and storage keys tests use.
+// A page without a world keeps the root routes and storage keys tests use.
 func TestSiteDocKeepsRootDefaults(t *testing.T) {
 	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
 	if !strings.Contains(doc, `data-init="@get(&#39;/live&#39;`) {
-		t.Error("the root board does not open /live")
+		t.Error("the root page does not open /live")
 	}
 	conf := journalConfigJSON(t, doc)
 	if conf["base"] != "" || conf["store"] != "bd:" {
 		t.Errorf("root runtime config = base %v store %v", conf["base"], conf["store"])
 	}
 	if !strings.Contains(doc, `<a href="/account">account</a>`) {
-		t.Error("the root board does not link to the default account page")
+		t.Error("the root page does not link to the default account page")
 	}
 }
 
-// The board's footer points at the app account. It never renders the old
+// The page's footer points at the app account. It never renders the old
 // name form or its route.
 func TestSiteDocLinksToTheAppAccount(t *testing.T) {
 	doc := SiteDoc(Site{
@@ -279,6 +279,6 @@ func TestSiteDocLinksToTheAppAccount(t *testing.T) {
 		t.Errorf("the account link is missing or unescaped: %s", doc)
 	}
 	if strings.Contains(doc, "/identity") || strings.Contains(doc, `name="name"`) {
-		t.Error("the board still carries the old identity form")
+		t.Error("the page still carries the old identity form")
 	}
 }

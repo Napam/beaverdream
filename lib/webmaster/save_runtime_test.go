@@ -140,7 +140,7 @@ func runSave(t *testing.T, scenario string) saveResult {
 }
 
 // Saves coalesce into one write, flush when the page hides, load back as
-// copies, and never touch keys the board does not own. A stored value that
+// copies, and never touch keys the page does not own. A stored value that
 // does not parse is the fallback.
 func TestSaveKeepsValuesInTheBrowser(t *testing.T) {
 	got := runSave(t, "fine")
@@ -167,7 +167,7 @@ func TestSaveKeepsValuesInTheBrowser(t *testing.T) {
 		t.Errorf("after save(null): load = %q, still stored = %v", got.Forgotten, got.OldStored)
 	}
 	if got.Other != "theirs" {
-		t.Errorf("a key outside the board's prefix changed: %q", got.Other)
+		t.Errorf("a key outside the page's prefix changed: %q", got.Other)
 	}
 }
 

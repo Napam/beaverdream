@@ -37,7 +37,7 @@ func holdModel(
 }
 
 // Stop turn cancels the running turn. It ends as an error labeled "stopped by
-// admin", the page stays as it was, and the board takes the next turn.
+// admin", the page stays as it was, and the world takes the next turn.
 func TestStopTurnEndsTheRunningTurn(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})

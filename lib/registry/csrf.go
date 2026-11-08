@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 )
 
-// CSRFToken derives a form token from an app session token. The board's model
+// CSRFToken derives a form token from an app session token. The page's model
 // script cannot read the token across origins, and the app session cookie can
 // still arrive on an app-port request because cookies ignore ports. Every
 // state-changing app POST must carry both the session and this token.

@@ -73,7 +73,7 @@ templ beaverLogo(px int) {
 	/>
 }
 
-// userShell is the warm page shell for the lobby, the account and the boards.
+// userShell is the warm page shell for the lobby, the account and the worlds.
 templ userShell(title string, body templ.Component) {
 	<html lang="en">
 		<head>
@@ -550,7 +550,7 @@ templ worldRow(view AppView, world AppWorld) {
 		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
 		<a class={ adminButton } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
 		if world.Status == "ready" {
-			<a class={ appInlineLink } href={ world.BoardURL } target="_blank" rel="noopener">open world ↗</a>
+			<a class={ appInlineLink } href={ world.WorldURL } target="_blank" rel="noopener">open world ↗</a>
 			<form
 				method="post"
 				action={ templ.SafeURL("/admin/worlds/" + world.Slug + "/delete") }
@@ -627,7 +627,7 @@ templ accountsSection(view AppView) {
 			<p class={ adminLabel }>accounts</p>
 			<p class={ adminMuted }>{ plural(len(view.Identities), "account") }</p>
 		</div>
-		<p class={ adminMuted + " mt-2" }>disabling an account signs it out everywhere and closes its open boards.</p>
+		<p class={ adminMuted + " mt-2" }>disabling an account signs it out everywhere and closes its open worlds.</p>
 		if len(view.Identities) == 0 {
 			<p class={ appEmpty + " mt-3" }>no accounts yet. send someone an invite.</p>
 		} else {

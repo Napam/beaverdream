@@ -260,7 +260,7 @@ func (b *browser) login(in *instance, username, password string) *http.Response 
 	return resp
 }
 
-// play presses play and follows the handoff to the board, returning the final
+// play presses enter and follows the handoff to the world, returning the final
 // URL and body.
 func (b *browser) play(in *instance, slug string) (string, string) {
 	b.t.Helper()
@@ -284,9 +284,9 @@ func (b *browser) play(in *instance, slug string) (string, string) {
 	return in.playURL + final, body(b.t, page)
 }
 
-func (b *browser) postBoard(boardURL string, form url.Values) *http.Response {
+func (b *browser) postWorld(worldURL string, form url.Values) *http.Response {
 	b.t.Helper()
-	return b.post(strings.TrimRight(boardURL, "/")+"/posts", form)
+	return b.post(strings.TrimRight(worldURL, "/")+"/posts", form)
 }
 
 func (in *instance) worldDB(t *testing.T, id string) *worlds.Handle {

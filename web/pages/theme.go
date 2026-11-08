@@ -3,7 +3,7 @@ package pages
 import "github.com/a-h/templ"
 
 // themeKey is the localStorage key the toggle writes. The admin has its own
-// origin, so the board can never read or overwrite it.
+// origin, so the page can never read or overwrite it.
 const themeKey = "bd:admin-theme"
 
 // themeToggle flips between light and dark. Both icons are always in the

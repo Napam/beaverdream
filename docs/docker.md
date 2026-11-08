@@ -26,7 +26,7 @@ Then friends open:
 
     http://<host-LAN-IP>:6930
 
-The app is on 6930. The worlds are on 6932, reached by pressing play; friends do
+The app is on 6930. The worlds are on 6932, reached by pressing enter; friends do
 not type that address. The admin panel is on the app port under `/admin`.
 
 ## Admin password

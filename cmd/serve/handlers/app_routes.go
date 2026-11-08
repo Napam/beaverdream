@@ -20,7 +20,7 @@ import (
 )
 
 // AppRouter is the management plane: login, account, invites, the lobby and
-// every admin page. It mounts no board route.
+// every admin page. It mounts no world route.
 func (a *App) AppRouter() *chi.Mux {
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
@@ -62,15 +62,15 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Route("/admin/worlds/{slug}", func(wr chi.Router) {
 				wr.Use(a.withWorldSlug)
 				wr.Get("/", a.worldAdmin((*Handlers).Admin))
-				wr.Get("/turns", a.worldAdmin((*Handlers).AdminTurns))
-				wr.Get("/turns/{id}", a.worldAdmin((*Handlers).AdminTurn))
+				wr.Get("/changesets", a.worldAdmin((*Handlers).AdminChangesets))
+				wr.Get("/changesets/{id}", a.worldAdmin((*Handlers).AdminChangeset))
 				wr.Get("/site", a.worldAdmin((*Handlers).AdminSite))
 				wr.Get("/journal", a.worldAdmin((*Handlers).AdminJournal))
 				wr.Post("/journal", a.worldAdmin((*Handlers).AdminJournal))
 				wr.Post("/journal/{key}/clear", a.worldAdmin((*Handlers).ClearJournal))
 				wr.Post("/holdings/{key}/clear", a.worldAdmin((*Handlers).ClearHoldings))
 				wr.Get("/live", a.worldAdmin((*Handlers).AdminLive))
-				wr.Post("/changeset", a.worldAdmin((*Handlers).AdminChangeset))
+				wr.Post("/changeset", a.worldAdmin((*Handlers).SendInstruction))
 				wr.Post("/retry/{id}", a.worldAdmin((*Handlers).RetryTurn))
 				wr.Post("/stop/{id}", a.worldAdmin((*Handlers).StopTurn))
 				wr.Post("/undo", a.worldAdmin((*Handlers).UndoLast))
@@ -210,7 +210,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 // Logout revokes this app session and forgets the app cookie. Play sessions
-// stay, because a board is a different browser context.
+// stay, because a world runs in a different browser context.
 func (a *App) Logout(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCSRF(w, r) {
 		return
@@ -307,7 +307,7 @@ func appWorld(world registry.World, r *http.Request, cfg Config) pages.AppWorld 
 		Slug:      world.Slug,
 		Status:    world.Status,
 		CreatedAt: world.CreatedAt,
-		BoardURL:  playOrigin(r, cfg) + "/worlds/" + url.PathEscape(world.Slug) + "/",
+		WorldURL:  playOrigin(r, cfg) + "/worlds/" + url.PathEscape(world.Slug) + "/",
 	}
 }
 

@@ -115,7 +115,7 @@ func TestAdminLiveNeedsAnAdminSession(t *testing.T) {
 // stream patch carries the version and the turn that produced it.
 func TestAdminLivePatchesHistoryAfterARewrite(t *testing.T) {
 	h, _ := setup(t)
-	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live := openAdminLive(t, h, "page=changesets", testAdminToken)
 	live.next(t, []string{`id="admin-live"`})
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit please"}})
@@ -126,7 +126,7 @@ func TestAdminLivePatchesHistoryAfterARewrite(t *testing.T) {
 // panel's history.
 func TestAdminLivePatchesHistoryAfterAKeptTurn(t *testing.T) {
 	h, _ := setup(t)
-	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live := openAdminLive(t, h, "page=changesets", testAdminToken)
 	live.next(t, []string{`id="admin-history"`, `nothing yet`})
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop please"}})
@@ -138,12 +138,15 @@ func TestAdminLivePatchesHistoryAfterAKeptTurn(t *testing.T) {
 func TestAdminLivePatchesTheInspectorAndCharts(t *testing.T) {
 	h, _ := setup(t)
 	overview := openAdminLive(t, h, "page=overview", testAdminToken)
-	overview.next(t, []string{`id="admin-metrics"`, "no finished turns yet"})
-	turns := openAdminLive(t, h, "page=turns", testAdminToken)
-	turns.next(t, []string{`id="admin-turn"`, "No turns yet"})
+	overview.next(t, []string{`id="admin-metrics"`, "no finished changesets yet"})
+	turns := openAdminLive(t, h, "page=changesets", testAdminToken)
+	turns.next(t, []string{`id="admin-turn"`, "No changesets yet"})
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockedit charts please"}})
-	overview.next(t, []string{`id="admin-metrics"`, "tokens per turn", "last 1 finished turn"})
+	overview.next(
+		t,
+		[]string{`id="admin-metrics"`, "tokens per changeset", "last 1 finished changeset"},
+	)
 	overview.next(t, []string{`id="admin-budget"`, "turns since the summary"})
 	turns.next(t, []string{
 		`id="admin-turn"`,
@@ -164,13 +167,13 @@ func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 	h, queries := setup(t)
 	postAdmin(
 		t,
-		h.AdminChangeset,
+		h.SendInstruction,
 		"/admin/changeset",
 		url.Values{"instruction": {"mockedit first"}},
 	)
 	postAdmin(
 		t,
-		h.AdminChangeset,
+		h.SendInstruction,
 		"/admin/changeset",
 		url.Values{"instruction": {"mocknoop second"}},
 	)
@@ -181,13 +184,13 @@ func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 	first := strconv.FormatInt(turns[1].ID, 10)
 
 	open := func(id string, admin bool) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/admin/turns/"+id, nil)
+		req := httptest.NewRequest(http.MethodGet, "/admin/changesets/"+id, nil)
 		req.Header.Set("Datastar-Request", "true")
 		if admin {
 			req = withAdmin(req)
 		}
 		rec := httptest.NewRecorder()
-		h.AdminTurn(rec, withURLParam(req, "id", id))
+		h.AdminChangeset(rec, withURLParam(req, "id", id))
 		return rec
 	}
 
@@ -201,7 +204,7 @@ func TestAdminTurnPageShowsOneTurn(t *testing.T) {
 		"follow the newest",
 		"mockedit first",
 		"what the model read",
-		"/admin/worlds/test/live?page=turns&amp;turn=" + first,
+		"/admin/worlds/test/live?page=changesets&amp;turn=" + first,
 	} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("turn page is missing %q", want)
@@ -249,7 +252,7 @@ func TestAdminNeedsAnAdminPrincipal(t *testing.T) {
 
 // A post waiting for the worker shows in the turns table as one queued row
 // above the newest turn, because the worker answers a burst as one turn.
-func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
+func TestAdminChangesetsShowsQueuedPosts(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
@@ -271,13 +274,13 @@ func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
 		h.HoldPost(createdPostRow(row))
 	}
 
-	body := getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	body := getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
 	for _, want := range []string{
 		"queued",
 		">next<",
 		"dave, kit",
 		"first queued (+1 more)",
-		"1 turn · 2 queued, newest first",
+		"1 changeset · 2 queued, newest first",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the queued row is missing %q", want)
@@ -291,7 +294,7 @@ func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
 	}
 
 	// The stream drops the row as soon as the worker drains the queue.
-	live := openAdminLive(t, h, "page=turns", testAdminToken)
+	live := openAdminLive(t, h, "page=changesets", testAdminToken)
 	live.next(t, []string{`id="admin-history"`, ">next<"})
 	go h.RunPending()
 	live.next(t, []string{`id="admin-history"`}, ">next<")
@@ -303,7 +306,7 @@ func TestAdminTurnsShowsQueuedPosts(t *testing.T) {
 
 // A turn in flight shows its finished rounds on the turns page before the
 // conversation is stored, then the stored turn replaces them when it lands.
-func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
+func TestAdminChangesetsShowsRoundsWhileRunning(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})
 	var once sync.Once
@@ -333,7 +336,7 @@ func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
 		if calls.Load() < 2 {
 			return false
 		}
-		body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+		body = getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
 		return strings.Contains(body, "in flight")
 	})
 	for _, want := range []string{
@@ -359,7 +362,7 @@ func TestAdminTurnsShowsRoundsWhileRunning(t *testing.T) {
 		turns, err := queries.ListChangesets(context.Background(), 1)
 		return err == nil && len(turns) == 1 && turns[0].Status != "running"
 	})
-	body = getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	body = getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
 	if strings.Contains(body, "in flight") || strings.Contains(body, `id="admin-draft"`) {
 		t.Error("the finished inspector still shows the live view")
 	}
@@ -395,8 +398,8 @@ func TestAdminLivePushesARunningRound(t *testing.T) {
 	// After the server's cleanup, so a fatal before stop cannot leave a held
 	// call blocking httptest.Server.Close.
 	t.Cleanup(stop)
-	live := openAdminLive(t, h, "page=turns", testAdminToken)
-	live.next(t, []string{`id="admin-turn"`, "No turns yet"})
+	live := openAdminLive(t, h, "page=changesets", testAdminToken)
+	live.next(t, []string{`id="admin-turn"`, "No changesets yet"})
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"mockbadedit stream progress"}})
 	live.next(t, []string{
@@ -483,8 +486,8 @@ func TestAdminLiveStreamsTheDraft(t *testing.T) {
 	wrap, stop := heldEdit(t)
 	h, _ := setupWithModel(t, handlers.Config{}, wrap)
 	t.Cleanup(stop)
-	live := openAdminLive(t, h, "page=turns", testAdminToken)
-	live.next(t, []string{`id="admin-turn"`, "No turns yet"})
+	live := openAdminLive(t, h, "page=changesets", testAdminToken)
+	live.next(t, []string{`id="admin-turn"`, "No changesets yet"})
 
 	postForm(t, h.CreatePost, "/posts", url.Values{"body": {"paint the heading"}})
 	// Each sync sends the status card before the draft.
@@ -516,7 +519,7 @@ func TestAdminLiveHoldsARunningTurn(t *testing.T) {
 	live := openAdminLive(
 		t,
 		h,
-		"page=turns&turn="+strconv.FormatInt(id, 10)+"&live=1",
+		"page=changesets&turn="+strconv.FormatInt(id, 10)+"&live=1",
 		testAdminToken,
 	)
 	live.next(t, []string{`id="admin-turn"`, "in flight"})
@@ -528,11 +531,11 @@ func TestAdminLiveHoldsARunningTurn(t *testing.T) {
 
 // An admin instruction waiting behind a running turn shows as its own queued
 // row, and the form sends on Enter and clears the field.
-func TestAdminTurnsShowsAWaitingInstruction(t *testing.T) {
+func TestAdminChangesetsShowsAWaitingInstruction(t *testing.T) {
 	h, _ := setup(t)
 	h.HoldInstruction("make it pink")
 
-	body := getAdmin(t, h.AdminTurns, "/admin/turns").Body.String()
+	body := getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
 	for _, want := range []string{">next<", "make it pink", "1 queued"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the waiting instruction is missing %q", want)

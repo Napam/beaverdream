@@ -6,10 +6,10 @@ The code is the truth now.
 ## Why
 
 beaverdream is a world builder, not a forum. A world starts as a plain page
-with a message board, and the webmaster rebuilds it as people post. The system
+with a post form, and the webmaster rebuilds it as people post. The system
 prompt already says a post can turn it into "a game, a shop, a city, a world
 the posts live in". The README, the seed page and a few code names still
-describe the starting board as the product. This note moves the framing and
+describe the starting page as the product. This note moves the framing and
 makes the vocabulary match.
 
 The mechanic stays central: you change a world by posting, not by editing.
@@ -22,8 +22,7 @@ One word per job. These are the only meanings allowed.
 
 | Word | Means | Where it may appear |
 |---|---|---|
-| **world** | The container: one registry row, one SQLite file, a slug, a lifecycle. The product noun. | Lobby, gate, admin, code, DB |
-| **board** | The shared feed at `/worlds/{slug}`, and the seed page. People post for each other, not only for Naps. Never the product. | Visitor copy, routes, seed |
+| **world** | The container and the page it shows: one registry row, one SQLite file, a slug, a lifecycle. It starts as a plain page with a post form. The product noun. | Lobby, gate, admin, code, DB |
 | **site** | The document the webmaster writes: one `site_versions` row. | Admin, code, DB |
 | **version** | One revision of the site. | Admin, code, DB |
 | **play** | Access to a world: play port, play session, play cookie, handoff. The button says **enter**. | Code, UI |
@@ -32,25 +31,26 @@ One word per job. These are the only meanings allowed.
 | **turn** | One entry in the room, in order. A post, a changeset, a reply or a server event is a turn. | Code, logs |
 | **changeset** | The webmaster's work in a turn: read the room, change the site, write a version, reply. One `turns` row with `kind = 'changeset'`. | Code, admin, logs, DB |
 | **round** | One model call inside a changeset. | Code, logs |
-| **room** | The conversation. `turns` is its storage. | Prompt, code |
+| **room** | The conversation: everyone's posts and Naps's replies. `turns` is its storage. | Prompt, visitor copy, code |
 | **summary** | The compacted room. | Admin, code |
 | **shared state** | Model-declared values every visitor sees. | Code, DB |
 | **holdings** | What one visitor owns of a visitor counter. | Code, DB |
 | **journal** | The model-declared append-only feeds. | Code, DB, prompt |
 | **save** | Browser storage through `bd.save`/`bd.load`. | Code, prompt |
-| **identity** | An account. **visitor** is that identity as a board sees it. | Code, DB |
+| **identity** | An account. **visitor** is that identity as a world sees it. | Code, DB |
 
 The loop is **post → changeset → version**. A turn is the room slot; a
 changeset is the webmaster's turn inside it. A post and a reply are turns too.
 
 A changeset can start from one post, a batch of posts, or an admin
-instruction. A **reply** is the webmaster's post on the board, but it is not a
+instruction. A **reply** is the webmaster's post in the room, but it is not a
 `kind = 'post'` row: the kind tells them apart.
 
 Rules:
 
 - Visitors hear **world**. The split above is for the admin and the code.
-- **board** is the talk surface and the seed, not the category.
+- **world** is the container and its page; **room** is the conversation inside
+  it. The seed is the world's first page, with a post form.
 - **site** stays the technical word for the document. Do not push it into
   visitor copy, because a world can be a game.
 - **page** is never a type name. `web/pages`, `Page*` and a browser page
@@ -72,7 +72,7 @@ Replace the opening block with:
 Nobody designed this world. It got that way one post at a time.
 
 beaverdream is a world builder. Each world starts as a plain page with a
-message board, and a model, the webmaster, rewrites it after every post:
+post form, and a model, the webmaster, rewrites it after every post:
 colors, layout, scripts, even the form it hands you. A world can become a game,
 a shop, a city, a tool, or anything else a page can be.
 
@@ -89,7 +89,7 @@ you trust. A public deployment needs separate registrable domains for the app
 and the worlds.
 ```
 
-Swap the leftover `board` lines that mean the product:
+Swap the leftover lines that named the product:
 
 - "the app on 6930, boards on 6932" becomes "the app on 6930, worlds on 6932"
 - "share a board with friends" becomes "share a world with friends"
@@ -110,7 +110,7 @@ The seed is the row that `SeedSiteVersion` and reset's `MIN(id)` select.
 Existing worlds keep their current page. New worlds, heal and reset get the
 new seed. That is intended.
 
-The seed keeps the message-board shape: title, one lede, the form, the thread,
+The seed keeps the plain page shape: title, one lede, the form, the thread,
 a footer. Change the words, not the interaction.
 
 ```html
@@ -138,7 +138,7 @@ Why this copy:
 
 - It says world, together and everyone sees the same page.
 - It names Naps and the webmaster role, so there is a builder, not an anonymous void.
-- The placeholder allows a hello or a request, so the board is social as well
+- The placeholder allows a hello or a request, so the room is social as well
   as a way to ask for a build.
 - It does not explain the mechanism, so the first post is still the reveal.
 
@@ -151,13 +151,13 @@ Alternative voice, if the first is too warm:
 ```
 
 The phrase test in `cmd/serve/handlers/handlers_test.go` checks that reset
-keeps "a small message board". Replace it with a behavior check: `site.ID == 1`
+keeps the old seed wording. Replace it with a behavior check: `site.ID == 1`
 already proves the seed survived, and `site.TurnID.Valid == false` names the
 seed directly. Do not test seed wording.
 
 ## Gate and lobby copy
 
-| Now | After |
+| Before | After |
 |---|---|
 | "board gate · beaverdream" | "world gate · beaverdream" |
 | "this board opens in the app" | "this world opens in the app" |
@@ -178,8 +178,8 @@ App port:
 ```text
 POST   /worlds/{slug}/play
 GET    /admin/worlds/{slug}
-GET    /admin/worlds/{slug}/turns
-GET    /admin/worlds/{slug}/turns/{id}
+GET    /admin/worlds/{slug}/changesets
+GET    /admin/worlds/{slug}/changesets/{id}
 GET    /admin/worlds/{slug}/site
 GET    /admin/worlds/{slug}/journal
 POST   /admin/worlds/{slug}/journal
@@ -220,6 +220,10 @@ GET    /worlds/{slug}/budget
 
 Changes:
 
+- `/admin/worlds/{slug}/turns` becomes `/admin/worlds/{slug}/changesets`, and
+  `/turns/{id}` becomes `/changesets/{id}`. The nav tab, page id and path
+  helper move with them: `PageTurns` and `page=turns` become `PageChangesets`
+  and `page=changesets`.
 - `/w/` becomes `/worlds/`.
 - `/admin/w/` becomes `/admin/worlds/`.
 - `/j/{key}` becomes `/journal/{key}`.
@@ -241,8 +245,8 @@ What stays:
 Call sites:
 
 - `cmd/serve/handlers/app_routes.go`: the route tree, `playNotFound`,
-  `BoardURL`, the redirects.
-- `cmd/serve/handlers/admin.go`: the world base and board path helpers.
+  `WorldURL`, the redirects.
+- `cmd/serve/handlers/admin.go`: the world base and world path helpers.
 - `web/pages/app.templ`: `WorldPlayPath`.
 - `lib/webmaster/mutate.go`: the prompt says "such as /w/NAME/" and "posts,
   x/state/KEY, j/KEY".
@@ -265,7 +269,7 @@ change is involved, `go tool sqlc generate` and `go test ./...`.
 | `ListSiteState`, `GetSiteState`, `UpsertSiteState`, `DeleteSiteState` | `ListSharedState`, `GetSharedState`, `UpsertSharedState`, `DeleteSharedState` | queries, sqlc, call sites |
 | sqlc `SiteState`, `UpsertSiteStateParams` | `SharedState`, `UpsertSharedStateParams` | generated, call sites |
 | `Site.State` field, `siteWithState` | `Site.Shared`, `siteWithShared` | `lib/webmaster/site.go`, `mutate.go`, `handlers.go:273`, call sites |
-| `AppWorld.Board`, `AdminView.Board` | `BoardURL` | `web/pages/app_view.go`, `web/pages/admin.templ`, handlers |
+| `AppWorld.Board`, `AdminView.Board` | `WorldURL` | `web/pages/app_view.go`, `web/pages/admin.templ`, handlers |
 | `ResetBoard` | `ResetWorld` | `cmd/serve/handlers/reset.go`, routes, tests |
 | reset logs "Board reset", "Failed to reset the board", "board reset to the original version" | "World reset", "Failed to reset the world", "world reset to the original version" | `reset.go:93,108` |
 | reset confirm "reset the board", "feed row", "mutation history" | "reset the world", "journal row", "changeset history" | `web/pages/admin.templ:16,450` |
@@ -281,8 +285,9 @@ The logs say "Changeset round started/finished", "Changeset finished" and
 
 The engine is renamed too: `Mutator` -> `ChangesetRunner`, `mutate.go` ->
 `changeset.go`, `mutate` -> `runChangeset`, `mutateBatch` ->
-`changesetBatch`, `AdminMutate` -> `AdminChangeset`, and the admin route
-`/mutate` -> `/changeset`.
+`changesetBatch`, `AdminMutate` -> `AdminChangeset` -> `SendInstruction`, and
+the admin route `/mutate` -> `/changeset`. `AdminChangeset` keeps that name
+for the detail page at `/changesets/{id}`, so it no longer sends anything.
 
 `site_state` rename needs a world migration:
 
@@ -322,8 +327,8 @@ Call sites that move together: `lib/webmaster/site.go:192` (render),
 - `AGENTS.md` first line: "a world builder whose webmaster rewrites the page as
   people post", not "a message board whose site is rewritten".
 - `AGENTS.md`: remove `inject`. No such handler exists.
-- `summarize.go`: "a world builder that starts as a small anonymous message
-  board".
+- `summarize.go`: "a world builder that starts as a plain page with a post
+  form".
 - The squash removes `000002`, so its stale cookie-id comment goes with it.
   In `000001`, fix the turn-kind comment (it lists `clear` and omits
   `journal`, `state`, `alert`, `reply`) and make the Down section drop every
@@ -344,14 +349,15 @@ explained.
 - Reply author: **Naps**.
 - Summary prompt: "the memory of Naps, the webmaster of beaverdream."
 - Seed lede: name Naps and the webmaster role. The first reply signs Naps.
-- Admin: Naps where a person is named, "webmaster turn" for the category.
+- Admin: Naps where a person is named, "webmaster turn" for the category, and
+  the instruction box labelled **talk to Naps**.
 
 Storage:
 
 - `TurnChangeset = "changeset"` and `turns.kind = 'changeset'` name the
   category. The turn is still a changeset turn.
 - New replies store `author = 'Naps'`.
-- Old replies store `'webmaster'`. The board knows a reply by `kind = 'reply'`,
+- Old replies store `'webmaster'`. The page knows a reply by `kind = 'reply'`,
   so it can show the current name without a data migration.
 - The `.post-webmaster` class stays. It is a category, not a label.
 
@@ -381,8 +387,8 @@ buys nothing and costs prompt behavior.
    sites. In the same pass, `turns.kind` `webmaster` -> `changeset`,
    `TurnWebmaster` -> `TurnChangeset`, and `ListWebmasterTurns` ->
    `ListChangesets`.
-5. Go-only sweep: `BoardURL`, `ResetWorld`, `HealSite`, `worldPlay`, `origin`,
-   `siteWithShared`.
+5. Go-only sweep: `WorldURL`, `worldPath`, `ResetWorld`, `HealSite`,
+   `worldPlay`, `origin`, `siteWithShared`.
 6. `data-author-id`: emit both attributes, update the prompt, drop the old
    attribute later.
 7. Admin `feed` to `key`, then the docs and `AGENTS.md`.
@@ -411,6 +417,6 @@ findings folded in above:
 - Reset and heal log and confirm wording moves with the handler names.
 
 The reviewer agreed with the seed targeting, the migration handling, the
-phrase-test replacement, `BoardURL`, `worldPlay`, the gate copy and `HealSite`.
+phrase-test replacement, `WorldURL`, `worldPlay`, the gate copy and `HealSite`.
 The pre-production migration squash and the URL path expansion came after that
 review.

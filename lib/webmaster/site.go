@@ -48,17 +48,17 @@ type Site struct {
 	ChangesSinceHeal int
 	// WorldID is the world's immutable registry id. Code-owned browser
 	// storage is keyed by it, so a reused slug cannot load a deleted world's
-	// saves or drafts. Empty keeps the root keys used by tests and a board
+	// saves or drafts. Empty keeps the root keys used by tests and a page
 	// served without a world.
 	WorldID string
 	// WorldSlug is the world's address name. It is shown to page scripts but
 	// never used as a storage key.
 	WorldSlug string
-	// BasePath is where the board is mounted, without a trailing slash, for
+	// BasePath is where the world is mounted, without a trailing slash, for
 	// example "/worlds/heroes". Empty mounts it at the root.
 	BasePath string
 	// AccountURL is the app's account page. Empty uses "/account". The app
-	// owns sign-in, so the board only links to it.
+	// owns sign-in, so the page only links to it.
 	AccountURL string
 	// Datastar is the script path the page loads. Empty uses DatastarPath.
 	Datastar string
@@ -83,7 +83,7 @@ func (s Site) baseURL() string {
 	return base
 }
 
-// endpoint joins the world's mount path to one code-owned board route.
+// endpoint joins the world's mount path to one code-owned route.
 func (s Site) endpoint(path string) string {
 	return s.baseURL() + path
 }
@@ -114,10 +114,10 @@ type HoldingTotal struct {
 	Holders int64
 }
 
-// Post is one message on the board.
+// Post is one message in the room.
 type Post struct {
 	ID int64
-	// Author is the display name shown on the board.
+	// Author is the display name shown on the page.
 	Author string
 	// AuthorID is the stable identity id the page scripts see as
 	// data-author-id. It stays distinct when two people share a display
@@ -168,7 +168,7 @@ var postRefPattern = regexp.MustCompile(`&gt;&gt;(\d+)`)
 
 // RenderPosts turns stored posts into the markup that replaces
 // PostsPlaceholder. Everything is escaped: post bodies are untrusted input.
-// The small board conventions survive escaping: lines that start with > are
+// The small post conventions survive escaping: lines that start with > are
 // greentext, and >>12 links to another post.
 func RenderPosts(posts []Post) string {
 	if len(posts) == 0 {
@@ -625,7 +625,7 @@ func SiteDoc(site Site, posts []Post) string {
 	var b strings.Builder
 	// data-name is code-owned so the model's JavaScript can tell who is
 	// looking without reading the HttpOnly cookie. The world fields are for
-	// scripts that need to build a board URL; the runtime already uses them.
+	// scripts that need to build a world URL; the runtime already uses them.
 	fmt.Fprintf(
 		&b,
 		`<!doctype html><html lang="en" data-version="%d" data-post="%d" data-name="%s" `+

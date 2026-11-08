@@ -97,7 +97,7 @@ type editor struct {
 	// loaded names the skills this turn already returned. Their bodies stay
 	// in the conversation, so a second load only points back at them.
 	loaded map[string]bool
-	// say posts a message on the board while the turn runs. Nil means
+	// say posts a message in the room while the turn runs. Nil means
 	// nobody listens, and say only reports ok.
 	say func(text string) error
 	// spoke is set once say posted, because a turn says one thing up front
@@ -289,7 +289,7 @@ func (e *editor) apply(name, arguments string) string {
 			}
 		}
 		e.spoke = true
-		return "ok: posted on the board"
+		return "ok: posted"
 
 	case "done":
 		var in struct {

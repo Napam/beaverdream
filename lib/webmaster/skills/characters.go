@@ -500,11 +500,11 @@ function characterKit(THREE) {
 </script>
 
 DESIGN FIRST: before any code, decide who each character is in this
-board's world and what makes them recognizable at a glance: a silhouette,
+world and what makes them recognizable at a glance: a silhouette,
 one or two signature details, colors that fit. Superheroes look like
 superheroes (a costume, a mask, an emblem, a cape or none), animals look
 like those animals (ears, snout, tail, the right build), robots look built.
-The defaults are a starting point, not a style. Two boards should never get
+The defaults are a starting point, not a style. Two worlds should never get
 the same figure, and a good character is fun to look at.
 
 - Setup: const kit = characterKit(THREE). One rig per character:
@@ -541,7 +541,7 @@ the same figure, and a good character is fun to look at.
   over the eyes on r.joints.head.
 - Style follows the page: toon with outlines is the default. Flat with
   outline: false reads as low-poly, smooth as soft. Use the same style for
-  every character on a board, and add your own meshes in that style.
+  every character in a world, and add your own meshes in that style.
 - Variety: kit.look(seed, { palette, extras }) gives each visitor or entity
   its own colors and extras from your lists; same seed, same look on every
   screen. Pick the palette and extras to fit the theme. Several kinds of

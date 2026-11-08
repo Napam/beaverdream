@@ -251,7 +251,7 @@ const steps = {
     await reload
     await settle()
   },
-  // A failed read leaves the board alone.
+  // A failed read leaves the page alone.
   failedRead: async () => {
     start()
     await settle()
@@ -335,7 +335,7 @@ const steps = {
     results.push(movesReads())
   },
   // A load read that failed leaves the feed unloaded. A resync reads again
-  // and draws the board.
+  // and draws the page.
   failedPreloadResync: async () => {
     start()
     await settle()
@@ -441,7 +441,7 @@ const steps = {
   },
   // newMatch sends the next number. Its answer opens the new match, so the
   // feed reads the new one whole instead of folding the row onto the old
-  // board.
+  // feed.
   newMatchAppend: async () => {
     start()
     await settle()
@@ -679,15 +679,15 @@ func TestJournalRuntimeHoldsRowsDuringAReload(t *testing.T) {
 	}
 }
 
-// A failed read leaves the board as it was drawn.
-func TestJournalRuntimeKeepsTheBoardOnAFailedRead(t *testing.T) {
+// A failed read leaves the page as it was drawn.
+func TestJournalRuntimeKeepsThePageOnAFailedRead(t *testing.T) {
 	got := runRuntime(t, "failedRead")
 
 	if !sameIDs(got.IDs, []int64{1, 2}) {
 		t.Fatalf("rows = %v, want [1 2] kept through the failed read", got.IDs)
 	}
 	if len(got.LastDraw) != 2 {
-		t.Fatalf("last draw = %v, want the board from before the failure", got.LastDraw)
+		t.Fatalf("last draw = %v, want the page from before the failure", got.LastDraw)
 	}
 	if got.Held {
 		t.Error("a failed read left the feed holding, so pushed rows would pile up")
@@ -818,7 +818,7 @@ func TestJournalRuntimeKeepsAnAppendThroughAReload(t *testing.T) {
 }
 
 // newMatch sends the next match number. The stream's echo opens that match,
-// so the feed reloads instead of folding the new row onto the old board.
+// so the feed reloads instead of folding the new row onto the old feed.
 func TestJournalRuntimeOpensTheNextMatch(t *testing.T) {
 	got := runRuntime(t, "newMatchAppend")
 
@@ -1042,7 +1042,7 @@ func TestJournalRuntimeResyncRecoversAFailedLoadRead(t *testing.T) {
 }
 
 // A first read that failed is tried once more after a second, so a page that
-// has written nothing yet still loads on a quiet board.
+// has written nothing yet still loads on a quiet page.
 func TestJournalRuntimeRetriesAFailedFirstReadOnce(t *testing.T) {
 	got := runRuntime(t, "failedFirstReadRetry")
 

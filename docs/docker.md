@@ -86,5 +86,8 @@ backup; use `VACUUM INTO` or the SQLite backup API.
       -v "$PWD/data:/app/data" \
       beaverdream:latest
 
-For a public deployment behind a proxy, set `APP_URL` and `PLAY_URL` to the two
-registrable domains. Do not expose the play port as a path on the app domain.
+For a public deployment behind a proxy, put the app and the play page on
+subdomains of one registrable domain, and set `APP_URL` and `PLAY_URL` to those
+`https://` origins. A scheme mismatch between `APP_URL` and `PLAY_URL` is
+refused; two plain `http` URLs with no cert run as LAN mode. Do not expose the
+play port as a path on the app domain.

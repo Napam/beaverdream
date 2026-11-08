@@ -214,8 +214,49 @@ func (a *App) renderLogin(w http.ResponseWriter, r *http.Request, next, failed s
 	_ = pages.AppLogin(next, failed, a.loginURL(r), a.cfg.Config.DatastarSrc).Render(r.Context(), w)
 }
 
+// duplicateAppCookiesNotice is the login page's refusal when the guarded routes
+// see more than one app cookie. The browser cannot choose which one the server
+// reads, so nothing may be processed until the visitor clears them.
+const duplicateAppCookiesNotice = "this browser has more than one sign-in cookie " +
+	"for this site. clear this site's cookies and try again."
+
+// signedInPage answers a sign-in or invite request from a browser whose app
+// cookie already authenticates. Those routes cannot do anything useful for a
+// signed-in visitor, and the invite POST would otherwise trade one account for
+// another without proof. Only the cookie counts: a bearer header cannot be set
+// by a form, and it must not decide what a browser sees.
+//
+// More than one app cookie is a shadow, not a signed-out browser: proceeding
+// would let the write replace the real session. Zero cookies, or one that does
+// not authenticate, still proceeds so an expired or revoked cookie is not a
+// lockout.
+func (a *App) signedInPage(w http.ResponseWriter, r *http.Request) bool {
+	if appCookieCount(r, a.appCookieName()) > 1 {
+		a.logger.Warn("Sign-in route refused for conflicting cookies",
+			slog.String("route", logRoute(r)),
+		)
+		a.renderLogin(w, r, "/", duplicateAppCookiesNotice)
+		return true
+	}
+	p, err := a.authenticateAppCookie(r)
+	if err != nil {
+		return false
+	}
+	a.logger.Warn("Sign-in route refused for a signed-in browser",
+		slog.String("route", logRoute(r)),
+		slog.String("identity_id", p.IdentityID),
+	)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = pages.AppSignedIn(p.DisplayName, p.CSRFToken).Render(r.Context(), w)
+	return true
+}
+
 // Login verifies a password and sets an app session.
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
+	if a.signedInPage(w, r) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
@@ -235,7 +276,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not sign in", http.StatusInternalServerError)
 		return
 	}
-	a.setAppSession(w, r, token, a.cfg.Config.AppSessionTTL)
+	a.setAppSession(w, token, a.cfg.Config.AppSessionTTL)
 	next = safeNext(next)
 	a.logger.Info("Identity signed in", slog.String("identity_id", identity.ID))
 	http.Redirect(w, r, next, http.StatusSeeOther)
@@ -254,12 +295,15 @@ func (a *App) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 		a.cancelSessionStreams(p.SessionHash)
 	}
-	clearSessionCookie(w, r, AppCookieName)
+	a.clearSessionCookie(w, a.appCookieName())
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 // InvitePage shows the redemption form. A GET never spends a use.
 func (a *App) InvitePage(w http.ResponseWriter, r *http.Request) {
+	if a.signedInPage(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = pages.AppInvite("", "", "").Render(r.Context(), w)
@@ -269,6 +313,9 @@ func (a *App) InvitePage(w http.ResponseWriter, r *http.Request) {
 // answers the same status and body; a bad form value says what is wrong, so a
 // short password does not read as a dead invite.
 func (a *App) RedeemInvite(w http.ResponseWriter, r *http.Request) {
+	if a.signedInPage(w, r) {
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
@@ -312,7 +359,7 @@ func (a *App) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	a.setAppSession(w, r, token, a.cfg.Config.AppSessionTTL)
+	a.setAppSession(w, token, a.cfg.Config.AppSessionTTL)
 	a.logger.Info("Invite redeemed", slog.String("identity_id", identity.ID))
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -394,7 +441,7 @@ func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	// Duplicates first: after the session fix authenticatePlay cannot tell them
 	// from no session, and "no session" would let the exchange through.
-	if playCookieCount(r) > 1 {
+	if a.playCookieCount(r) > 1 {
 		refuse("")
 		return
 	}
@@ -410,7 +457,7 @@ func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 		refuse(handoffRefusal)
 		return
 	}
-	a.setPlaySession(w, r, token, a.cfg.Config.PlaySessionTTL)
+	a.setPlaySession(w, token, a.cfg.Config.PlaySessionTTL)
 	world, err := a.reg.GetWorld(r.Context(), worldID)
 	if err != nil {
 		http.NotFound(w, r)
@@ -423,11 +470,12 @@ func (a *App) ExchangeHandoff(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/worlds/"+url.PathEscape(world.Slug)+"/", http.StatusSeeOther)
 }
 
-// playCookieCount counts every cookie of the play name, duplicates included.
-func playCookieCount(r *http.Request) int {
+// playCookieCount counts every cookie of the mode's play name, duplicates
+// included.
+func (a *App) playCookieCount(r *http.Request) int {
 	count := 0
 	for _, cookie := range r.Cookies() {
-		if cookie.Name == PlayCookieName {
+		if cookie.Name == a.playCookieName() {
 			count++
 		}
 	}
@@ -499,8 +547,8 @@ func (a *App) LogoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.cancelIdentityStreams(p.IdentityID)
-	clearSessionCookie(w, r, AppCookieName)
-	clearSessionCookie(w, r, PlayCookieName)
+	a.clearSessionCookie(w, a.appCookieName())
+	a.clearSessionCookie(w, a.playCookieName())
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 

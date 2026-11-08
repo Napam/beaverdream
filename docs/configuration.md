@@ -43,20 +43,25 @@ migrated automatically on first open.
 Cookies ignore ports. On `localhost` the app and play listeners share a host,
 so a page script can send a request to the app port with the app cookie
 attached. The app's CSRF token and its refusal to be framed are what keep that
-from changing state. Strong isolation needs two different sites, which means
-two registrable domains. Test on two real domains before a public deployment.
+from changing state. Strong isolation needs two hosts, which for a public
+deployment means subdomains of one registrable domain over HTTPS, such as
+`example.com` and `play.example.com`. Test that shape with both URLs set before
+you go public.
 
 ## Public URLs
 
 - `APP_URL` (default empty): public origin of the app, such as
-  `https://app.example.com`. Trailing slashes are trimmed.
+  `https://example.com`. Trailing slashes are trimmed.
 - `PLAY_URL` (default empty): public origin of the worlds, such as
   `https://play.example.com`. Trailing slashes are trimmed.
 
 Leave them empty on a LAN: the server builds the play link from the request
-host and `PLAY_PORT`. Set both behind a proxy or when the app and play ports
-are on separate domains. Public deployments must use separate registrable
-domains; ports alone are not an origin boundary.
+host and `PLAY_PORT`. Set both to `https://` origins behind a proxy, or set
+`TLS_CERT_FILE` and `TLS_KEY_FILE`. Either turns on secure cookie mode: both
+cookies are named `__Host-beaverdream_app` and `__Host-beaverdream_play`, and
+the server reads only the prefixed name. One `https` URL and one `http` or
+empty is refused at startup, so set both. A LAN keeps the plain cookie names
+and no `Secure`.
 
 ## Storage
 

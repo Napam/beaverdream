@@ -503,8 +503,11 @@ prefer simple, readable code over production hardening.
   message whether the code is unknown, expired, used up or revoked. `GET` never
   spends a use. Revoking an invite stops future redemptions only.
 - There is no email, no rate limit and no audit log. Regular application logs
-  only. A public deployment needs separate registrable domains for the app and
-  the play port; ports alone are not an origin boundary.
+  only. A public deployment puts the app and the play page on subdomains of one
+  registrable domain over HTTPS. Secure cookie mode names both cookies
+  `__Host-*`, and the server reads only the prefixed name, so the play page
+  cannot write or shadow the app cookie; LAN, one host over plain HTTP, keeps
+  the plain names and has no such boundary.
 
 ## Frontend
 

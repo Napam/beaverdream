@@ -1,6 +1,7 @@
 package env
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -125,6 +126,24 @@ func loadAPIKey() string {
 
 func trimURL(value string) string {
 	return strings.TrimRight(value, "/")
+}
+
+// CookieMode decides the session-cookie policy once, at startup. Secure mode
+// means the __Host- names and the Secure flag: TLS_CERT_FILE alone is enough,
+// and so is both public URLs on https. One https URL beside a plain or empty
+// one is a misconfiguration, because the two planes would disagree about which
+// cookie name is authoritative. Everything else is LAN mode.
+func CookieMode(appURL, playURL, tlsCertFile string) (bool, error) {
+	appTLS := strings.HasPrefix(strings.ToLower(appURL), "https://")
+	playTLS := strings.HasPrefix(strings.ToLower(playURL), "https://")
+	if appTLS != playTLS {
+		return false, fmt.Errorf(
+			"APP_URL and PLAY_URL must both be https or both be plain http: APP_URL=%q PLAY_URL=%q",
+			appURL,
+			playURL,
+		)
+	}
+	return tlsCertFile != "" || appTLS, nil
 }
 
 func GetEnv(name string, fallback string) string {

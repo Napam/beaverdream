@@ -1,6 +1,7 @@
 package env
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,50 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if got.ModelConcurrency != 3 || got.WorldIdleTimeout != 0 {
 		t.Errorf("concurrency/idle = %d %v", got.ModelConcurrency, got.WorldIdleTimeout)
+	}
+}
+
+func TestCookieMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		appURL   string
+		playURL  string
+		certFile string
+		secure   bool
+		error    bool
+	}{
+		{"lan defaults", "", "", "", false, false},
+		{"plain http", "http://a.local:6930", "http://b.local:6932", "", false, false},
+		{"both https", "https://a.example.com", "https://b.example.com", "", true, false},
+		{"cert alone", "", "", "/tmp/cert.pem", true, false},
+		{
+			"cert with both https", "https://a.example.com", "https://b.example.com",
+			"/tmp/cert.pem", true, false,
+		},
+		{"app https only", "https://a.example.com", "", "", false, true},
+		{"play https only", "", "https://b.example.com", "", false, true},
+		{"mixed schemes", "https://a.example.com", "http://b.example.com", "", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			secure, err := CookieMode(tc.appURL, tc.playURL, tc.certFile)
+			if tc.error {
+				if err == nil {
+					t.Fatalf("mode = %v, want an error", secure)
+				}
+				if !strings.Contains(err.Error(), "APP_URL") ||
+					!strings.Contains(err.Error(), "PLAY_URL") {
+					t.Fatalf("error does not name both settings: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("mode: %v", err)
+			}
+			if secure != tc.secure {
+				t.Fatalf("secure = %v, want %v", secure, tc.secure)
+			}
+		})
 	}
 }
 

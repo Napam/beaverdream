@@ -43,6 +43,18 @@ func run(logger *slog.Logger) error {
 	if (env.Vars.TLSCertFile == "") != (env.Vars.TLSKeyFile == "") {
 		return fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
 	}
+	secureCookies, err := env.CookieMode(
+		env.Vars.AppURL,
+		env.Vars.PlayURL,
+		env.Vars.TLSCertFile,
+	)
+	if err != nil {
+		return err
+	}
+	cookieMode := "lan"
+	if secureCookies {
+		cookieMode = "secure"
+	}
 
 	ctx := context.Background()
 	reg, err := registry.Open(
@@ -116,6 +128,7 @@ func run(logger *slog.Logger) error {
 		AppURL:         env.Vars.AppURL,
 		PlayPort:       env.Vars.PlayPort,
 		PlayURL:        env.Vars.PlayURL,
+		SecureCookies:  secureCookies,
 		AppSessionTTL:  env.Vars.AppSessionTTL,
 		PlaySessionTTL: env.Vars.PlaySessionTTL,
 		DatastarSrc:    beaverdream.StaticRootPath("static/datastar.js"),
@@ -146,6 +159,7 @@ func run(logger *slog.Logger) error {
 		slog.Bool("openai_api_key_set", env.Vars.OpenAIAPIKey != ""),
 		slog.String("openai_reasoning_effort", env.Vars.OpenAIReasoningEffort),
 		slog.Bool("tls", env.Vars.TLSCertFile != "" && env.Vars.TLSKeyFile != ""),
+		slog.String("cookie_mode", cookieMode),
 	}
 	if env.Vars.AppURL != "" {
 		logAttrs = append(logAttrs, slog.String("app_url", env.Vars.AppURL))

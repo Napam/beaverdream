@@ -66,8 +66,8 @@ isolate clients from each other, which blocks this. Use the main network.
 
 Don't set up a port forward from the internet to these ports for a casual
 session. The worlds run model-written scripts for everyone who opens them, and
-the app holds accounts and invites. A public deployment needs separate
-registrable domains for the app and the worlds; see
+the app holds accounts and invites. A public deployment puts the app and the
+play page on subdomains of one registrable domain over HTTPS; see
 [worlds.md](worlds.md#public-deployments).
 
 ## A world is hostile by design

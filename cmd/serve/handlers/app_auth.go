@@ -9,22 +9,47 @@ import (
 
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/web/pages"
+	"github.com/go-chi/chi/v5"
 )
 
 // The two cookies never share a name. Cookies ignore ports, so a distinct name
-// is what keeps the handoff from overwriting the app session on localhost.
+// is what keeps the handoff from overwriting the app session on localhost. In
+// secure mode both names carry the __Host- prefix, which a host-only Secure
+// cookie needs; the play host can then never write or shadow the app cookie.
 const (
 	AppCookieName  = "beaverdream_app"
 	PlayCookieName = "beaverdream_play"
+	// SecureAppCookieName and SecurePlayCookieName are the names used when
+	// Config.SecureCookies is set.
+	SecureAppCookieName  = "__Host-beaverdream_app"
+	SecurePlayCookieName = "__Host-beaverdream_play"
 )
 
+// appCookieName is the one app cookie name this process reads and writes.
+func (a *App) appCookieName() string {
+	if a.cfg.Config.SecureCookies {
+		return SecureAppCookieName
+	}
+	return AppCookieName
+}
+
+// playCookieName is the one play cookie name this process reads and writes.
+func (a *App) playCookieName() string {
+	if a.cfg.Config.SecureCookies {
+		return SecurePlayCookieName
+	}
+	return PlayCookieName
+}
+
 // securityHeaders are on every app response. The app may be framed by nobody:
-// the world is another origin and must not be able to trick an admin click.
+// the world is another origin and must not be able to trick an admin click. It
+// also opens no popups, so nothing may keep a window-opener reference to it.
 func (a *App) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -59,6 +84,20 @@ func sessionCookie(r *http.Request, name string) string {
 	return value
 }
 
+// appCookieCount counts the request's cookies of one name. This process writes
+// at most one, at Path=/, so more than one can only be a shadow from a deeper
+// path. Callers that must tell "no cookie" from "a shadow" use this;
+// sessionCookie itself keeps failing closed to anonymous.
+func appCookieCount(r *http.Request, name string) int {
+	count := 0
+	for _, cookie := range r.Cookies() {
+		if cookie.Name == name {
+			count++
+		}
+	}
+	return count
+}
+
 // authenticateApp reads a bearer token or the app cookie. A bearer header is
 // authoritative: a bad token never falls back to the cookie.
 func (a *App) authenticateApp(r *http.Request) (*principal, error) {
@@ -79,7 +118,14 @@ func (a *App) authenticateApp(r *http.Request) (*principal, error) {
 			CSRFOK:       true,
 		}, nil
 	}
-	token := sessionCookie(r, AppCookieName)
+	return a.authenticateAppCookie(r)
+}
+
+// authenticateAppCookie reads only the app cookie and never the bearer header.
+// The sign-in and invite routes use it: a browser form cannot attach an
+// Authorization header, so a token there must not change the page it gets.
+func (a *App) authenticateAppCookie(r *http.Request) (*principal, error) {
+	token := sessionCookie(r, a.appCookieName())
 	if token == "" {
 		return nil, registry.ErrSessionInvalid
 	}
@@ -100,7 +146,7 @@ func (a *App) authenticateApp(r *http.Request) (*principal, error) {
 }
 
 func (a *App) authenticatePlay(r *http.Request) (*principal, error) {
-	token := sessionCookie(r, PlayCookieName)
+	token := sessionCookie(r, a.playCookieName())
 	if token == "" {
 		return nil, registry.ErrSessionInvalid
 	}
@@ -235,25 +281,25 @@ func (a *App) loginURL(r *http.Request) string {
 // setAppSession writes the app cookie. A zero TTL is a session cookie.
 func (a *App) setAppSession(
 	w http.ResponseWriter,
-	r *http.Request,
 	token string,
 	ttl time.Duration,
 ) {
-	setSessionCookie(w, r, AppCookieName, token, ttl)
+	a.setSessionCookie(w, a.appCookieName(), token, ttl)
 }
 
 func (a *App) setPlaySession(
 	w http.ResponseWriter,
-	r *http.Request,
 	token string,
 	ttl time.Duration,
 ) {
-	setSessionCookie(w, r, PlayCookieName, token, ttl)
+	a.setSessionCookie(w, a.playCookieName(), token, ttl)
 }
 
-func setSessionCookie(
+// setSessionCookie writes one host-only cookie. Secure comes from the startup
+// mode, never from the request, so a proxy that terminates TLS cannot change
+// which name or flag this process writes.
+func (a *App) setSessionCookie(
 	w http.ResponseWriter,
-	r *http.Request,
 	name, token string,
 	ttl time.Duration,
 ) {
@@ -263,7 +309,7 @@ func setSessionCookie(
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   a.cfg.Config.SecureCookies,
 	}
 	if ttl > 0 {
 		cookie.Expires = time.Now().Add(ttl)
@@ -272,7 +318,10 @@ func setSessionCookie(
 	http.SetCookie(w, cookie)
 }
 
-func clearSessionCookie(w http.ResponseWriter, r *http.Request, name string) {
+// clearSessionCookie expires the mode's cookie name. The plain names of the
+// other plane are never cleared: secure mode never reads them, and a
+// Domain-scoped cookie cannot be cleared host-only anyway.
+func (a *App) clearSessionCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
@@ -280,17 +329,35 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request, name string) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   a.cfg.Config.SecureCookies,
 	})
 }
 
+// logRoute is the log-safe name of the matched route. chi's pattern keeps its
+// placeholders, so a route parameter such as an invite code never reaches the
+// log. A request that matched no route gets a fixed label, never its path.
+func logRoute(r *http.Request) string {
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		if pattern := rctx.RoutePattern(); pattern != "" {
+			return pattern
+		}
+	}
+	return "unmatched"
+}
+
 // requireCSRF refuses a cookie-authenticated app write without a valid token.
-// A bearer request already skipped the check in requireApp.
+// A bearer request already skipped the check in requireApp. The refusal logs
+// the route and identity only: never the token, cookie or form.
 func (a *App) requireCSRF(w http.ResponseWriter, r *http.Request) bool {
 	p := principalFrom(r)
 	if p != nil && (p.API || p.CSRFOK) {
 		return true
 	}
+	attrs := []any{slog.String("route", logRoute(r))}
+	if p != nil {
+		attrs = append(attrs, slog.String("identity_id", p.IdentityID))
+	}
+	a.logger.Warn("App write refused for a missing token", attrs...)
 	http.Error(w, "Bad token", http.StatusForbidden)
 	return false
 }

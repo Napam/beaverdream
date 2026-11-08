@@ -222,6 +222,24 @@ func TestAdminJournalSkipsAnOddDeclaredKey(t *testing.T) {
 	}
 }
 
+// The declared side of the holdings list takes the same read gate. A stored
+// schema with a visitor key the admin name rule refuses never reaches a card,
+// even when no holding row exists to carry it.
+func TestAdminHoldingsSkipsAnOddDeclaredKey(t *testing.T) {
+	h, queries := setup(t)
+	declareState(t, queries,
+		`{"coins":{"op":"counter","scope":"visitor"},`+
+			`"evil'key":{"op":"counter","scope":"visitor"}}`)
+
+	body := getAdmin(t, h.AdminJournal, "/admin/journal").Body.String()
+	if !strings.Contains(body, "coins") {
+		t.Fatal("the page does not list the declared visitor counter that follows the name rule")
+	}
+	if strings.Contains(body, "evil") {
+		t.Error("a declared visitor key that fails the name rule reached the page")
+	}
+}
+
 // Holdings come from stored totals too, so they take the same read gate as
 // journal keys.
 func TestAdminHoldingsSkipsAnOddStoredKey(t *testing.T) {

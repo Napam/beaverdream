@@ -147,7 +147,8 @@ func TestHandoffCannotReplaceAnExistingPlayIdentity(t *testing.T) {
 	ctx := context.Background()
 
 	_, code, _ := in.reg.CreateInvite(ctx, in.adminID, registry.InviteParams{MaxUses: 1})
-	in.redeem(t, code, "intruder")
+	intruderIdentity, _, _ := in.redeem(t, code, "intruder")
+	intruderID := intruderIdentity.ID
 	intruder := in.newBrowser(t)
 	intruder.login(in, "intruder", "correct horse battery")
 	intruderCode := mintHandoffCode(t, in, intruder, "heroes")
@@ -168,6 +169,23 @@ func TestHandoffCannotReplaceAnExistingPlayIdentity(t *testing.T) {
 	after := sessionToken(t, victim, in.playURL, handlers.PlayCookieName)
 	if after != before {
 		t.Fatal("cross-identity handoff replaced the play cookie")
+	}
+
+	// The exchange minted a play session for the intruder before it saw the
+	// browser's identity, and the refusal must revoke it rather than leave a
+	// usable session behind.
+	var intruderPlaySessions int
+	err := in.reg.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sessions
+		WHERE identity_id = ? AND scope = 'play' AND revoked_at IS NULL`,
+		intruderID,
+	).Scan(&intruderPlaySessions)
+	if err != nil {
+		t.Fatalf("count the intruder's play sessions: %v", err)
+	}
+	if intruderPlaySessions != 0 {
+		t.Fatalf("the refused handoff left %d active play session(s) for the intruder",
+			intruderPlaySessions)
 	}
 
 	// The browser is still the admin on the play plane.

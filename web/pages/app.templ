@@ -230,6 +230,25 @@ templ gateCard(login string, notice string) {
 	</section>
 }
 
+// AppSignedIn is what a signed-in browser gets on the sign-in and invite
+// routes. Its one action is to sign out; the note covers a cookie the form
+// cannot reach.
+templ AppSignedIn(name string, csrf string) {
+	@authShell("signed in · beaverdream", signedInCard(name, csrf))
+}
+
+templ signedInCard(name string, csrf string) {
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">signed in as { name }</h1>
+		<p class={ appUserMuted + " mt-2" }>this browser already has an account open.</p>
+		<form method="post" action="/logout" class="mt-5">
+			@csrfInput(csrf)
+			<button type="submit" class={ appUserButton + " w-full" }>sign out</button>
+		</form>
+		<p class={ appUserMuted + " mt-4 text-xs" }>when signing out is not enough, clear this site's cookies in your browser and open the link again.</p>
+	</section>
+}
+
 // AppInviteRow is the redemption form. A GET only shows the form. A failed
 // POST keeps what was typed, so a retry does not start over.
 templ AppInvite(err string, username string, displayName string) {

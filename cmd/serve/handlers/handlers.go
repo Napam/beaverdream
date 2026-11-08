@@ -65,6 +65,9 @@ type Config struct {
 	// PlayPort and PlayURL locate the world for the admin panel.
 	PlayPort string
 	PlayURL  string
+	// SecureCookies makes every session cookie Secure and names them with the
+	// __Host- prefix. It is decided once at startup and never from a request.
+	SecureCookies bool
 	// CompactAfterTokens is the estimated whole-prompt size that triggers
 	// compaction. Zero uses webmaster.CompactAfterTokens.
 	CompactAfterTokens int

@@ -73,8 +73,10 @@ already running finishes.
 
 Public play needs care:
 
-- Use two registrable domains, one for the app and one for the worlds. Set
-  `APP_URL` and `PLAY_URL`. Ports on one host are not an origin boundary.
+- For public play, put the app and the play page on subdomains of one
+  registrable domain over HTTPS. Set `APP_URL` and `PLAY_URL` to those origins.
+  Ports on one host are not an origin boundary; that is accepted for LAN-only
+  play.
 - Keep the app behind HTTPS. Page scripts run with the play session and must
   never reach the app origin's HTML.
 - Keep `ADMIN_PASSWORD` set and strong. The bootstrap password is the way back

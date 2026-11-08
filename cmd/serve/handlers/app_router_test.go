@@ -241,7 +241,13 @@ func TestAppGateScopesAndFrameHeaders(t *testing.T) {
 		if got := resp.Header.Get("X-Frame-Options"); got != "DENY" {
 			t.Errorf("%s: X-Frame-Options = %q, want DENY", target, got)
 		}
+		if got := resp.Header.Get("Cross-Origin-Opener-Policy"); got != "same-origin" {
+			t.Errorf("%s: Cross-Origin-Opener-Policy = %q, want same-origin", target, got)
+		}
 		_ = resp.Body.Close()
+	}
+	if got := page.Header.Get("Cross-Origin-Opener-Policy"); got != "" {
+		t.Errorf("the play plane has Cross-Origin-Opener-Policy = %q, want none", got)
 	}
 }
 
@@ -1606,7 +1612,10 @@ func TestModelConcurrencyIsCappedAcrossWorlds(t *testing.T) {
 	}
 }
 
-func TestRedeemingAnInviteSignsTheBrowserOutFirst(t *testing.T) {
+// A browser that is already signed in cannot redeem an invite: the guard shows
+// the sign-out page, the old session stays, and the code is still spendable by
+// a browser with no session.
+func TestRedeemingAnInviteWhileSignedInIsRefused(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
@@ -1625,19 +1634,34 @@ func TestRedeemingAnInviteSignsTheBrowserOutFirst(t *testing.T) {
 	resp := admin.post(in.appURLFor("/invite/"+code), url.Values{
 		"username": {"newperson"}, "password": {"correct horse battery"},
 	})
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("redeem: status = %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusSeeOther {
+		t.Fatal("a signed-in browser redeemed an invite")
 	}
-	_ = resp.Body.Close()
+	if page := body(t, resp); !strings.Contains(page, `action="/logout"`) {
+		t.Fatal("the signed-in invite POST did not get the sign-out page")
+	}
 	if _, _, err := in.reg.Authenticate(
 		context.Background(),
 		oldToken,
 		registry.ScopeApp,
 	); err != nil {
-		t.Error("redemption revoked the old session without CSRF")
+		t.Error("the guard revoked the existing session")
 	}
-	// The new session is the invited identity, and it can use the app.
-	resp = admin.get(in.appURLFor("/"))
+	invites, _ := in.reg.ListInvites(context.Background(), in.adminID)
+	if len(invites) != 1 || invites[0].Uses != 0 {
+		t.Fatalf("the refused redemption spent a use: %+v", invites)
+	}
+
+	// A fresh browser has no app cookie, so the normal flow is untouched.
+	fresh := in.newBrowser(t)
+	resp = fresh.post(in.appURLFor("/invite/"+code), url.Values{
+		"username": {"newperson"}, "password": {"correct horse battery"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("signed-out redeem: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	resp = fresh.get(in.appURLFor("/"))
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body(t, resp), "newperson") {
 		t.Error("the redeemed browser is not signed in as the new identity")
 	}

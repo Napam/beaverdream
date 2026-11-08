@@ -18,8 +18,30 @@ creates worlds and can delete them. Each world is its own SQLite file, like a
 Minecraft save.
 
 Model-written scripts run in every player's browser, so keep it on a network
-you trust. A public deployment needs separate registrable domains for the app
-and the worlds.
+you trust. A public deployment needs HTTPS, and the setup below.
+
+## Run it in public
+
+Put the app and the play page on subdomains of one registrable domain, over
+HTTPS: `example.com` for the app and `play.example.com` for the worlds. Set
+`APP_URL` and `PLAY_URL` to those `https://` origins. That, or serving TLS from
+the binary with `TLS_CERT_FILE` and `TLS_KEY_FILE`, turns on secure cookies.
+
+In secure cookie mode both cookies are named `__Host-beaverdream_app` and
+`__Host-beaverdream_play`. The prefix forces `Secure`, `Path=/` and no
+`Domain`, so a page on the play host cannot write or shadow the app cookie.
+The server reads only the prefixed name. A page on the play host can still set
+a plain `Domain=example.com` cookie; the app ignores it.
+
+If exactly one URL is `https` and the other is `http` or empty, the server
+refuses to start. Leave both unset, with no TLS files, to keep the LAN
+behavior: plain cookie names, no `Secure`, one host over plain HTTP.
+
+`__Host-` isolates across hosts, not across two ports on one host. A single
+host on two ports gives no isolation between the planes.
+
+Set HSTS at the TLS terminator, not in the app. On a shared registrable domain,
+do not use `includeSubDomains` or `preload`.
 
 ## Play with friends on your LAN
 

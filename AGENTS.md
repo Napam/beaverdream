@@ -383,7 +383,9 @@ prefer simple, readable code over production hardening.
 - Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
   username is `admin`. `/admin` is the world list, `/admin/accounts` and
   `/admin/invites` hold the accounts and invites, and
-  `/admin/worlds/{slug}/...` one world's changesets, site and data.
+  `/admin/worlds/{slug}/...` one world's changesets, site and data. A world
+  can be renamed from its site tab; the id and file stay, and the loaded
+  runtime's row is swapped in place, so queued posts and open streams survive.
   The play port serves no admin route. There is no `ADMIN_PORT`, no `ADMIN_URL`
   redirect, and no separate admin origin. The app refuses framing
   (`frame-ancestors 'none'` or `X-Frame-Options: DENY`) and sends

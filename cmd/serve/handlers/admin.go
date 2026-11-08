@@ -55,12 +55,12 @@ func (h *Handlers) adminHeaders(w http.ResponseWriter) {
 
 // adminBase is the world's admin mount path.
 func (h *Handlers) adminBase() string {
-	return "/admin/worlds/" + h.world.Slug
+	return "/admin/worlds/" + h.worldInfo().Slug
 }
 
 // basePath is the world's play mount path, without a trailing slash.
 func (h *Handlers) basePath() string {
-	return "/worlds/" + h.world.Slug
+	return "/worlds/" + h.worldInfo().Slug
 }
 
 // worldPath is the world page with the trailing slash relative model links
@@ -110,10 +110,11 @@ func (h *Handlers) servePanel(w http.ResponseWriter, r *http.Request, panel page
 // world for the switcher, so an admin can move between worlds without going
 // back to the instance page.
 func (h *Handlers) fillWorldHeader(r *http.Request, view *pages.AdminView) {
-	if h.world.Slug == "" {
+	current := h.worldInfo()
+	if current.Slug == "" {
 		return
 	}
-	view.World = h.world.Slug
+	view.World = current.Slug
 	worlds, err := h.reg.ListReadyWorlds(r.Context())
 	if err != nil {
 		h.logger.Warn("Failed to list worlds for the admin header", slog.Any("error", err))
@@ -122,12 +123,12 @@ func (h *Handlers) fillWorldHeader(r *http.Request, view *pages.AdminView) {
 	found := false
 	for _, world := range worlds {
 		view.Worlds = append(view.Worlds, pages.WorldChoice{Slug: world.Slug})
-		if world.Slug == h.world.Slug {
+		if world.Slug == current.Slug {
 			found = true
 		}
 	}
 	if !found {
-		view.Worlds = append(view.Worlds, pages.WorldChoice{Slug: h.world.Slug})
+		view.Worlds = append(view.Worlds, pages.WorldChoice{Slug: current.Slug})
 	}
 }
 

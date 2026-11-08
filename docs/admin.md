@@ -16,7 +16,7 @@ The admin lives on the app port, `APP_PORT` (default `6930`), not a separate
 admin port. The play port never serves an admin page. That keeps the model's
 scripts off the origin that holds the app session.
 
-- `/admin`: the world list and the create form.
+- `/admin`: the world list, the create form, and a delete button per world.
 - `/admin/invites`: invite creation and the current invites.
 - `/admin/accounts`: the accounts, with a disable button.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
@@ -24,7 +24,11 @@ scripts off the origin that holds the app session.
   place; tool parameter schemas are shown as JSON.
 - `/admin/worlds/{slug}/...`: one world's changesets, site tools and data page.
   `/admin/worlds/{slug}/changesets`, `/admin/worlds/{slug}/site` and
-  `/admin/worlds/{slug}/journal` are the main ones.
+  `/admin/worlds/{slug}/journal` are the main ones. The site tab holds the
+  current page, its versions, a rename form, and a danger zone with reset and
+  delete for that world. A rename changes the URL only: the id, file, history,
+  state and play sessions stay, but old links stop working, and an open tab
+  keeps the old address until the visitor goes to the new one.
 - The header links back to the back office (`/admin`) and to the world's page
   (`open world ↗`).
   On a world page, the world name in the breadcrumb is a switcher when there

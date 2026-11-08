@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Napam/beaverdream/cmd/serve/handlers"
+	"github.com/Napam/beaverdream/db/world/generated/sqlc"
 	"github.com/Napam/beaverdream/lib/registry"
 	"github.com/Napam/beaverdream/lib/webmaster"
 	"github.com/Napam/beaverdream/lib/webmaster/skills"
@@ -1043,6 +1044,18 @@ func TestDeleteWorldRemovesOnlyThatWorld(t *testing.T) {
 		t.Fatalf("world file missing: %v", err)
 	}
 
+	// The world's own admin panel deletes it too, not only the world list.
+	siteResp := admin.get(in.appURLFor("/admin/worlds/" + world.Slug + "/site"))
+	if siteResp.StatusCode != http.StatusOK {
+		t.Fatalf("site page: status = %d", siteResp.StatusCode)
+	}
+	if html := body(t, siteResp); !strings.Contains(
+		html,
+		`action="/admin/worlds/`+world.Slug+`/delete"`,
+	) {
+		t.Error("the site page has no delete form")
+	}
+
 	resp = admin.post(
 		in.appURLFor("/admin/worlds/"+world.Slug+"/delete"),
 		url.Values{"csrf": {csrf}},
@@ -1077,6 +1090,169 @@ func TestDeleteWorldRemovesOnlyThatWorld(t *testing.T) {
 	_ = resp.Body.Close()
 	if _, err := os.Stat(file); !os.IsNotExist(err) {
 		t.Errorf("a request recreated the deleted world file")
+	}
+}
+
+func TestRenameWorldMovesTheSlugAndKeepsTheFile(t *testing.T) {
+	in := newInstance(t, instanceOptions{budget: registry.Budget{}})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	csrf := admin.csrf(in, "/")
+	resp := admin.post(in.appURLFor("/admin/worlds"), url.Values{
+		"slug": {"oldname"}, "csrf": {csrf},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	world, err := in.reg.GetWorldBySlug(context.Background(), "oldname")
+	if err != nil {
+		t.Fatalf("read created world: %v", err)
+	}
+	file := in.worlds.Path(world.ID)
+
+	// Open the panel under the old slug first, so its runtime is cached and
+	// the rename has to drop it.
+	siteResp := admin.get(in.appURLFor("/admin/worlds/oldname/site"))
+	if siteResp.StatusCode != http.StatusOK {
+		t.Fatalf("site page: status = %d", siteResp.StatusCode)
+	}
+	if html := body(t, siteResp); !strings.Contains(html, `action="/admin/worlds/oldname/rename"`) {
+		t.Fatalf("site page was not rendered under the old slug")
+	}
+
+	resp = admin.post(
+		in.appURLFor("/admin/worlds/oldname/rename"),
+		url.Values{"slug": {"newname"}, "csrf": {csrf}},
+	)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("rename: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	if loc := resp.Header.Get("Location"); loc != "/admin/worlds/newname/site" {
+		t.Errorf("rename redirect = %q", loc)
+	}
+	_ = resp.Body.Close()
+
+	if got, err := in.reg.GetWorld(context.Background(), world.ID); err != nil ||
+		got.Slug != "newname" {
+		t.Fatalf("renamed world = %+v, %v", got, err)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Errorf("rename moved the world file: %v", err)
+	}
+	oldResp := admin.get(in.appURLFor("/admin/worlds/oldname/site"))
+	if oldResp.StatusCode != http.StatusNotFound {
+		t.Errorf("old slug site: status = %d, want 404", oldResp.StatusCode)
+	}
+	_ = oldResp.Body.Close()
+
+	// The runtime was cached under the old slug. The new page has to carry
+	// the new base, or every admin form on it would post to a dead route.
+	siteResp = admin.get(in.appURLFor("/admin/worlds/newname/site"))
+	if siteResp.StatusCode != http.StatusOK {
+		t.Fatalf("renamed site page: status = %d", siteResp.StatusCode)
+	}
+	if html := body(t, siteResp); !strings.Contains(html, `action="/admin/worlds/newname/rename"`) {
+		t.Error("renamed site page still carries the old slug")
+	}
+
+	// A taken slug is refused and leaves the world where it was.
+	resp = admin.post(
+		in.appURLFor("/admin/worlds/newname/rename"),
+		url.Values{"slug": {"heroes"}, "csrf": {csrf}},
+	)
+	if resp.StatusCode == http.StatusSeeOther {
+		t.Error("rename onto a taken slug was accepted")
+	}
+	_ = resp.Body.Close()
+	if got, err := in.reg.GetWorld(context.Background(), world.ID); err != nil ||
+		got.Slug != "newname" {
+		t.Fatalf("world after a refused rename = %+v, %v", got, err)
+	}
+}
+
+// A request that read the world row before a rename must not cache a runtime
+// with the old slug. That request is why acquireWorld re-reads the row after
+// registering its load.
+func TestRenameReopensWithTheCurrentSlug(t *testing.T) {
+	in := newInstance(t, instanceOptions{budget: registry.Budget{}})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	csrf := admin.csrf(in, "/")
+	resp := admin.post(in.appURLFor("/admin/worlds"), url.Values{
+		"slug": {"stale-name"}, "csrf": {csrf},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+
+	old, err := in.reg.GetWorldBySlug(context.Background(), "stale-name")
+	if err != nil {
+		t.Fatalf("read created world: %v", err)
+	}
+	if err := in.reg.RenameWorld(context.Background(), old.ID, "fresh-name"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+
+	slug, release, err := in.app.AcquireStaleForTest(context.Background(), *old)
+	if err != nil {
+		t.Fatalf("open with the stale row: %v", err)
+	}
+	defer release()
+	if slug != "fresh-name" {
+		t.Fatalf("runtime opened with slug %q, want %q", slug, "fresh-name")
+	}
+}
+
+// A rename keeps the runtime, so posts already queued for the worker still
+// get their turn. Dropping the runtime would clear the queue with the world
+// still there.
+func TestRenameKeepsQueuedPosts(t *testing.T) {
+	in := newInstance(t, instanceOptions{budget: registry.Budget{}})
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	csrf := admin.csrf(in, "/")
+	resp := admin.post(in.appURLFor("/admin/worlds"), url.Values{
+		"slug": {"busy-name"}, "csrf": {csrf},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	world, err := in.reg.GetWorldBySlug(context.Background(), "busy-name")
+	if err != nil {
+		t.Fatalf("read created world: %v", err)
+	}
+
+	// Load the runtime under the old slug.
+	siteResp := admin.get(in.appURLFor("/admin/worlds/busy-name/site"))
+	if siteResp.StatusCode != http.StatusOK {
+		t.Fatalf("site page: status = %d", siteResp.StatusCode)
+	}
+	_ = body(t, siteResp)
+	h := in.app.HandlersForTest(world.ID)
+	if h == nil {
+		t.Fatal("the world did not load")
+	}
+	h.HoldPost(sqlc.Post{ID: 1, Author: "dave", Body: "still queued", Kind: "post"})
+
+	resp = admin.post(
+		in.appURLFor("/admin/worlds/busy-name/rename"),
+		url.Values{"slug": {"busy-name-2"}, "csrf": {csrf}},
+	)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("rename: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+
+	// Give a runtime drop, if one happens, time to clear the queue.
+	time.Sleep(100 * time.Millisecond)
+	if got := in.app.PendingForTest(world.ID); got != 1 {
+		t.Fatalf("queued posts after rename = %d, want 1", got)
+	}
+	if got := in.app.HandlersForTest(world.ID); got != h {
+		t.Fatal("rename replaced the world runtime")
 	}
 }
 

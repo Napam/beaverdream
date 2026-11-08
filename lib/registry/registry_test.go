@@ -688,6 +688,46 @@ func TestWorldSlugUniquenessAndLookup(t *testing.T) {
 	}
 }
 
+func TestRenameWorldKeepsTheRowAndRefusesATakenSlug(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 12, 13, 14, 15, 16, 0, time.UTC)}
+	reg := newRegistry(t, clock)
+	admin := newAdmin(t, reg)
+	first, err := reg.CreateWorldRecord(ctx, "abc", "heroes", admin.IdentityID)
+	if err != nil {
+		t.Fatalf("create world: %v", err)
+	}
+	if _, err := reg.CreateWorldRecord(ctx, "def", "city", admin.IdentityID); err != nil {
+		t.Fatalf("create second world: %v", err)
+	}
+
+	if err := reg.RenameWorld(ctx, first.ID, "legends"); err != nil {
+		t.Fatalf("rename world: %v", err)
+	}
+	bySlug, err := reg.GetWorldBySlug(ctx, "legends")
+	if err != nil || bySlug.ID != first.ID {
+		t.Fatalf("by new slug = %+v, %v", bySlug, err)
+	}
+	if bySlug.CreatedAt != first.CreatedAt {
+		t.Errorf("rename changed created_at: %v, want %v", bySlug.CreatedAt, first.CreatedAt)
+	}
+	if _, err := reg.GetWorldBySlug(ctx, "heroes"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("old slug = %v", err)
+	}
+	if err := reg.RenameWorld(ctx, first.ID, "city"); !errors.Is(err, registry.ErrWorldExists) {
+		t.Fatalf("taken slug = %v", err)
+	}
+	if world, err := reg.GetWorld(ctx, first.ID); err != nil || world.Slug != "legends" {
+		t.Fatalf("world after a refused rename = %+v, %v", world, err)
+	}
+	if err := reg.RenameWorld(ctx, "missing", "elsewhere"); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("missing world = %v", err)
+	}
+	if err := reg.RenameWorld(ctx, first.ID, ""); !errors.Is(err, registry.ErrInvalidInput) {
+		t.Fatalf("empty slug = %v", err)
+	}
+}
+
 func TestStoredTimestampsUseTheExactTextForm(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{t: time.Date(2026, 2, 3, 4, 5, 6, 789000000, time.UTC)}

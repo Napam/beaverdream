@@ -52,9 +52,10 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	docSite := h.siteWithShared(r.Context(), site)
+	world := h.worldInfo()
 	docSite.Name = p.DisplayName
-	docSite.WorldID = h.world.ID
-	docSite.WorldSlug = h.world.Slug
+	docSite.WorldID = world.ID
+	docSite.WorldSlug = world.Slug
 	docSite.BasePath = h.basePath()
 	docSite.AccountURL = h.accountURL(r)
 	visitor := p.IdentityID

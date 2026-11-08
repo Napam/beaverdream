@@ -54,6 +54,7 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Get("/admin/model", a.AdminModel)
 			ar.Post("/admin/worlds", a.CreateWorld)
 			ar.Post("/admin/worlds/{slug}/delete", a.DeleteWorld)
+			ar.Post("/admin/worlds/{slug}/rename", a.RenameWorld)
 			ar.Post("/admin/invites", a.CreateInvite)
 			ar.Post("/admin/invites/{id}/revoke", a.RevokeInvite)
 			ar.Post("/admin/identities/{id}/disable", a.DisableIdentity)
@@ -775,6 +776,50 @@ func (a *App) DeleteWorld(w http.ResponseWriter, r *http.Request) {
 		slog.String("slug", world.Slug),
 	)
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+// RenameWorld changes a world's slug. The id and file stay, so posts,
+// versions, state and play sessions survive; only the URL moves. A loaded
+// runtime is updated in place, so queued posts and open streams survive too.
+func (a *App) RenameWorld(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCSRF(w, r) {
+		return
+	}
+	slug := chi.URLParam(r, "slug")
+	world, err := a.reg.GetWorldBySlug(r.Context(), slug)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
+	next := strings.TrimSpace(r.FormValue("slug"))
+	if err := worlds.ValidateSlug(next); err != nil {
+		a.renderAdmin(w, r, pages.AdminWorlds,
+			"use 1 to 48 lowercase letters, digits or hyphens", "")
+		return
+	}
+	if next == world.Slug {
+		http.Redirect(w, r, "/admin/worlds/"+next+"/site", http.StatusSeeOther)
+		return
+	}
+	if err := a.reg.RenameWorld(r.Context(), world.ID, next); err != nil {
+		if errors.Is(err, registry.ErrWorldExists) {
+			a.renderAdmin(w, r, pages.AdminWorlds, "that world name is not available", "")
+			return
+		}
+		a.logger.Error("Failed to rename a world", slog.Any("error", err))
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not rename the world", "")
+		return
+	}
+	a.setWorldSlug(world.ID, next)
+	a.logger.Info("World renamed",
+		slog.String("world_id", world.ID),
+		slog.String("slug", next),
+	)
+	http.Redirect(w, r, "/admin/worlds/"+next+"/site", http.StatusSeeOther)
 }
 
 // CreateInvite makes a single-use or multi-use code and shows the link once.

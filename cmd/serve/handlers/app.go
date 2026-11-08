@@ -223,6 +223,15 @@ func (a *App) acquireWorld(
 		a.loading[info.ID] = load
 		a.mu.Unlock()
 
+		// The caller read the row before this load was registered. A rename
+		// can land in between, and a request that waited on a closing runtime
+		// reopens with the row it read earlier. Re-read now that the load is
+		// visible: a rename after this point sees the load and updates the
+		// runtime it builds.
+		if current, readErr := a.reg.GetWorld(ctx, info.ID); readErr == nil {
+			info = *current
+		}
+
 		rt, err := a.openWorld(ctx, info)
 		if err == nil {
 			// A delete may have moved the row while the file was opening.
@@ -342,26 +351,53 @@ func (a *App) evict(ctx context.Context, worldID string) bool {
 		return true
 	}
 	// The drain owns itself even if the request that started it is canceled.
-	go func() {
-		rt.h.hub.cancelAll()
-		rt.h.stopWork()
-		for {
-			a.mu.Lock()
-			refs := rt.refs
-			a.mu.Unlock()
-			if refs == 0 {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		a.closeRuntime(rt)
-	}()
+	go a.drainRuntime(rt)
 	select {
 	case <-rt.drained:
 		return true
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// setWorldSlug updates the row a loaded runtime renders from. A rename keeps
+// the runtime, so its queued posts and open streams survive; only the paths
+// new requests build change. A load in flight is patched once it finishes.
+func (a *App) setWorldSlug(worldID, slug string) {
+	a.mu.Lock()
+	if load := a.loading[worldID]; load != nil {
+		a.mu.Unlock()
+		go func() {
+			<-load.ready
+			a.setWorldSlug(worldID, slug)
+		}()
+		return
+	}
+	rt := a.runtimes[worldID]
+	a.mu.Unlock()
+	if rt == nil {
+		return
+	}
+	info := rt.h.worldInfo()
+	info.Slug = slug
+	rt.h.setWorld(info)
+}
+
+// drainRuntime cancels a closing runtime's streams and work, waits for the
+// requests that pinned it, then closes it.
+func (a *App) drainRuntime(rt *worldRuntime) {
+	rt.h.hub.cancelAll()
+	rt.h.stopWork(errWorldClosed)
+	for {
+		a.mu.Lock()
+		refs := rt.refs
+		a.mu.Unlock()
+		if refs == 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.closeRuntime(rt)
 }
 
 // worldRuntimeKey carries the pinned world through the request.

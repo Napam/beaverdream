@@ -22,7 +22,7 @@ func (h *Handlers) ResetWorld(w http.ResponseWriter, r *http.Request) {
 	// that turn finished, and the turn is about to be deleted anyway. The
 	// deferred resume also covers a panic, which would otherwise leave work
 	// paused for the life of the process.
-	h.stopWork()
+	h.stopWork(errWorldReset)
 	defer h.resumeWork()
 
 	// Serialize with changesets so a rewrite cannot land in the middle of the

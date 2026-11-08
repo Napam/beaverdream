@@ -114,6 +114,43 @@ func (h *Handlers) QueuePost(post sqlc.Post) { h.queuePost(post) }
 
 func (h *Handlers) RunPending() { h.runPending() }
 
+// HandlersForTest returns a loaded world's handlers, or nil when the world has
+// no runtime. Tests use it to inspect work across a rename.
+func (a *App) HandlersForTest(worldID string) *Handlers {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if rt := a.runtimes[worldID]; rt != nil {
+		return rt.h
+	}
+	return nil
+}
+
+// PendingForTest reports how many posts are queued on a loaded world. A
+// negative count means the world has no runtime.
+func (a *App) PendingForTest(worldID string) int {
+	h := a.HandlersForTest(worldID)
+	if h == nil {
+		return -1
+	}
+	h.liveMu.Lock()
+	defer h.liveMu.Unlock()
+	return len(h.pending)
+}
+
+// AcquireStaleForTest opens a world with a row a caller read before a rename,
+// the way a request that resolved the old slug does. It reports the slug the
+// runtime came up with.
+func (a *App) AcquireStaleForTest(
+	ctx context.Context,
+	info registry.World,
+) (string, func(), error) {
+	rt, release, err := a.acquireWorld(ctx, info)
+	if err != nil {
+		return "", nil, err
+	}
+	return rt.h.worldInfo().Slug, release, nil
+}
+
 // HoldPost queues a post without waking the worker, so it stays pending.
 func (h *Handlers) HoldPost(post sqlc.Post) {
 	h.liveMu.Lock()
@@ -209,7 +246,7 @@ func (a *App) LoadedForTest() int {
 func (h *Handlers) RegistryForTest() *registry.Registry { return h.reg }
 
 // WorldForTest is the world this handler serves.
-func (h *Handlers) WorldForTest() registry.World { return h.world }
+func (h *Handlers) WorldForTest() registry.World { return h.worldInfo() }
 
 // SetBudgetForTest changes the budget one world handler enforces.
 func (h *Handlers) SetBudgetForTest(b registry.Budget) { h.budget = b }

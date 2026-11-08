@@ -86,6 +86,32 @@ func (r *Registry) SetWorldStatus(ctx context.Context, id, status string) error 
 	return nil
 }
 
+// RenameWorld changes a world's slug. The id and the file never move, so its
+// posts, versions, state and play sessions survive; only the URL changes.
+func (r *Registry) RenameWorld(ctx context.Context, id, slug string) error {
+	if slug == "" {
+		return fmt.Errorf("%w: world slug is required", ErrInvalidInput)
+	}
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE worlds SET slug = ?, updated_at = ? WHERE id = ?`,
+		slug, r.timestamp(), id,
+	)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrWorldExists
+		}
+		return fmt.Errorf("rename world: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rename world rows: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteWorldRecord removes the index row.
 func (r *Registry) DeleteWorldRecord(ctx context.Context, id string) error {
 	res, err := r.db.ExecContext(ctx, `DELETE FROM worlds WHERE id = ?`, id)

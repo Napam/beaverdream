@@ -122,9 +122,11 @@ type runState struct {
 
 // Handlers serves the world and the admin panel.
 type Handlers struct {
-	logger  *slog.Logger
-	reg     *registry.Registry
-	world   registry.World
+	logger *slog.Logger
+	reg    *registry.Registry
+	// world is the row this runtime serves. It is an atomic pointer because a
+	// rename swaps the slug while requests and streams keep using the runtime.
+	world   atomic.Pointer[registry.World]
 	db      *sql.DB
 	queries *sqlc.Queries
 	runner  *webmaster.ChangesetRunner
@@ -190,12 +192,26 @@ type Handlers struct {
 	pageOverBudget bool
 }
 
+// worldInfo returns the registry row this runtime serves. Callers read it per
+// request, never cache it, because a rename replaces it.
+func (h *Handlers) worldInfo() registry.World {
+	if w := h.world.Load(); w != nil {
+		return *w
+	}
+	return registry.World{}
+}
+
+// setWorld replaces the row the runtime serves. A rename uses it so open
+// requests and streams see the new slug without dropping queued work.
+func (h *Handlers) setWorld(w registry.World) {
+	h.world.Store(&w)
+}
+
 // New wires one world's handlers.
 func New(d Deps) *Handlers {
 	h := &Handlers{
 		logger:        d.Logger,
 		reg:           d.Registry,
-		world:         d.World,
 		db:            d.DB,
 		queries:       d.Queries,
 		runner:        d.Runner,
@@ -214,6 +230,7 @@ func New(d Deps) *Handlers {
 		compactAfterTokens: d.Config.CompactAfterTokens,
 		compactAfterTurns:  d.Config.CompactAfterTurns,
 	}
+	h.setWorld(d.World)
 
 	if h.cfg.AppPort == "" {
 		h.cfg.AppPort = "6930"
@@ -822,7 +839,8 @@ func (h *Handlers) recordUsage(
 	turnID int64,
 	res webmaster.Result,
 ) {
-	if h.reg == nil || origin == "admin" || h.world.ID == "" {
+	world := h.worldInfo()
+	if h.reg == nil || origin == "admin" || world.ID == "" {
 		return
 	}
 	ids := postAuthorIDs(triggers)
@@ -838,7 +856,7 @@ func (h *Handlers) recordUsage(
 	}
 	chargeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	if err := h.reg.RecordBatchUsage(chargeCtx, h.world.ID, tokens, ids, turnID); err != nil {
+	if err := h.reg.RecordBatchUsage(chargeCtx, world.ID, tokens, ids, turnID); err != nil {
 		h.logger.Error("Failed to charge turn usage",
 			slog.Int64("turn_id", turnID),
 			slog.Int64("tokens", tokens),
@@ -1326,7 +1344,7 @@ func (h *Handlers) clearRun() {
 // stopWork cancels the model call in flight and drops the queue, so a reset
 // does not wait minutes for a turn it is about to delete. Nothing new starts
 // until every reset that called this has resumed.
-func (h *Handlers) stopWork() {
+func (h *Handlers) stopWork(cause error) {
 	h.liveMu.Lock()
 	h.stopped++
 	h.pending = nil
@@ -1334,16 +1352,17 @@ func (h *Handlers) stopWork() {
 	h.cancelRun = nil
 	h.liveMu.Unlock()
 	if cancel != nil {
-		cancel(errWorldReset)
+		cancel(cause)
 	}
 	h.hub.publish(topicBusy)
 }
 
-// errWorldReset and errAdminStop are the causes a turn's context carries when
-// it is canceled on purpose.
+// errWorldReset, errWorldClosed and errAdminStop are the causes a turn's
+// context carries when it is canceled on purpose.
 var (
-	errWorldReset = errors.New("the world was reset")
-	errAdminStop  = errors.New("stopped by admin")
+	errWorldReset  = errors.New("the world was reset")
+	errWorldClosed = errors.New("the world closed")
+	errAdminStop   = errors.New("stopped by admin")
 )
 
 // stopTurn cancels the running turn when it is the one the admin looked at.

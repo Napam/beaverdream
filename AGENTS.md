@@ -9,14 +9,18 @@ prefer simple, readable code over production hardening.
 - Use `tmp/` for scratch files and test output. It is gitignored.
 - World migrations and registry migrations are separate sets, in separate
   folders, because the registry and each world are separate SQLite files.
-  Pre-production, each database keeps one migration file edited in place
-  (`000001_init.sql` for a world, `000001_registry.sql` for the registry). Both
-  freeze at the first production deploy; after that every schema change is a
-  new numbered migration in the matching set, because goose will not re-run an
-  applied version and a live world keeps its data. Never edit an applied
-  migration. World reset clears every table a world migration adds, and its
-  `sqlite_sequence` row, in that world file only.
-  The registry is never reset.
+  Pre-production, a world keeps one migration file edited in place
+  (`000001_init.sql`). The registry has two: `000001_auth.sql` (identities,
+  logins, sessions, roles) and `000002_data.sql` (invites, worlds, handoffs,
+  usage). `task db.migrate.down` rolls the registry back to the auth migration,
+  keeping accounts and sessions; `task db.migrate.up` applies the data again.
+  Both sets freeze at the first production deploy; after
+  that every schema change is a new numbered migration in the matching set,
+  because goose will not re-run an applied version and a live world keeps its
+  data. Never edit an applied migration. World reset clears every table a world
+  migration adds, and its `sqlite_sequence` row, in that world file only.
+  The registry is never reset wholesale: no full reset drops the auth tables,
+  and rolling back the data migration never touches world files.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`

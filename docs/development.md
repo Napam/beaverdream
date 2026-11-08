@@ -19,9 +19,12 @@ hooks directory.
   a bundle build.
 - `task fix`: auto-fix formatting and lint in Go and in `web/`.
 - `task build.go`: write `bin/app` with the assets and migrations embedded.
-- `task db.migrate`: run the goose migrations on the registry
-  (`REGISTRY_PATH`, default `./data/registry.db`). World files migrate when they
-  open.
+- `task db.migrate.up` (also `task db.migrate`): run the goose migrations on
+  the registry (`REGISTRY_PATH`, default `./data/registry.db`). World files
+  migrate when they open.
+- `task db.migrate.down`: roll the registry back to the auth migration
+  (currently drops the data migration) while keeping accounts and sessions.
+  World files stay; stop the app first.
 - `task gen.templ` and `task gen.db`: regenerate code after you change a templ
   file or a SQL query.
 - `task build.docker` and `task build.docker.run`: build the Docker image, or

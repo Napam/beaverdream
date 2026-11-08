@@ -69,10 +69,18 @@ domains; ports alone are not an origin boundary.
 - Migrations run when the registry opens and each time a world opens. A world
   that sat idle catches up the next time it opens. There is no
   `DB_MIGRATE_ON_START` switch and no single `DB_PATH`.
-- `task db.migrate` migrates the registry only. World files migrate on open.
+- `task db.migrate.up` (also `task db.migrate`) migrates the registry only.
+  World files migrate on open.
   It reads `REGISTRY_PATH` from `.env` or the shell, and
   `REGISTRY_MIGRATIONS_DIR` (default `./db/registry/migrations`) if the
   migration folder moves.
+- `task db.migrate.down` rolls the registry back to the auth migration. In the
+  current split that drops `000002_data.sql`, so invites, worlds, handoffs and
+  usage go while accounts, logins and sessions stay. `task db.migrate.up`
+  reapplies it empty. It deletes the `worlds` rows too, so the retained files
+  under `WORLDS_DIR` become orphaned: the app no longer lists or opens them.
+  Delete `WORLDS_DIR` by hand for a full wipe. Stop the app first, and point
+  `REGISTRY_PATH` at the file you mean.
 
 Use `VACUUM INTO` or the SQLite backup API to back up the registry and world
 files. Never copy a live `.db` file: the WAL may hold recent writes.

@@ -41,13 +41,22 @@ tasks:
     cmds:
       - bun install
 
-  db.migrate:
-    desc: Run the registry migrations (world files migrate when they open)
+  db.migrate.up:
+    desc: Run the registry migrations up (world files migrate when they open)
+    aliases: [db.migrate]
     vars:
       REGISTRY_MIGRATIONS_DIR: '{{.REGISTRY_MIGRATIONS_DIR | default "./db/registry/migrations"}}'
     cmds:
       - mkdir -p "$(dirname "${REGISTRY_PATH:-./data/registry.db}")"
       - go tool goose sqlite3 -dir {{.REGISTRY_MIGRATIONS_DIR}} "${REGISTRY_PATH:-./data/registry.db}" up
+
+  db.migrate.down:
+    desc: Roll the registry back to the auth migration, dropping data but keeping accounts and sessions (stop the app first)
+    vars:
+      REGISTRY_MIGRATIONS_DIR: '{{.REGISTRY_MIGRATIONS_DIR | default "./db/registry/migrations"}}'
+    cmds:
+      - mkdir -p "$(dirname "${REGISTRY_PATH:-./data/registry.db}")"
+      - go tool goose sqlite3 -dir {{.REGISTRY_MIGRATIONS_DIR}} "${REGISTRY_PATH:-./data/registry.db}" down-to 1
 
   dev.mock-llm:
     desc: Run the deterministic mock model on :6701 (leave it running in another terminal)

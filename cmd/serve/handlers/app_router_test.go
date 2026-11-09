@@ -891,6 +891,81 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+// An admin can hand the role to another account, and take it back. The
+// bootstrap account shows no destructive controls.
+func TestAdminDelegatesTheAdminRole(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	_, code, err := in.reg.CreateInvite(
+		context.Background(),
+		in.adminID,
+		registry.InviteParams{MaxUses: 1},
+	)
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	member, _, _ := in.redeem(t, code, "delegate")
+	memberBrowser := in.newBrowser(t)
+	memberBrowser.login(in, "delegate", "correct horse battery")
+
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	page := body(t, admin.get(in.appURLFor("/admin/accounts")))
+	if !strings.Contains(page, "bootstrap admin") {
+		t.Error("accounts page does not mark the bootstrap admin")
+	}
+	if strings.Contains(page, `action="/admin/identities/`+in.adminID+`/disable"`) {
+		t.Error("accounts page offers to disable the bootstrap admin")
+	}
+	promote := `action="/admin/identities/` + member.ID + `/promote"`
+	if !strings.Contains(page, promote) {
+		t.Fatalf("accounts page is missing %q", promote)
+	}
+
+	csrf := admin.csrf(in, "/admin/accounts")
+	resp := admin.post(
+		in.appURLFor("/admin/identities/"+member.ID+"/promote"),
+		url.Values{"csrf": {csrf}},
+	)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("promote: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	if ok, err := in.reg.IsAdmin(context.Background(), member.ID); err != nil || !ok {
+		t.Fatalf("delegate admin = %v, %v", ok, err)
+	}
+
+	// The role is read on every request, so the existing session gains the
+	// admin pages without signing in again.
+	resp = memberBrowser.get(in.appURLFor("/admin"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delegate admin page: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	page = body(t, admin.get(in.appURLFor("/admin/accounts")))
+	demote := `action="/admin/identities/` + member.ID + `/demote"`
+	if !strings.Contains(page, demote) {
+		t.Fatalf("accounts page is missing %q", demote)
+	}
+
+	memberCSRF := memberBrowser.csrf(in, "/admin/accounts")
+	resp = memberBrowser.post(
+		in.appURLFor("/admin/identities/"+member.ID+"/demote"),
+		url.Values{"csrf": {memberCSRF}},
+	)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("demote: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	if ok, err := in.reg.IsAdmin(context.Background(), member.ID); err != nil || ok {
+		t.Fatalf("delegate after demote = %v, %v", ok, err)
+	}
+	resp = memberBrowser.get(in.appURLFor("/admin"))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("demoted account admin page: status = %d, want 404", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+}
+
 // The instance admin is split into sections, and the world pages name their
 // world and offer a way back and across.
 func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
@@ -926,8 +1001,8 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 
 	resp = admin.get(in.appURLFor("/admin/accounts"))
 	page = body(t, resp)
-	if !strings.Contains(page, "signed out everywhere") {
-		t.Error("accounts page is missing the disable note")
+	if !strings.Contains(page, "cannot be demoted or disabled") {
+		t.Error("accounts page is missing the bootstrap protection note")
 	}
 	if strings.Contains(page, `action="/admin/invites"`) {
 		t.Error("accounts page shows the invite form")

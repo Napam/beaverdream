@@ -129,6 +129,22 @@ func (h *hub) cancelIdentity(identityID string) {
 	}
 }
 
+// cancelIdentityAdmin closes one identity's admin streams and leaves its play
+// streams open. Demoting an account must end its private view at once, without
+// signing it out of the world it is reading.
+func (h *hub) cancelIdentityAdmin(identityID string) {
+	if identityID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for sub := range h.subs {
+		if sub.identityID == identityID && sub.want&topicDraft != 0 {
+			sub.cancel()
+		}
+	}
+}
+
 // cancelSession closes the streams of one session token hash.
 func (h *hub) cancelSession(sessionHash string) {
 	if sessionHash == "" {

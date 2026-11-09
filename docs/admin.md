@@ -9,6 +9,8 @@ a data page for shared state, visitor counters and journal feeds.
 
 The app also has pages for accounts, invites and the world registry. Only an
 identity with the `ADMIN` role can create or delete worlds and create invites.
+An admin can make another account an admin, or take the role back, from the
+accounts page.
 
 ## Where it runs
 
@@ -18,7 +20,8 @@ scripts off the origin that holds the app session.
 
 - `/admin`: the world list, the create form, and a delete button per world.
 - `/admin/invites`: invite creation and the current invites.
-- `/admin/accounts`: the accounts, with a disable button.
+- `/admin/accounts`: the accounts, with make admin, remove admin and disable
+  buttons. The bootstrap admin is marked and has no destructive controls.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
   read from the same definitions the model requests use. Skill bodies open in
   place; tool parameter schemas are shown as JSON.
@@ -44,10 +47,17 @@ an admin port.
 ## Password
 
 - The admin is an identity with the `ADMIN` role. Its username is `admin`, and
-  it signs in with that username and the bootstrap password.
+  it signs in with that username and the bootstrap password. Its identity id is
+  all zeroes (`00000000000000000000000000000000`), so it is recognizable and
+  protected: no account, including itself, can disable or demote it.
+- Other admins are ordinary identities with the `ADMIN` role. The bootstrap
+  admin can make and remove them from `/admin/accounts`.
 - `ADMIN_PASSWORD` is the bootstrap. On every start the server writes an
   argon2id hash of it into the admin identity's `password` login, clears any
-  disabled state and grants `ADMIN` if it is missing.
+  disabled state, grants `ADMIN` if it is missing, and moves an older
+  random-id admin account onto the zero id. The move rewrites the registry's
+  references. Post authors, visitor counters and journal rows already stored
+  under the old id in world files stay with that old id.
 - To change the password, change `ADMIN_PASSWORD` and restart. That revokes the
   admin's existing sessions. The UI does not change the bootstrap login.
 - If `ADMIN_PASSWORD` is empty, the server generates one and logs it as a

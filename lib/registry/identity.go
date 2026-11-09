@@ -18,6 +18,11 @@ const RoleAdmin = "ADMIN"
 // BootstrapUsername is the fixed username of the bootstrap admin login.
 const BootstrapUsername = "admin"
 
+// BootstrapAdminID is the fixed identity id of the bootstrap admin. It is all
+// zeroes so the account is recognizable and cannot be disabled or demoted by
+// another admin.
+const BootstrapAdminID = "00000000000000000000000000000000"
+
 // Identity is one person. Display names are not unique.
 type Identity struct {
 	ID          string
@@ -26,6 +31,9 @@ type Identity struct {
 	InviteID   string
 	CreatedAt  time.Time
 	DisabledAt *time.Time
+	// Admin reports an active ADMIN role, whether or not the identity is
+	// disabled. IsAdmin is the stricter check.
+	Admin bool
 }
 
 // Disabled reports whether the identity cannot sign in or play.
@@ -122,7 +130,9 @@ func (r *Registry) CreateIdentityWithPassword(
 // identity on every start: it writes the password hash, clears disabled_at,
 // grants ADMIN again, and revokes existing admin sessions when the password
 // changed. A password comparison verifies the input against the old hash,
-// because argon2 salts differ on every write.
+// because argon2 salts differ on every write. An admin from before
+// BootstrapAdminID existed is moved to that fixed id in the same transaction,
+// so its logins, sessions, roles, handoffs, invites, worlds and usage follow.
 func (r *Registry) EnsureBootstrapAdmin(
 	ctx context.Context,
 	password string,
@@ -165,10 +175,7 @@ func (r *Registry) EnsureBootstrapAdmin(
 	changed := false
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		identityID, err = r.newID()
-		if err != nil {
-			return BootstrapResult{}, err
-		}
+		identityID = BootstrapAdminID
 		loginID, err = r.newID()
 		if err != nil {
 			return BootstrapResult{}, err
@@ -189,6 +196,12 @@ func (r *Registry) EnsureBootstrapAdmin(
 	case err != nil:
 		return BootstrapResult{}, fmt.Errorf("read admin login: %w", err)
 	default:
+		if identityID != BootstrapAdminID {
+			if err := rekeyIdentityTx(ctx, tx, identityID, BootstrapAdminID); err != nil {
+				return BootstrapResult{}, err
+			}
+			identityID = BootstrapAdminID
+		}
 		changed = !r.hasher.Verify(password, oldHash)
 		if changed {
 			if _, err := tx.ExecContext(ctx,
@@ -230,6 +243,49 @@ func (r *Registry) EnsureBootstrapAdmin(
 	}, nil
 }
 
+// rekeyIdentityTx moves an identity to a new id. The new row is inserted
+// first, then every reference is updated, then the old row goes, so foreign
+// keys stay satisfied without turning enforcement off.
+func rekeyIdentityTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	oldID, newID string,
+) error {
+	var exists int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM identities WHERE id = ?`, newID).Scan(&exists)
+	if err == nil {
+		return fmt.Errorf("%w: identity %q already exists", ErrInvalidInput, newID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read target identity: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO identities (id, display_name, invite_id, created_at, disabled_at)
+		 SELECT ?, display_name, invite_id, created_at, disabled_at
+		 FROM identities WHERE id = ?`,
+		newID, oldID,
+	); err != nil {
+		return fmt.Errorf("copy identity: %w", err)
+	}
+	for _, query := range []string{
+		`UPDATE logins SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE sessions SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE identity_roles SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE handoffs SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE invites SET created_by = ? WHERE created_by = ?`,
+		`UPDATE worlds SET created_by = ? WHERE created_by = ?`,
+		`UPDATE usage SET identity_id = ? WHERE identity_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, newID, oldID); err != nil {
+			return fmt.Errorf("move identity references: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM identities WHERE id = ?`, oldID); err != nil {
+		return fmt.Errorf("delete old identity: %w", err)
+	}
+	return nil
+}
+
 // GrantRole gives an identity an active role, unless it already has one.
 func (r *Registry) GrantRole(ctx context.Context, identityID, role string) error {
 	if err := validateRole(role); err != nil {
@@ -245,6 +301,73 @@ func (r *Registry) GrantRole(ctx context.Context, identityID, role string) error
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit grant role: %w", err)
+	}
+	return nil
+}
+
+// GrantAdmin gives an identity the ADMIN role. actorID must be an active
+// admin.
+func (r *Registry) GrantAdmin(ctx context.Context, actorID, identityID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin grant admin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := requireAdminTx(ctx, tx, actorID); err != nil {
+		return err
+	}
+	if err := requireIdentityTx(ctx, tx, identityID); err != nil {
+		return err
+	}
+	if err := grantRoleTx(ctx, tx, identityID, RoleAdmin, r.timestamp()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit grant admin: %w", err)
+	}
+	return nil
+}
+
+// RevokeAdmin removes the ADMIN role. The bootstrap admin keeps it: no other
+// account can demote the zero id.
+func (r *Registry) RevokeAdmin(ctx context.Context, actorID, identityID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin revoke admin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := requireAdminTx(ctx, tx, actorID); err != nil {
+		return err
+	}
+	if identityID == BootstrapAdminID {
+		return fmt.Errorf("%w: the bootstrap admin keeps its role", ErrForbidden)
+	}
+	if err := requireIdentityTx(ctx, tx, identityID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE identity_roles SET revoked_at = ?
+		 WHERE identity_id = ? AND role = ? AND revoked_at IS NULL`,
+		r.timestamp(), identityID, RoleAdmin,
+	); err != nil {
+		return fmt.Errorf("revoke admin: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit revoke admin: %w", err)
+	}
+	return nil
+}
+
+func requireIdentityTx(ctx context.Context, tx *sql.Tx, identityID string) error {
+	var exists int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM identities WHERE id = ?`, identityID,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read identity: %w", err)
 	}
 	return nil
 }
@@ -325,19 +448,46 @@ func (r *Registry) RequireAdmin(ctx context.Context, identityID string) error {
 	return nil
 }
 
-// DisableIdentity marks an identity disabled, revokes every session it holds
-// and keeps its roles. Only an admin may disable an identity; an admin may
-// disable itself, and the next bootstrap restores it.
-func (r *Registry) DisableIdentity(ctx context.Context, actorID, identityID string) error {
-	if err := r.RequireAdmin(ctx, actorID); err != nil {
-		return err
+// requireAdminTx is RequireAdmin inside the write transaction, so a concurrent
+// demotion cannot land between the check and the change.
+func requireAdminTx(ctx context.Context, tx *sql.Tx, identityID string) error {
+	var found int
+	err := tx.QueryRowContext(ctx,
+		`SELECT 1
+		 FROM identities i
+		 WHERE i.id = ? AND i.disabled_at IS NULL
+		   AND EXISTS (
+		     SELECT 1 FROM identity_roles r
+		     WHERE r.identity_id = i.id AND r.role = ? AND r.revoked_at IS NULL
+		   )`,
+		identityID, RoleAdmin,
+	).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
 	}
+	if err != nil {
+		return fmt.Errorf("read admin role: %w", err)
+	}
+	return nil
+}
+
+// DisableIdentity marks an identity disabled, revokes every session it holds
+// and keeps its roles. Only an admin may disable an identity. The bootstrap
+// admin is protected even from itself; the next bootstrap would restore it,
+// so refusing the write keeps the zero id always usable.
+func (r *Registry) DisableIdentity(ctx context.Context, actorID, identityID string) error {
 	now := r.timestamp()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin disable identity: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := requireAdminTx(ctx, tx, actorID); err != nil {
+		return err
+	}
+	if identityID == BootstrapAdminID {
+		return fmt.Errorf("%w: the bootstrap admin cannot be disabled", ErrForbidden)
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE identities SET disabled_at = COALESCE(disabled_at, ?) WHERE id = ?`,
 		now, identityID,
@@ -381,9 +531,14 @@ func (r *Registry) RevokeAllSessions(ctx context.Context, identityID string) err
 // GetIdentity reads one identity.
 func (r *Registry) GetIdentity(ctx context.Context, identityID string) (*Identity, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, display_name, COALESCE(invite_id, ''), created_at, disabled_at
-		 FROM identities WHERE id = ?`,
-		identityID,
+		`SELECT i.id, i.display_name, COALESCE(i.invite_id, ''), i.created_at,
+		   i.disabled_at,
+		   EXISTS (
+		     SELECT 1 FROM identity_roles r
+		     WHERE r.identity_id = i.id AND r.role = ? AND r.revoked_at IS NULL
+		   )
+		 FROM identities i WHERE i.id = ?`,
+		RoleAdmin, identityID,
 	)
 	identity, err := scanIdentity(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -401,8 +556,14 @@ func (r *Registry) ListIdentities(ctx context.Context, actorID string) ([]Identi
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, display_name, COALESCE(invite_id, ''), created_at, disabled_at
-		 FROM identities ORDER BY created_at DESC, id DESC`,
+		`SELECT i.id, i.display_name, COALESCE(i.invite_id, ''), i.created_at,
+		   i.disabled_at,
+		   EXISTS (
+		     SELECT 1 FROM identity_roles r
+		     WHERE r.identity_id = i.id AND r.role = ? AND r.revoked_at IS NULL
+		   )
+		 FROM identities i ORDER BY i.created_at DESC, i.id DESC`,
+		RoleAdmin,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list identities: %w", err)
@@ -507,6 +668,7 @@ func scanIdentity(row rowScanner) (*Identity, error) {
 		identity   Identity
 		createdAt  string
 		disabledAt sql.NullString
+		admin      int
 	)
 	if err := row.Scan(
 		&identity.ID,
@@ -514,9 +676,11 @@ func scanIdentity(row rowScanner) (*Identity, error) {
 		&identity.InviteID,
 		&createdAt,
 		&disabledAt,
+		&admin,
 	); err != nil {
 		return nil, err
 	}
+	identity.Admin = admin != 0
 	t, err := scanTime(createdAt)
 	if err != nil {
 		return nil, err

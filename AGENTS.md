@@ -382,7 +382,9 @@ prefer simple, readable code over production hardening.
   cookie never authorizes a play route and a play cookie never authorizes an
   app route. Play sessions are minted by the handoff, not by login.
 - Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
-  username is `admin`. `/admin` is the world list, `/admin/accounts` and
+  username is `admin` and its identity id is all zeroes. An admin can make or
+  remove another admin from `/admin/accounts`, but the zero id cannot be
+  disabled or demoted. `/admin` is the world list, `/admin/accounts` and
   `/admin/invites` hold the accounts and invites, and
   `/admin/worlds/{slug}/...` one world's changesets, site and data. A world
   can be renamed from its site tab; the id and file stay, and the loaded
@@ -394,8 +396,9 @@ prefer simple, readable code over production hardening.
   keep a window-opener reference.
 - `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
   server writes an argon2id hash of it into the admin identity's password
-  login, clears `disabled_at`, grants `ADMIN` when missing, and revokes the
-  admin's sessions when the password changed. Compare by verifying the password,
+  login, clears `disabled_at`, grants `ADMIN` when missing, moves an older
+  random-id admin onto the zero id, and revokes the admin's sessions when the
+  password changed. Compare by verifying the password,
   not by comparing argon2 hashes. Empty generates a password and logs it. The UI
   does not change the bootstrap login.
 - Every state-changing app POST that authenticates by cookie needs the `csrf`

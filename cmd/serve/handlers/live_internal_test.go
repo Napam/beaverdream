@@ -8,6 +8,34 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster"
 )
 
+func TestCancelingAdminStreamsLeavesPlayStreamsOpen(t *testing.T) {
+	h := newHub()
+	play, stopPlay := h.subscribeAs(topicAll, "member", "session")
+	defer stopPlay()
+	admin, stopAdmin := h.subscribeAs(topicAll|topicDraft, "member", "session")
+	defer stopAdmin()
+	other, stopOther := h.subscribeAs(topicAll|topicDraft, "other", "other-session")
+	defer stopOther()
+
+	h.cancelIdentityAdmin("member")
+
+	select {
+	case <-admin.closed:
+	default:
+		t.Fatal("the demoted identity's admin stream stayed open")
+	}
+	select {
+	case <-play.closed:
+		t.Fatal("the demoted identity's play stream was closed")
+	default:
+	}
+	select {
+	case <-other.closed:
+		t.Fatal("another identity's admin stream was closed")
+	default:
+	}
+}
+
 func TestPostAuthorsDeduplicates(t *testing.T) {
 	got := postAuthors([]sqlc.Post{
 		{Author: "dave"},

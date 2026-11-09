@@ -650,7 +650,7 @@ templ accountsSection(view AppView) {
 			<p class={ adminLabel }>accounts</p>
 			<p class={ adminMuted }>{ plural(len(view.Identities), "account") }</p>
 		</div>
-		<p class={ adminMuted + " mt-2" }>disabling an account signs it out everywhere and closes its open worlds.</p>
+		<p class={ adminMuted + " mt-2" }>admins can make other accounts admins. the bootstrap admin cannot be demoted or disabled. disabling an account signs it out everywhere and closes its open worlds.</p>
 		if len(view.Identities) == 0 {
 			<p class={ appEmpty + " mt-3" }>no accounts yet. send someone an invite.</p>
 		} else {
@@ -664,22 +664,48 @@ templ accountsSection(view AppView) {
 }
 
 templ accountRow(view AppView, identity AppIdentity) {
-	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3" data-account={ identity.ID }>
 		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
-			<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">{ identity.DisplayName }</p>
+			<div class="flex flex-wrap items-center gap-2">
+				<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">{ identity.DisplayName }</p>
+				if identity.Bootstrap {
+					<span class="inline-flex rounded-sm bg-gray-900 px-1.5 py-px text-[11px] font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">bootstrap admin</span>
+				} else if identity.Admin {
+					<span class="inline-flex rounded-sm bg-gray-100 px-1.5 py-px text-[11px] font-medium text-gray-700 dark:bg-neutral-800 dark:text-neutral-300">admin</span>
+				}
+			</div>
 			<p class={ adminMuted + " mt-0.5" }>joined { identity.CreatedAt.Format("Jan 2, 2006") }</p>
 		</div>
-		if identity.Disabled {
-			<span class="inline-flex rounded-sm bg-gray-100 px-1.5 py-px text-[11px] font-medium text-gray-700 dark:bg-neutral-800 dark:text-neutral-300">disabled</span>
+		if identity.Bootstrap {
+			<span class={ adminMuted }>protected</span>
 		} else {
-			<form
-				method="post"
-				action={ templ.SafeURL("/admin/identities/" + identity.ID + "/disable") }
-				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Disable this account? They are signed out everywhere and cannot sign in again.')") }
-			>
-				@csrfInput(view.CSRF)
-				<button type="submit" class={ adminButton }>disable</button>
-			</form>
+			if identity.Admin {
+				<form
+					method="post"
+					action={ templ.SafeURL("/admin/identities/" + identity.ID + "/demote") }
+					onsubmit={ templ.JSUnsafeFuncCall("return confirm('Remove the admin role? They lose the back office.')") }
+				>
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ adminButton }>remove admin</button>
+				</form>
+			} else {
+				<form method="post" action={ templ.SafeURL("/admin/identities/" + identity.ID + "/promote") }>
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ adminButton }>make admin</button>
+				</form>
+			}
+			if identity.Disabled {
+				<span class="inline-flex rounded-sm bg-gray-100 px-1.5 py-px text-[11px] font-medium text-gray-700 dark:bg-neutral-800 dark:text-neutral-300">disabled</span>
+			} else {
+				<form
+					method="post"
+					action={ templ.SafeURL("/admin/identities/" + identity.ID + "/disable") }
+					onsubmit={ templ.JSUnsafeFuncCall("return confirm('Disable this account? They are signed out everywhere and cannot sign in again.')") }
+				>
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ adminButton }>disable</button>
+				</form>
+			}
 		}
 	</div>
 }

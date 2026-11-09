@@ -105,9 +105,14 @@ func (r *Registry) ExchangeHandoff(
 	}
 
 	row := tx.QueryRowContext(ctx,
-		`SELECT id, display_name, COALESCE(invite_id, ''), created_at, disabled_at
-		 FROM identities WHERE id = ? AND disabled_at IS NULL`,
-		identityID,
+		`SELECT i.id, i.display_name, COALESCE(i.invite_id, ''), i.created_at,
+		   i.disabled_at,
+		   EXISTS (
+		     SELECT 1 FROM identity_roles r
+		     WHERE r.identity_id = i.id AND r.role = ? AND r.revoked_at IS NULL
+		   )
+		 FROM identities i WHERE i.id = ? AND i.disabled_at IS NULL`,
+		RoleAdmin, identityID,
 	)
 	identity, err := scanIdentity(row)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -166,7 +166,12 @@ func TestReviewDeleteDuringOpenDoesNotRecreateWorld(t *testing.T) {
 
 func TestReviewDisableWhileWorldLoadsClosesStream(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
-	id, sess, _, err := in.reg.Login(context.Background(), "admin", acceptanceAdminPassword)
+	if _, err := in.reg.CreateIdentityWithPassword(
+		context.Background(), "streamer", "streamer-password", "Streamer",
+	); err != nil {
+		t.Fatal(err)
+	}
+	id, sess, _, err := in.reg.Login(context.Background(), "streamer", "streamer-password")
 	if err != nil {
 		t.Fatal(err)
 	}

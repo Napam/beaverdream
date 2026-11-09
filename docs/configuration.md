@@ -97,7 +97,8 @@ files. Never copy a live `.db` file: the WAL may hold recent writes.
 - `ADMIN_PASSWORD` (default empty): the bootstrap admin password. On every
   start the server writes an argon2id hash into the admin identity, clears its
   disabled state, grants `ADMIN` if missing, and revokes the admin's sessions
-  when the password changed. Empty generates a random password and logs it.
+  when the password changed. The bootstrap identity uses the all-zero id and
+  cannot be disabled or demoted. Empty generates a random password and logs it.
   Change the variable and restart; the UI does not change this login.
 - `APP_SESSION_TTL` (default `168h`): how long an app session lasts.
 - `PLAY_SESSION_TTL` (default `0`): how long a play session lasts. `0` means no

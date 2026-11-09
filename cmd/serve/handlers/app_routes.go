@@ -57,6 +57,8 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Post("/admin/worlds/{slug}/rename", a.RenameWorld)
 			ar.Post("/admin/invites", a.CreateInvite)
 			ar.Post("/admin/invites/{id}/revoke", a.RevokeInvite)
+			ar.Post("/admin/identities/{id}/promote", a.PromoteIdentity)
+			ar.Post("/admin/identities/{id}/demote", a.DemoteIdentity)
 			ar.Post("/admin/identities/{id}/disable", a.DisableIdentity)
 			ar.Get("/admin/worlds/{slug}", a.AdminWorldRoot)
 
@@ -687,6 +689,8 @@ func (a *App) adminView(
 			ID:          identity.ID,
 			DisplayName: identity.DisplayName,
 			Disabled:    identity.Disabled(),
+			Admin:       identity.Admin,
+			Bootstrap:   identity.ID == registry.BootstrapAdminID,
 			CreatedAt:   identity.CreatedAt,
 		})
 	}
@@ -861,6 +865,34 @@ func (a *App) RevokeInvite(w http.ResponseWriter, r *http.Request) {
 		a.logger.Warn("Failed to revoke an invite", slog.Any("error", err))
 	}
 	http.Redirect(w, r, "/admin/invites", http.StatusSeeOther)
+}
+
+// PromoteIdentity gives one account the ADMIN role.
+func (a *App) PromoteIdentity(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCSRF(w, r) {
+		return
+	}
+	p := principalFrom(r)
+	id := chi.URLParam(r, "id")
+	if err := a.reg.GrantAdmin(r.Context(), p.IdentityID, id); err != nil {
+		a.logger.Warn("Failed to promote an identity", slog.Any("error", err))
+	}
+	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
+}
+
+// DemoteIdentity removes the ADMIN role. The bootstrap admin keeps it.
+func (a *App) DemoteIdentity(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCSRF(w, r) {
+		return
+	}
+	p := principalFrom(r)
+	id := chi.URLParam(r, "id")
+	if err := a.reg.RevokeAdmin(r.Context(), p.IdentityID, id); err != nil {
+		a.logger.Warn("Failed to demote an identity", slog.Any("error", err))
+	} else {
+		a.cancelIdentityAdminStreams(id)
+	}
+	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
 }
 
 // DisableIdentity disables one account and closes its streams in every loaded

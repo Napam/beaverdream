@@ -376,6 +376,21 @@ func (a *App) cancelIdentityStreams(identityID string) {
 	}
 }
 
+// cancelIdentityAdminStreams closes one identity's admin streams in every
+// loaded world. Play streams stay open: a demotion removes the back office,
+// not world access.
+func (a *App) cancelIdentityAdminStreams(identityID string) {
+	a.mu.Lock()
+	runtimes := make([]*worldRuntime, 0, len(a.runtimes))
+	for _, rt := range a.runtimes {
+		runtimes = append(runtimes, rt)
+	}
+	a.mu.Unlock()
+	for _, rt := range runtimes {
+		rt.h.hub.cancelIdentityAdmin(identityID)
+	}
+}
+
 func (a *App) cancelSessionStreams(sessionHash string) {
 	a.mu.Lock()
 	runtimes := make([]*worldRuntime, 0, len(a.runtimes))

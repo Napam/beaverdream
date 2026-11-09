@@ -41,7 +41,12 @@ type AppIdentity struct {
 	ID          string
 	DisplayName string
 	Disabled    bool
-	CreatedAt   time.Time
+	// Admin reports an active ADMIN role.
+	Admin bool
+	// Bootstrap is the fixed zero-id account. It cannot be disabled or
+	// demoted.
+	Bootstrap bool
+	CreatedAt time.Time
 }
 
 // The app admin's sections. The URL picks one, so a reload and a bookmark

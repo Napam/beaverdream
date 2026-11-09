@@ -131,8 +131,16 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 		t.Fatalf("new password: %v", err)
 	}
 
-	if err := reg.DisableIdentity(ctx, first.IdentityID, first.IdentityID); err != nil {
-		t.Fatalf("disable self: %v", err)
+	if err := reg.DisableIdentity(ctx, first.IdentityID, first.IdentityID); !errors.Is(
+		err, registry.ErrForbidden,
+	) {
+		t.Fatalf("disable bootstrap = %v", err)
+	}
+	if _, err := reg.DB().ExecContext(ctx,
+		`UPDATE identities SET disabled_at = ? WHERE id = ?`,
+		registry.FormatTimestamp(clock.Now()), first.IdentityID,
+	); err != nil {
+		t.Fatalf("disable bootstrap directly: %v", err)
 	}
 	if _, _, _, err := reg.Login(ctx, "admin", "new-admin-password"); !errors.Is(
 		err, registry.ErrInvalidCredentials,
@@ -152,6 +160,124 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 	}
 	if !generated.Generated || len(generated.Password) < 32 {
 		t.Fatalf("generated result = %+v", generated)
+	}
+}
+
+func TestBootstrapAdminKeepsZeroIDAndRole(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 3, 5, 6, 7, 8, 0, time.UTC)}
+	reg := newRegistry(t, clock)
+	admin := newAdmin(t, reg)
+	if admin.IdentityID != registry.BootstrapAdminID {
+		t.Fatalf("bootstrap id = %q, want zero id", admin.IdentityID)
+	}
+	stored, err := reg.GetIdentity(ctx, admin.IdentityID)
+	if err != nil {
+		t.Fatalf("get bootstrap: %v", err)
+	}
+	if !stored.Admin {
+		t.Fatal("bootstrap is not flagged as admin")
+	}
+
+	other, err := reg.CreateIdentityWithPassword(
+		ctx, "delegate", "delegate-password", "Delegate",
+	)
+	if err != nil {
+		t.Fatalf("create delegate: %v", err)
+	}
+	if err := reg.GrantAdmin(ctx, admin.IdentityID, other.ID); err != nil {
+		t.Fatalf("grant admin: %v", err)
+	}
+	if ok, err := reg.IsAdmin(ctx, other.ID); err != nil || !ok {
+		t.Fatalf("delegate admin = %v, %v", ok, err)
+	}
+
+	if err := reg.DisableIdentity(ctx, other.ID, admin.IdentityID); !errors.Is(
+		err, registry.ErrForbidden,
+	) {
+		t.Fatalf("delegate disabled bootstrap = %v", err)
+	}
+	if err := reg.RevokeAdmin(ctx, other.ID, admin.IdentityID); !errors.Is(
+		err, registry.ErrForbidden,
+	) {
+		t.Fatalf("delegate demoted bootstrap = %v", err)
+	}
+	if ok, err := reg.IsAdmin(ctx, admin.IdentityID); err != nil || !ok {
+		t.Fatalf("bootstrap after attacks = %v, %v", ok, err)
+	}
+
+	if err := reg.RevokeAdmin(ctx, admin.IdentityID, other.ID); err != nil {
+		t.Fatalf("revoke delegate: %v", err)
+	}
+	if ok, err := reg.IsAdmin(ctx, other.ID); err != nil || ok {
+		t.Fatalf("delegate after revoke = %v, %v", ok, err)
+	}
+	if err := reg.GrantAdmin(ctx, other.ID, admin.IdentityID); !errors.Is(
+		err, registry.ErrForbidden,
+	) {
+		t.Fatalf("demoted delegate granted admin = %v", err)
+	}
+}
+
+func TestBootstrapAdminMovesToZeroID(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 3, 6, 7, 8, 9, 0, time.UTC)}
+	reg := newRegistry(t, clock)
+	admin := newAdmin(t, reg)
+	if admin.IdentityID != registry.BootstrapAdminID {
+		t.Fatalf("bootstrap id = %q, want zero id", admin.IdentityID)
+	}
+	_, _, token, err := reg.Login(ctx, "admin", "admin-password")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	oldID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	tx, err := reg.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin move: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
+		t.Fatalf("defer foreign keys: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE identities SET id = ? WHERE id = ?`, oldID, registry.BootstrapAdminID,
+	); err != nil {
+		t.Fatalf("move identity: %v", err)
+	}
+	for _, query := range []string{
+		`UPDATE logins SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE sessions SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE identity_roles SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE handoffs SET identity_id = ? WHERE identity_id = ?`,
+		`UPDATE invites SET created_by = ? WHERE created_by = ?`,
+		`UPDATE worlds SET created_by = ? WHERE created_by = ?`,
+		`UPDATE usage SET identity_id = ? WHERE identity_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, oldID, registry.BootstrapAdminID); err != nil {
+			t.Fatalf("move reference: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit move: %v", err)
+	}
+
+	restored, err := reg.EnsureBootstrapAdmin(ctx, "admin-password")
+	if err != nil {
+		t.Fatalf("restore zero id: %v", err)
+	}
+	if restored.IdentityID != registry.BootstrapAdminID {
+		t.Fatalf("restored id = %q, want zero id", restored.IdentityID)
+	}
+	if _, err := reg.GetIdentity(ctx, oldID); !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("old id still exists: %v", err)
+	}
+	if _, _, err := reg.Authenticate(ctx, token, registry.ScopeApp); err != nil {
+		t.Fatalf("moved session no longer authenticates: %v", err)
+	}
+	if ok, err := reg.IsAdmin(ctx, registry.BootstrapAdminID); err != nil || !ok {
+		t.Fatalf("moved admin role = %v, %v", ok, err)
 	}
 }
 
@@ -474,8 +600,11 @@ func TestHandoffIsSingleUseBoundAndExpires(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create disabled handoff: %v", err)
 	}
-	if err := reg.DisableIdentity(ctx, admin.IdentityID, admin.IdentityID); err != nil {
-		t.Fatalf("disable admin: %v", err)
+	if _, err := reg.DB().ExecContext(ctx,
+		`UPDATE identities SET disabled_at = ? WHERE id = ?`,
+		registry.FormatTimestamp(clock.Now()), admin.IdentityID,
+	); err != nil {
+		t.Fatalf("disable admin directly: %v", err)
 	}
 	if _, _, _, _, err := reg.ExchangeHandoff(ctx, disabled); !errors.Is(
 		err, registry.ErrHandoffInvalid,

@@ -136,7 +136,13 @@ func TestSecureCookieNamesAndFlags(t *testing.T) {
 	}
 
 	// The handoff writes the play cookie under the __Host- name too.
-	code, _, err := in.reg.CreateHandoff(ctx, in.adminID, in.adminLoginID, in.heroesID)
+	_, session, _, err := in.reg.Login(ctx, "admin", acceptanceAdminPassword)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	code, _, err := in.reg.CreateHandoff(
+		ctx, in.adminID, in.adminLoginID, session.Hash, in.heroesID,
+	)
 	if err != nil {
 		t.Fatalf("create handoff: %v", err)
 	}
@@ -451,7 +457,7 @@ func TestSignedInGuardOnSignInAndInvite(t *testing.T) {
 	})
 
 	t.Run("bearer header does not bypass the guard", func(t *testing.T) {
-		_, apiToken, err := in.reg.CreateAPIToken(ctx, in.adminID, in.adminLoginID)
+		_, apiToken, err := in.createAdminAPIToken(ctx)
 		if err != nil {
 			t.Fatalf("api token: %v", err)
 		}

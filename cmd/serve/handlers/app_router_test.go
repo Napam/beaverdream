@@ -405,7 +405,7 @@ func TestCSRFOnCookieAppWrites(t *testing.T) {
 
 func TestBearerOnlyAndScopeSeparation(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
-	_, token, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, token, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatalf("mint api token: %v", err)
 	}
@@ -696,7 +696,13 @@ func TestWorldIsolationAndPageContract(t *testing.T) {
 func TestHandoffIsSingleUse(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
 	ctx := context.Background()
-	code, _, err := in.reg.CreateHandoff(ctx, in.adminID, in.adminLoginID, in.heroesID)
+	_, session, _, err := in.reg.Login(ctx, "admin", acceptanceAdminPassword)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	code, _, err := in.reg.CreateHandoff(
+		ctx, in.adminID, in.adminLoginID, session.Hash, in.heroesID,
+	)
 	if err != nil {
 		t.Fatalf("handoff: %v", err)
 	}
@@ -892,7 +898,7 @@ func TestWorldAdminRoutesArePrefixedAndWorking(t *testing.T) {
 }
 
 // An admin can hand the role to another account, and take it back. The
-// bootstrap account shows no destructive controls.
+// system admin account shows no destructive controls.
 func TestAdminDelegatesTheAdminRole(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
 	_, code, err := in.reg.CreateInvite(
@@ -904,17 +910,29 @@ func TestAdminDelegatesTheAdminRole(t *testing.T) {
 		t.Fatalf("create invite: %v", err)
 	}
 	member, _, _ := in.redeem(t, code, "delegate")
+	if err := in.reg.SetDisplayName(context.Background(), member.ID, "Delegate Name"); err != nil {
+		t.Fatalf("set delegate display name: %v", err)
+	}
 	memberBrowser := in.newBrowser(t)
 	memberBrowser.login(in, "delegate", "correct horse battery")
 
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 	page := body(t, admin.get(in.appURLFor("/admin/accounts")))
-	if !strings.Contains(page, "bootstrap admin") {
-		t.Error("accounts page does not mark the bootstrap admin")
+	if !strings.Contains(page, "system admin") {
+		t.Error("accounts page does not mark the system admin")
+	}
+	for _, want := range []string{
+		`data-username="admin"`,
+		`data-username="delegate"`,
+		"Delegate Name",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("accounts page is missing %q", want)
+		}
 	}
 	if strings.Contains(page, `action="/admin/identities/`+in.adminID+`/disable"`) {
-		t.Error("accounts page offers to disable the bootstrap admin")
+		t.Error("accounts page offers to disable the system admin")
 	}
 	promote := `action="/admin/identities/` + member.ID + `/promote"`
 	if !strings.Contains(page, promote) {
@@ -966,6 +984,155 @@ func TestAdminDelegatesTheAdminRole(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+// An admin issues a reset link, and the account it names must use it once.
+func TestAdminIssuesOneTimePasswordReset(t *testing.T) {
+	in := newInstance(t, instanceOptions{})
+	_, code, err := in.reg.CreateInvite(
+		context.Background(),
+		in.adminID,
+		registry.InviteParams{MaxUses: 1},
+	)
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	member, _, _ := in.redeem(t, code, "forgetful")
+	memberBrowser := in.newBrowser(t)
+	memberBrowser.login(in, "forgetful", "correct horse battery")
+	memberBrowser.play(in, "heroes")
+	stream := memberBrowser.get(in.playURLFor("/worlds/heroes/live"))
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("member live: status = %d", stream.StatusCode)
+	}
+	streamClosed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, stream.Body)
+		_ = stream.Body.Close()
+		close(streamClosed)
+	}()
+
+	admin := in.newBrowser(t)
+	admin.login(in, "admin", acceptanceAdminPassword)
+	page := body(t, admin.get(in.appURLFor("/admin/accounts")))
+	resetAction := `action="/admin/identities/` + member.ID + `/password-reset"`
+	if !strings.Contains(page, resetAction) {
+		t.Fatalf("accounts page is missing %q", resetAction)
+	}
+	if strings.Contains(page, `action="/admin/identities/`+in.adminID+`/password-reset"`) {
+		t.Error("accounts page offers to reset the system admin")
+	}
+
+	resp := admin.post(
+		in.appURLFor("/admin/identities/"+member.ID+"/password-reset"), nil,
+	)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("reset without csrf: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	csrf := admin.csrf(in, "/admin/accounts")
+	resp = admin.post(
+		in.appURLFor("/admin/identities/"+member.ID+"/password-reset"),
+		url.Values{"csrf": {csrf}},
+	)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create reset: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	page = body(t, resp)
+	if !strings.Contains(page, "password reset link · forgetful") {
+		t.Error("the reset link does not name the account")
+	}
+	resetCode := resetCodeFromPage(t, page)
+
+	// An admin resetting another account stays signed in.
+	resp = admin.get(in.appURLFor("/admin"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin after reset: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	fresh := in.newBrowser(t)
+	page = body(t, fresh.get(in.appURLFor("/reset/"+resetCode)))
+	if !strings.Contains(page, "choose a new password") {
+		t.Fatalf("reset page: %s", page)
+	}
+	resp = fresh.post(in.appURLFor("/reset/"+resetCode), url.Values{
+		"password": {"new-password"}, "confirm": {"other-password"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("mismatch: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+	resp = fresh.post(in.appURLFor("/reset/"+resetCode), url.Values{
+		"password": {"short"}, "confirm": {"short"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("short password: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+
+	resp = fresh.post(in.appURLFor("/reset/"+resetCode), url.Values{
+		"password": {"new-password"}, "confirm": {"new-password"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reset: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	if got := resp.Header.Get("Location"); got != "/login?reset=1" {
+		t.Errorf("reset redirect = %q", got)
+	}
+	_ = resp.Body.Close()
+	select {
+	case <-streamClosed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the member's live stream stayed open after the reset")
+	}
+
+	page = body(t, memberBrowser.get(in.appURLFor("/account")))
+	if strings.Contains(page, "sign out everywhere") {
+		t.Error("the old app session survived the reset")
+	}
+	old := in.newBrowser(t)
+	resp = old.post(in.appURLFor("/login"), url.Values{
+		"username": {"forgetful"}, "password": {"correct horse battery"},
+	})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("old password login: status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	fresh.login(in, "forgetful", "new-password")
+
+	resp = fresh.get(in.appURLFor("/reset/" + resetCode))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("replayed reset: status = %d, want 400", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+	resp = fresh.post(in.appURLFor("/reset/not-a-code"), url.Values{
+		"password": {"short"}, "confirm": {"short"},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown reset: status = %d, body %s", resp.StatusCode, body(t, resp))
+	}
+	if page := body(t, resp); strings.Contains(page, "at least 8") {
+		t.Error("an unknown code reported a password error")
+	}
+}
+
+func resetCodeFromPage(t *testing.T, page string) string {
+	t.Helper()
+	const marker = "/reset/"
+	at := strings.Index(page, marker)
+	if at < 0 {
+		t.Fatalf("no reset link in page: %s", page)
+	}
+	rest := page[at+len(marker):]
+	end := strings.IndexAny(rest, `"' <`)
+	if end < 0 {
+		t.Fatalf("unterminated reset link in page: %s", page)
+	}
+	if rest[:end] == "" {
+		t.Fatal("empty reset code")
+	}
+	return rest[:end]
+}
+
 // The instance admin is split into sections, and the world pages name their
 // world and offer a way back and across.
 func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
@@ -1001,8 +1168,8 @@ func TestAppAdminSectionsAndWorldSwitcher(t *testing.T) {
 
 	resp = admin.get(in.appURLFor("/admin/accounts"))
 	page = body(t, resp)
-	if !strings.Contains(page, "cannot be demoted or disabled") {
-		t.Error("accounts page is missing the bootstrap protection note")
+	if !strings.Contains(page, "cannot be reset, demoted or disabled") {
+		t.Error("accounts page is missing the system admin protection note")
 	}
 	if strings.Contains(page, `action="/admin/invites"`) {
 		t.Error("accounts page shows the invite form")
@@ -1513,17 +1680,17 @@ func TestCookieContractAndScopeSeparation(t *testing.T) {
 	}
 }
 
-func TestBootstrapRotationRevokesEverySession(t *testing.T) {
+func TestSystemAdminRotationRevokesEverySession(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
 	admin := in.newBrowser(t)
 	admin.login(in, "admin", acceptanceAdminPassword)
 	admin.play(in, "heroes")
-	_, token, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, token, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatalf("api token: %v", err)
 	}
 
-	if _, err := in.reg.EnsureBootstrapAdmin(context.Background(), "a new password"); err != nil {
+	if _, err := in.reg.EnsureSystemAdmin(context.Background(), "a new password"); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 	if _, _, err := in.reg.Authenticate(

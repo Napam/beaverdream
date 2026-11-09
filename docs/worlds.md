@@ -81,7 +81,7 @@ Public play needs care:
 - Keep the app behind HTTPS. Page scripts run with the play session and must
   never reach the app origin's HTML.
 - Keep `ADMIN_PASSWORD` set and strong. A restart restores the zero-id
-  bootstrap admin with that password even if its role or state was changed
+  system admin with that password even if its role or state was changed
   outside the app.
 - Set both daily budgets to values you can afford. There is no login or HTTP
   rate limit, no email and no audit log in this version; the only limits are

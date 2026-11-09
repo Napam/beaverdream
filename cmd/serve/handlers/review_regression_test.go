@@ -52,7 +52,7 @@ func TestReviewInvalidInviteRevokesSessionWithoutCSRF(t *testing.T) {
 
 func TestReviewAPITokenRevokeClosesItsStream(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
-	_, token, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, token, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestReviewAPITokenRevokeClosesItsStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, otherToken, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, otherToken, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestReviewDeleteDuringOpenDoesNotRecreateWorld(t *testing.T) {
 		handlers.AppConfig{},
 	)
 	defer app.Close()
-	_, api, _ := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, api, _ := in.createAdminAPIToken(context.Background())
 	router := app.AppRouter()
 	req := httptest.NewRequest("GET", "/admin/worlds/heroes/", nil)
 	req.Header.Set("Authorization", "Bearer "+api)
@@ -191,7 +191,7 @@ func TestReviewDisableWhileWorldLoadsClosesStream(t *testing.T) {
 	done := make(chan struct{})
 	go func() { app.PlayRouter().ServeHTTP(httptest.NewRecorder(), req); close(done) }()
 	<-entered
-	_, api, _ := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, api, _ := in.createAdminAPIToken(context.Background())
 	disable := httptest.NewRequest(
 		"POST",
 		"/admin/identities/"+id.ID+"/disable",
@@ -310,7 +310,7 @@ func TestReviewCanceledDeleteCanBeRetried(t *testing.T) {
 		in.adminLoginID,
 		registry.ScopePlay,
 	)
-	_, api, _ := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, api, _ := in.createAdminAPIToken(context.Background())
 	pinned := &reviewPinnedBody{entered: make(chan struct{}), release: make(chan struct{})}
 	post := httptest.NewRequest("POST", "/worlds/heroes/posts", pinned)
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -349,7 +349,7 @@ func TestReviewCanceledDeleteCanBeRetried(t *testing.T) {
 
 func TestReviewAdminRevokedWhileWorldLoads(t *testing.T) {
 	in := newInstance(t, instanceOptions{})
-	_, api, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, api, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestReviewCloseWaitsForLoadingWorld(t *testing.T) {
 	app := handlers.NewApp(logger, in.reg, mgr, func() *webmaster.ChangesetRunner {
 		return webmaster.New(openAIForReview(in), "mock-model", 3, "")
 	}, handlers.AppConfig{})
-	_, api, err := in.reg.CreateAPIToken(context.Background(), in.adminID, in.adminLoginID)
+	_, api, err := in.createAdminAPIToken(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,13 +40,14 @@ func (i AppInviteRow) Status() string {
 type AppIdentity struct {
 	ID          string
 	DisplayName string
+	Username    string
 	Disabled    bool
 	// Admin reports an active ADMIN role.
 	Admin bool
-	// Bootstrap is the fixed zero-id account. It cannot be disabled or
+	// SystemAdmin is the fixed zero-id account. It cannot be disabled or
 	// demoted.
-	Bootstrap bool
-	CreatedAt time.Time
+	SystemAdmin bool
+	CreatedAt   time.Time
 }
 
 // The app admin's sections. The URL picks one, so a reload and a bookmark
@@ -97,6 +98,10 @@ type AppView struct {
 
 	// NewInviteLink is the one-time redemption URL after creating an invite.
 	NewInviteLink string
+	// NewPasswordResetLink is the one-time reset URL after issuing one.
+	NewPasswordResetLink string
+	// NewPasswordResetFor names the account the link belongs to.
+	NewPasswordResetFor string
 	// NewAPIToken is the one-time token after minting one.
 	NewAPIToken string
 }
@@ -109,6 +114,11 @@ func WorldPlayPath(slug string) string {
 // InvitePath is the public redemption page.
 func InvitePath(code string) string {
 	return "/invite/" + code
+}
+
+// ResetPath is the public password reset page.
+func ResetPath(code string) string {
+	return "/reset/" + code
 }
 
 // appAdminTitle names the instance admin page in the browser tab: the visible

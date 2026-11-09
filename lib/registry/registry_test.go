@@ -51,11 +51,11 @@ func newRegistry(t *testing.T, clock *fakeClock) *registry.Registry {
 	return reg
 }
 
-func newAdmin(t *testing.T, reg *registry.Registry) registry.BootstrapResult {
+func newAdmin(t *testing.T, reg *registry.Registry) registry.SystemAdminResult {
 	t.Helper()
-	result, err := reg.EnsureBootstrapAdmin(context.Background(), "admin-password")
+	result, err := reg.EnsureSystemAdmin(context.Background(), "admin-password")
 	if err != nil {
-		t.Fatalf("bootstrap admin: %v", err)
+		t.Fatalf("system admin: %v", err)
 	}
 	return result
 }
@@ -74,7 +74,7 @@ func TestRegistryTimestampForm(t *testing.T) {
 	}
 }
 
-func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
+func TestSystemAdminRestoresAndRotates(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{t: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)}
 	reg := newRegistry(t, clock)
@@ -84,7 +84,7 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 	}
 	admin, err := reg.IsAdmin(ctx, first.IdentityID)
 	if err != nil || !admin {
-		t.Fatalf("bootstrap admin role = %v, %v", admin, err)
+		t.Fatalf("system admin role = %v, %v", admin, err)
 	}
 
 	_, oldSession, oldToken, err := reg.Login(ctx, "admin", "admin-password")
@@ -98,7 +98,7 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 		t.Fatalf("authenticate: %v", err)
 	}
 
-	same, err := reg.EnsureBootstrapAdmin(ctx, "admin-password")
+	same, err := reg.EnsureSystemAdmin(ctx, "admin-password")
 	if err != nil {
 		t.Fatalf("same bootstrap: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 		t.Fatalf("same password revoked the session: %v", err)
 	}
 
-	rotated, err := reg.EnsureBootstrapAdmin(ctx, "new-admin-password")
+	rotated, err := reg.EnsureSystemAdmin(ctx, "new-admin-password")
 	if err != nil {
 		t.Fatalf("rotate bootstrap: %v", err)
 	}
@@ -147,14 +147,14 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 	) {
 		t.Fatalf("disabled admin login: %v", err)
 	}
-	if _, err := reg.EnsureBootstrapAdmin(ctx, "new-admin-password"); err != nil {
+	if _, err := reg.EnsureSystemAdmin(ctx, "new-admin-password"); err != nil {
 		t.Fatalf("restore disabled admin: %v", err)
 	}
 	if admin, err := reg.IsAdmin(ctx, first.IdentityID); err != nil || !admin {
 		t.Fatalf("restored admin = %v, %v", admin, err)
 	}
 
-	generated, err := reg.EnsureBootstrapAdmin(ctx, "")
+	generated, err := reg.EnsureSystemAdmin(ctx, "")
 	if err != nil {
 		t.Fatalf("generated bootstrap: %v", err)
 	}
@@ -163,12 +163,12 @@ func TestBootstrapAdminRestoresAndRotates(t *testing.T) {
 	}
 }
 
-func TestBootstrapAdminKeepsZeroIDAndRole(t *testing.T) {
+func TestSystemAdminKeepsZeroIDAndRole(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{t: time.Date(2026, 3, 5, 6, 7, 8, 0, time.UTC)}
 	reg := newRegistry(t, clock)
 	admin := newAdmin(t, reg)
-	if admin.IdentityID != registry.BootstrapAdminID {
+	if admin.IdentityID != registry.SystemAdminID {
 		t.Fatalf("bootstrap id = %q, want zero id", admin.IdentityID)
 	}
 	stored, err := reg.GetIdentity(ctx, admin.IdentityID)
@@ -177,6 +177,9 @@ func TestBootstrapAdminKeepsZeroIDAndRole(t *testing.T) {
 	}
 	if !stored.Admin {
 		t.Fatal("bootstrap is not flagged as admin")
+	}
+	if stored.Username != registry.SystemAdminUsername {
+		t.Fatalf("bootstrap username = %q", stored.Username)
 	}
 
 	other, err := reg.CreateIdentityWithPassword(
@@ -219,12 +222,12 @@ func TestBootstrapAdminKeepsZeroIDAndRole(t *testing.T) {
 	}
 }
 
-func TestBootstrapAdminMovesToZeroID(t *testing.T) {
+func TestSystemAdminMovesToZeroID(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{t: time.Date(2026, 3, 6, 7, 8, 9, 0, time.UTC)}
 	reg := newRegistry(t, clock)
 	admin := newAdmin(t, reg)
-	if admin.IdentityID != registry.BootstrapAdminID {
+	if admin.IdentityID != registry.SystemAdminID {
 		t.Fatalf("bootstrap id = %q, want zero id", admin.IdentityID)
 	}
 	_, _, token, err := reg.Login(ctx, "admin", "admin-password")
@@ -242,7 +245,7 @@ func TestBootstrapAdminMovesToZeroID(t *testing.T) {
 		t.Fatalf("defer foreign keys: %v", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE identities SET id = ? WHERE id = ?`, oldID, registry.BootstrapAdminID,
+		`UPDATE identities SET id = ? WHERE id = ?`, oldID, registry.SystemAdminID,
 	); err != nil {
 		t.Fatalf("move identity: %v", err)
 	}
@@ -255,7 +258,7 @@ func TestBootstrapAdminMovesToZeroID(t *testing.T) {
 		`UPDATE worlds SET created_by = ? WHERE created_by = ?`,
 		`UPDATE usage SET identity_id = ? WHERE identity_id = ?`,
 	} {
-		if _, err := tx.ExecContext(ctx, query, oldID, registry.BootstrapAdminID); err != nil {
+		if _, err := tx.ExecContext(ctx, query, oldID, registry.SystemAdminID); err != nil {
 			t.Fatalf("move reference: %v", err)
 		}
 	}
@@ -263,11 +266,11 @@ func TestBootstrapAdminMovesToZeroID(t *testing.T) {
 		t.Fatalf("commit move: %v", err)
 	}
 
-	restored, err := reg.EnsureBootstrapAdmin(ctx, "admin-password")
+	restored, err := reg.EnsureSystemAdmin(ctx, "admin-password")
 	if err != nil {
 		t.Fatalf("restore zero id: %v", err)
 	}
-	if restored.IdentityID != registry.BootstrapAdminID {
+	if restored.IdentityID != registry.SystemAdminID {
 		t.Fatalf("restored id = %q, want zero id", restored.IdentityID)
 	}
 	if _, err := reg.GetIdentity(ctx, oldID); !errors.Is(err, registry.ErrNotFound) {
@@ -276,7 +279,7 @@ func TestBootstrapAdminMovesToZeroID(t *testing.T) {
 	if _, _, err := reg.Authenticate(ctx, token, registry.ScopeApp); err != nil {
 		t.Fatalf("moved session no longer authenticates: %v", err)
 	}
-	if ok, err := reg.IsAdmin(ctx, registry.BootstrapAdminID); err != nil || !ok {
+	if ok, err := reg.IsAdmin(ctx, registry.SystemAdminID); err != nil || !ok {
 		t.Fatalf("moved admin role = %v, %v", ok, err)
 	}
 }
@@ -499,7 +502,7 @@ func TestSessionScopesExpiryAndCSRF(t *testing.T) {
 	}
 
 	apiSession, apiToken, err := reg.CreateAPIToken(
-		ctx, admin.IdentityID, loginSession.LoginID,
+		ctx, admin.IdentityID, loginSession.LoginID, loginSession.Hash,
 	)
 	if err != nil {
 		t.Fatalf("create api token: %v", err)
@@ -536,9 +539,9 @@ func TestSessionScopesExpiryAndCSRF(t *testing.T) {
 	).Scan(&memberLogin); err != nil {
 		t.Fatalf("read member login: %v", err)
 	}
-	if _, _, err := reg.CreateAPIToken(ctx, member.ID, memberLogin); !errors.Is(
-		err, registry.ErrForbidden,
-	) {
+	if _, _, err := reg.CreateAPIToken(
+		ctx, member.ID, memberLogin, "",
+	); !errors.Is(err, registry.ErrForbidden) {
 		t.Fatalf("member api token = %v", err)
 	}
 }
@@ -561,7 +564,13 @@ func TestHandoffIsSingleUseBoundAndExpires(t *testing.T) {
 		t.Fatalf("ready world: %v", err)
 	}
 
-	code, _, err := reg.CreateHandoff(ctx, login.ID, loginSession.LoginID, world.ID)
+	code, _, err := reg.CreateHandoff(
+		ctx,
+		login.ID,
+		loginSession.LoginID,
+		loginSession.Hash,
+		world.ID,
+	)
 	if err != nil {
 		t.Fatalf("create handoff: %v", err)
 	}
@@ -585,7 +594,17 @@ func TestHandoffIsSingleUseBoundAndExpires(t *testing.T) {
 		t.Fatalf("second exchange = %v", err)
 	}
 
-	expiring, _, err := reg.CreateHandoff(ctx, login.ID, loginSession.LoginID, world.ID)
+	current, _, err := reg.NewSession(ctx, login.ID, loginSession.LoginID, registry.ScopeApp)
+	if err != nil {
+		t.Fatalf("fresh app session: %v", err)
+	}
+	expiring, _, err := reg.CreateHandoff(
+		ctx,
+		login.ID,
+		loginSession.LoginID,
+		current.Hash,
+		world.ID,
+	)
 	if err != nil {
 		t.Fatalf("create expiring handoff: %v", err)
 	}
@@ -596,7 +615,13 @@ func TestHandoffIsSingleUseBoundAndExpires(t *testing.T) {
 		t.Fatalf("handoff at exact expiry = %v", err)
 	}
 
-	disabled, _, err := reg.CreateHandoff(ctx, login.ID, loginSession.LoginID, world.ID)
+	disabled, _, err := reg.CreateHandoff(
+		ctx,
+		login.ID,
+		loginSession.LoginID,
+		current.Hash,
+		world.ID,
+	)
 	if err != nil {
 		t.Fatalf("create disabled handoff: %v", err)
 	}

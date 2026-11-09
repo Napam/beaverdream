@@ -74,13 +74,13 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	bootstrap, err := reg.EnsureBootstrapAdmin(ctx, env.Vars.AdminPassword)
+	bootstrap, err := reg.EnsureSystemAdmin(ctx, env.Vars.AdminPassword)
 	if err != nil {
 		return fmt.Errorf("bootstrap the admin: %w", err)
 	}
 	if bootstrap.Generated {
 		logger.Warn("ADMIN_PASSWORD is not set, generated one for this run",
-			slog.String("admin_username", registry.BootstrapUsername),
+			slog.String("admin_username", registry.SystemAdminUsername),
 			slog.String("admin_password", bootstrap.Password),
 		)
 	}

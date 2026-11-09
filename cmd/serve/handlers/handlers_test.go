@@ -126,7 +126,7 @@ func withIdentity(req *http.Request, name string) *http.Request {
 	return handlers.WithTestPrincipal(req, name, name, false, true)
 }
 
-// withAdmin makes a request as the bootstrap admin on the app plane.
+// withAdmin makes a request as the system admin on the app plane.
 func withAdmin(req *http.Request) *http.Request {
 	return handlers.WithTestAdmin(req, "admin", "admin")
 }

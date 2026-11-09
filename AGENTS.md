@@ -381,8 +381,8 @@ prefer simple, readable code over production hardening.
   then refuses a revoked or expired session or a disabled identity. An app
   cookie never authorizes a play route and a play cookie never authorizes an
   app route. Play sessions are minted by the handoff, not by login.
-- Admin is an identity with the `ADMIN` role, on the app port; its bootstrap
-  username is `admin` and its identity id is all zeroes. An admin can make or
+- Admin is an identity with the `ADMIN` role, on the app port; its username is
+  `admin` and its identity id is all zeroes. An admin can make or
   remove another admin from `/admin/accounts`, but the zero id cannot be
   disabled or demoted. `/admin` is the world list, `/admin/accounts` and
   `/admin/invites` hold the accounts and invites, and
@@ -394,13 +394,18 @@ prefer simple, readable code over production hardening.
   (`frame-ancestors 'none'` or `X-Frame-Options: DENY`) and sends
   `Cross-Origin-Opener-Policy: same-origin`, so a play page cannot frame it or
   keep a window-opener reference.
+- An admin can issue a one-time password reset link for an enabled account. The
+  link is stored as a hash, valid for one hour, and replaced when another is
+  issued. Redeeming it updates the password login, revokes every session,
+  deletes the identity's handoffs, and closes its streams. The system admin is
+  never resettable; use `ADMIN_PASSWORD` and a restart.
 - `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
   server writes an argon2id hash of it into the admin identity's password
   login, clears `disabled_at`, grants `ADMIN` when missing, moves an older
   random-id admin onto the zero id, and revokes the admin's sessions when the
   password changed. Compare by verifying the password,
   not by comparing argon2 hashes. Empty generates a password and logs it. The UI
-  does not change the bootstrap login.
+  does not change the system admin login.
 - Every state-changing app POST that authenticates by cookie needs the `csrf`
   form field, derived with an HMAC from the session and compared in constant
   time. The panel renders it into every action form, and the live stream renders

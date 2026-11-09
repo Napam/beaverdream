@@ -101,15 +101,45 @@ func (r *Registry) Login(
 	if !r.hasher.Verify(password, hash) {
 		return nil, nil, "", ErrInvalidCredentials
 	}
-	now := r.timestamp()
-	if _, err := r.db.ExecContext(ctx,
-		`UPDATE logins SET last_login_at = ? WHERE id = ?`, now, loginID,
+
+	// The hash was verified outside the write lock. Re-read it after taking the
+	// lock, so a reset that landed in between cannot leave a fresh session
+	// behind. Argon2 never runs while the lock is held.
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("begin login: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentHash string
+	var currentDisabled sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT l.secret_hash, i.disabled_at
+		 FROM logins l JOIN identities i ON i.id = l.identity_id
+		 WHERE l.id = ? AND l.identity_id = ?`,
+		loginID, identityID,
+	).Scan(&currentHash, &currentDisabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, "", ErrInvalidCredentials
+	}
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("read login: %w", err)
+	}
+	if currentDisabled.Valid || currentHash != hash {
+		return nil, nil, "", ErrInvalidCredentials
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE logins SET last_login_at = ? WHERE id = ?`, r.timestamp(), loginID,
 	); err != nil {
 		return nil, nil, "", fmt.Errorf("touch login: %w", err)
 	}
-	session, token, err := r.NewSession(ctx, identityID, loginID, ScopeApp)
+	session, token, err := r.insertSessionTx(
+		ctx, tx, identityID, loginID, ScopeApp, r.appTTL,
+	)
 	if err != nil {
 		return nil, nil, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, "", fmt.Errorf("commit login: %w", err)
 	}
 	identity, err := r.GetIdentity(ctx, identityID)
 	if err != nil {

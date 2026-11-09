@@ -37,7 +37,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("open registry: %v", err)
 	}
 	t.Cleanup(func() { _ = reg.Close() })
-	admin, err := reg.EnsureBootstrapAdmin(ctx, "admin-password")
+	admin, err := reg.EnsureSystemAdmin(ctx, "admin-password")
 	if err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}

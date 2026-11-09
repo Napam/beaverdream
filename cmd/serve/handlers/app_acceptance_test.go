@@ -74,9 +74,9 @@ func newInstance(t *testing.T, opts instanceOptions) *instance {
 	}
 	t.Cleanup(func() { _ = reg.Close() })
 
-	boot, err := reg.EnsureBootstrapAdmin(context.Background(), acceptanceAdminPassword)
+	boot, err := reg.EnsureSystemAdmin(context.Background(), acceptanceAdminPassword)
 	if err != nil {
-		t.Fatalf("bootstrap admin: %v", err)
+		t.Fatalf("system admin: %v", err)
 	}
 
 	manager := worlds.NewManager(
@@ -297,6 +297,18 @@ func (in *instance) worldDB(t *testing.T, id string) *worlds.Handle {
 	}
 	t.Cleanup(func() { _ = handle.Close() })
 	return handle
+}
+
+// createAdminAPIToken signs the admin in and mints a token from that app
+// session, the same way the account page does.
+func (in *instance) createAdminAPIToken(
+	ctx context.Context,
+) (*registry.Session, string, error) {
+	_, session, _, err := in.reg.Login(ctx, "admin", acceptanceAdminPassword)
+	if err != nil {
+		return nil, "", err
+	}
+	return in.reg.CreateAPIToken(ctx, in.adminID, in.adminLoginID, session.Hash)
 }
 
 func (in *instance) redeem(

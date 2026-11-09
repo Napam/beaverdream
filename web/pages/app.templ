@@ -187,11 +187,11 @@ templ authShell(title string, body templ.Component) {
 }
 
 // AppLogin is the app sign-in page. next is where a success returns.
-templ AppLogin(next string, failed string, action string, datastar string) {
-	@authShell("sign in · beaverdream", loginCard(next, failed, action))
+templ AppLogin(next string, failed string, notice string, action string, datastar string) {
+	@authShell("sign in · beaverdream", loginCard(next, failed, notice, action))
 }
 
-templ loginCard(next string, failed string, action string) {
+templ loginCard(next string, failed string, notice string, action string) {
 	<section class={ appUserCard + " p-6" }>
 		<h1 class="text-xl font-semibold tracking-tight">welcome back</h1>
 		<p class={ appUserMuted + " mt-1" }>sign in with your account, or open your invite link.</p>
@@ -205,6 +205,9 @@ templ loginCard(next string, failed string, action string) {
 				<label class={ appUserField } for="password">password</label>
 				<input id="password" name="password" type="password" autocomplete="current-password" required class={ appUserInput + " mt-1" }/>
 			</div>
+			if notice != "" {
+				<p class="text-sm text-emerald-700 dark:text-emerald-400">{ notice }</p>
+			}
 			if failed != "" {
 				<p class="text-sm text-red-600 dark:text-red-400">{ failed }</p>
 			}
@@ -300,6 +303,64 @@ templ inviteCard(err string, username string, displayName string) {
 	</section>
 }
 
+// AppResetPassword is the form a one-time reset link opens. The action keeps
+// the code in the URL, so the form itself carries no secret field.
+templ AppResetPassword(code string, err string) {
+	@authShell("reset password · beaverdream", resetPasswordCard(code, err))
+}
+
+templ resetPasswordCard(code string, err string) {
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">choose a new password</h1>
+		<p class={ appUserMuted + " mt-1" }>this link expires one hour after it was created. using it signs out every device that is signed in to the account.</p>
+		<form method="post" action={ templ.SafeURL(ResetPath(code)) } class="mt-5 flex flex-col gap-3">
+			<div>
+				<label class={ appUserField } for="password">new password</label>
+				<input
+					id="password"
+					name="password"
+					type="password"
+					autocomplete="new-password"
+					minlength="8"
+					required
+					class={ appUserInput + " mt-1" }
+				/>
+				<p class={ appUserMuted + " mt-1 text-xs" }>at least 8 characters.</p>
+			</div>
+			<div>
+				<label class={ appUserField } for="confirm">confirm password</label>
+				<input
+					id="confirm"
+					name="confirm"
+					type="password"
+					autocomplete="new-password"
+					minlength="8"
+					required
+					class={ appUserInput + " mt-1" }
+				/>
+			</div>
+			if err != "" {
+				<p class="text-sm text-red-600 dark:text-red-400">{ err }</p>
+			}
+			<button type="submit" class={ appUserButton + " mt-1 w-full" }>set new password</button>
+		</form>
+	</section>
+}
+
+// AppResetInvalid is one answer for unknown, expired, used and ineligible
+// links, so a visitor cannot tell them apart.
+templ AppResetInvalid() {
+	@authShell("reset link · beaverdream", resetInvalidCard())
+}
+
+templ resetInvalidCard() {
+	<section class={ appUserCard + " p-6" }>
+		<h1 class="text-xl font-semibold tracking-tight">this reset link is not valid</h1>
+		<p class={ appUserMuted + " mt-2" }>ask an admin for a new link, or sign in if you remember the password.</p>
+		<a class={ appUserButton + " mt-5 w-full" } href="/login">go to sign in</a>
+	</section>
+}
+
 // AppLobby lists every ready world as a card with an enter button.
 templ AppLobby(view AppView) {
 	@userShell("worlds · beaverdream", lobbyBody(view))
@@ -363,7 +424,7 @@ templ accountBody(view AppView) {
 			</div>
 			if view.NewAPIToken != "" {
 				<div class="mt-6">
-					@adminFlash("api token · shown once", view.NewAPIToken)
+					@adminFlash("api token · shown once", view.NewAPIToken, "")
 				</div>
 			}
 			<div class="mt-8 flex flex-col gap-4">
@@ -444,10 +505,17 @@ templ adminAppBody(view AppView) {
 			<p class="rounded-md border border-red-500/40 bg-red-50 px-3 py-2 text-sm text-red-800 dark:bg-red-950/30 dark:text-red-300">{ view.Error }</p>
 		}
 		if view.NewInviteLink != "" {
-			@adminFlash("invite link · shown once", view.NewInviteLink)
+			@adminFlash("invite link · shown once", view.NewInviteLink, "")
+		}
+		if view.NewPasswordResetLink != "" {
+			@adminFlash(
+				"password reset link · "+view.NewPasswordResetFor+" · shown once, valid one hour",
+				view.NewPasswordResetLink,
+				"send it privately. existing sessions stay active until the link is used; using it signs out every device.",
+			)
 		}
 		if view.NewAPIToken != "" {
-			@adminFlash("api token · shown once", view.NewAPIToken)
+			@adminFlash("api token · shown once", view.NewAPIToken, "")
 		}
 		switch view.AdminSection {
 			case AdminInvites:
@@ -504,7 +572,7 @@ templ adminAppTab(view AppView, section string, path string, label string) {
 
 // adminFlash shows a value that is only ever shown once: the invite link or a
 // script token. Selecting the field is the copy gesture.
-templ adminFlash(label string, value string) {
+templ adminFlash(label string, value string, note string) {
 	<section class="rounded-lg border border-emerald-500/40 bg-emerald-50 p-4 dark:bg-emerald-950/30">
 		<p class="text-xs font-semibold tracking-wide text-emerald-800 uppercase dark:text-emerald-300">{ label }</p>
 		<input
@@ -514,6 +582,9 @@ templ adminFlash(label string, value string) {
 			class="mt-2 w-full rounded-md border border-emerald-500/30 bg-white px-3 py-2 font-mono text-xs text-emerald-900 focus:outline-none dark:bg-neutral-950 dark:text-emerald-200"
 		/>
 		<p class="mt-1 text-xs text-emerald-700 dark:text-emerald-400">this is the only time the full value is shown. copy it now.</p>
+		if note != "" {
+			<p class="mt-1 text-xs text-emerald-700 dark:text-emerald-400">{ note }</p>
+		}
 	</section>
 }
 
@@ -650,7 +721,7 @@ templ accountsSection(view AppView) {
 			<p class={ adminLabel }>accounts</p>
 			<p class={ adminMuted }>{ plural(len(view.Identities), "account") }</p>
 		</div>
-		<p class={ adminMuted + " mt-2" }>admins can make other accounts admins. the bootstrap admin cannot be demoted or disabled. disabling an account signs it out everywhere and closes its open worlds.</p>
+		<p class={ adminMuted + " mt-2" }>admins can make other accounts admins and issue one-time password reset links. the system admin cannot be reset, demoted or disabled. disabling an account signs it out everywhere and closes its open worlds.</p>
 		if len(view.Identities) == 0 {
 			<p class={ appEmpty + " mt-3" }>no accounts yet. send someone an invite.</p>
 		} else {
@@ -664,19 +735,25 @@ templ accountsSection(view AppView) {
 }
 
 templ accountRow(view AppView, identity AppIdentity) {
-	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3" data-account={ identity.ID }>
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3" data-account={ identity.ID } data-username={ identity.Username }>
 		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
 			<div class="flex flex-wrap items-center gap-2">
 				<p class="truncate text-sm font-medium text-gray-900 dark:text-neutral-100">{ identity.DisplayName }</p>
-				if identity.Bootstrap {
-					<span class="inline-flex rounded-sm bg-gray-900 px-1.5 py-px text-[11px] font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">bootstrap admin</span>
+				if identity.SystemAdmin {
+					<span class="inline-flex rounded-sm bg-gray-900 px-1.5 py-px text-[11px] font-medium text-white dark:bg-neutral-100 dark:text-neutral-900">system admin</span>
 				} else if identity.Admin {
 					<span class="inline-flex rounded-sm bg-gray-100 px-1.5 py-px text-[11px] font-medium text-gray-700 dark:bg-neutral-800 dark:text-neutral-300">admin</span>
 				}
 			</div>
-			<p class={ adminMuted + " mt-0.5" }>joined { identity.CreatedAt.Format("Jan 2, 2006") }</p>
+			<p class={ adminMuted + " mt-0.5" }>
+				if identity.Username != "" {
+					<span class="font-mono text-gray-700 dark:text-neutral-300">{ identity.Username }</span>
+					<span>· </span>
+				}
+				joined { identity.CreatedAt.Format("Jan 2, 2006") }
+			</p>
 		</div>
-		if identity.Bootstrap {
+		if identity.SystemAdmin {
 			<span class={ adminMuted }>protected</span>
 		} else {
 			if identity.Admin {
@@ -692,6 +769,12 @@ templ accountRow(view AppView, identity AppIdentity) {
 				<form method="post" action={ templ.SafeURL("/admin/identities/" + identity.ID + "/promote") }>
 					@csrfInput(view.CSRF)
 					<button type="submit" class={ adminButton }>make admin</button>
+				</form>
+			}
+			if !identity.Disabled && identity.Username != "" {
+				<form method="post" action={ templ.SafeURL("/admin/identities/" + identity.ID + "/password-reset") }>
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ adminButton }>create reset link</button>
 				</form>
 			}
 			if identity.Disabled {

@@ -33,6 +33,8 @@ func (a *App) AppRouter() *chi.Mux {
 	router.Post("/login", a.Login)
 	router.Get("/invite/{code}", a.InvitePage)
 	router.Post("/invite/{code}", a.RedeemInvite)
+	router.Get("/reset/{code}", a.ResetPasswordPage)
+	router.Post("/reset/{code}", a.ResetPassword)
 
 	router.Group(func(r chi.Router) {
 		r.Use(a.requireApp)
@@ -59,6 +61,7 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Post("/admin/invites/{id}/revoke", a.RevokeInvite)
 			ar.Post("/admin/identities/{id}/promote", a.PromoteIdentity)
 			ar.Post("/admin/identities/{id}/demote", a.DemoteIdentity)
+			ar.Post("/admin/identities/{id}/password-reset", a.ResetIdentityPassword)
 			ar.Post("/admin/identities/{id}/disable", a.DisableIdentity)
 			ar.Get("/admin/worlds/{slug}", a.AdminWorldRoot)
 
@@ -168,7 +171,11 @@ func (a *App) LoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	a.renderLogin(w, r, r.URL.Query().Get("next"), "")
+	notice := ""
+	if r.URL.Query().Get("reset") != "" {
+		notice = "password changed. sign in with the new one."
+	}
+	a.renderLogin(w, r, r.URL.Query().Get("next"), "", notice)
 }
 
 // safeNext returns a local path to send the browser to after a successful
@@ -207,14 +214,19 @@ func hasUnsafeRune(value string) bool {
 	return false
 }
 
-func (a *App) renderLogin(w http.ResponseWriter, r *http.Request, next, failed string) {
+func (a *App) renderLogin(
+	w http.ResponseWriter,
+	r *http.Request,
+	next, failed, notice string,
+) {
 	next = safeNext(next)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if failed != "" {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
-	_ = pages.AppLogin(next, failed, a.loginURL(r), a.cfg.Config.DatastarSrc).Render(r.Context(), w)
+	_ = pages.AppLogin(next, failed, notice, a.loginURL(r), a.cfg.Config.DatastarSrc).
+		Render(r.Context(), w)
 }
 
 // duplicateAppCookiesNotice is the login page's refusal when the guarded routes
@@ -238,7 +250,7 @@ func (a *App) signedInPage(w http.ResponseWriter, r *http.Request) bool {
 		a.logger.Warn("Sign-in route refused for conflicting cookies",
 			slog.String("route", logRoute(r)),
 		)
-		a.renderLogin(w, r, "/", duplicateAppCookiesNotice)
+		a.renderLogin(w, r, "/", duplicateAppCookiesNotice, "")
 		return true
 	}
 	p, err := a.authenticateAppCookie(r)
@@ -272,7 +284,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if errors.Is(err, registry.ErrInvalidCredentials) {
-			a.renderLogin(w, r, next, "wrong username or password")
+			a.renderLogin(w, r, next, "wrong username or password", "")
 			return
 		}
 		a.logger.Error("Failed to sign in", slog.Any("error", err))
@@ -283,6 +295,82 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	next = safeNext(next)
 	a.logger.Info("Identity signed in", slog.String("identity_id", identity.ID))
 	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// ResetPasswordPage shows the form behind a one-time reset link. A GET never
+// consumes the code, and every unusable code gets the same page.
+func (a *App) ResetPasswordPage(w http.ResponseWriter, r *http.Request) {
+	code := chi.URLParam(r, "code")
+	valid, err := a.reg.PasswordResetValid(r.Context(), code)
+	if err != nil {
+		a.logger.Error("Failed to read a password reset", slog.Any("error", err))
+		http.Error(w, "Could not open the link", http.StatusInternalServerError)
+		return
+	}
+	a.renderResetPassword(w, r, code, "", valid)
+}
+
+// ResetPassword consumes a reset link and sets the chosen password.
+func (a *App) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	code := chi.URLParam(r, "code")
+	valid, err := a.reg.PasswordResetValid(r.Context(), code)
+	if err != nil {
+		a.logger.Error("Failed to read a password reset", slog.Any("error", err))
+		http.Error(w, "Could not open the link", http.StatusInternalServerError)
+		return
+	}
+	if !valid {
+		a.renderResetPassword(w, r, code, "", false)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
+	password := r.FormValue("password")
+	switch {
+	case r.FormValue("confirm") != password:
+		a.renderResetPassword(w, r, code, "the passwords do not match", true)
+		return
+	case len(password) > 1024:
+		a.renderResetPassword(w, r, code, "passwords can be at most 1 kilobyte.", true)
+		return
+	case registry.ValidatePassword(password) != nil:
+		a.renderResetPassword(w, r, code, "passwords need at least 8 characters.", true)
+		return
+	}
+	identityID, err := a.reg.ResetPassword(r.Context(), code, password)
+	switch {
+	case errors.Is(err, registry.ErrResetInvalid):
+		a.renderResetPassword(w, r, code, "", false)
+		return
+	case err != nil:
+		a.logger.Error("Failed to reset a password", slog.Any("error", err))
+		http.Error(w, "Could not reset the password", http.StatusInternalServerError)
+		return
+	}
+	a.cancelIdentityStreams(identityID)
+	a.logger.Info("Password reset", slog.String("identity_id", identityID))
+	http.Redirect(w, r, "/login?reset=1", http.StatusSeeOther)
+}
+
+func (a *App) renderResetPassword(
+	w http.ResponseWriter,
+	r *http.Request,
+	code, message string,
+	valid bool,
+) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if !valid {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = pages.AppResetInvalid().Render(r.Context(), w)
+		return
+	}
+	if message != "" {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	_ = pages.AppResetPassword(code, message).Render(r.Context(), w)
 }
 
 // Logout revokes this app session and forgets the app cookie. Play sessions
@@ -406,8 +494,18 @@ func (a *App) PlayHandoff(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	code, _, err := a.reg.CreateHandoff(r.Context(), p.IdentityID, p.LoginID, world.ID)
+	code, _, err := a.reg.CreateHandoff(
+		r.Context(),
+		p.IdentityID,
+		p.LoginID,
+		p.SessionHash,
+		world.ID,
+	)
 	if err != nil {
+		if errors.Is(err, registry.ErrSessionInvalid) {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
 		a.logger.Error("Failed to create a handoff", slog.Any("error", err))
 		http.Error(w, "Could not open the world", http.StatusInternalServerError)
 		return
@@ -561,10 +659,16 @@ func (a *App) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principalFrom(r)
-	_, token, err := a.reg.CreateAPIToken(r.Context(), p.IdentityID, p.LoginID)
+	_, token, err := a.reg.CreateAPIToken(
+		r.Context(), p.IdentityID, p.LoginID, p.SessionHash,
+	)
 	if err != nil {
 		if errors.Is(err, registry.ErrForbidden) {
 			http.Error(w, "Only an admin may mint a token", http.StatusForbidden)
+			return
+		}
+		if errors.Is(err, registry.ErrSessionInvalid) {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
 		a.logger.Error("Failed to mint an api token", slog.Any("error", err))
@@ -619,7 +723,7 @@ func (a *App) AdminModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) renderAdmin(w http.ResponseWriter, r *http.Request, section, message, token string) {
-	view, ok := a.adminView(r, section, message, "", token)
+	view, ok := a.adminView(r, section, message, "", "", token)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -633,30 +737,34 @@ func (a *App) renderAdminWith(
 	section string,
 	extra pages.AppView,
 ) {
-	view, ok := a.adminView(r, section, "", extra.NewInviteLink, extra.NewAPIToken)
+	view, ok := a.adminView(
+		r, section, "", extra.NewInviteLink, extra.NewPasswordResetLink, extra.NewAPIToken,
+	)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	view.NewPasswordResetFor = extra.NewPasswordResetFor
 	a.renderApp(w, r, pages.AppAdmin(view))
 }
 
 func (a *App) adminView(
 	r *http.Request,
-	section, message, link, token string,
+	section, message, link, resetLink, token string,
 ) (pages.AppView, bool) {
 	p := principalFrom(r)
 	if p == nil {
 		return pages.AppView{}, false
 	}
 	view := pages.AppView{
-		Name:          p.DisplayName,
-		Admin:         p.Admin,
-		CSRF:          p.CSRFToken,
-		AdminSection:  section,
-		Error:         message,
-		NewInviteLink: link,
-		NewAPIToken:   token,
+		Name:                 p.DisplayName,
+		Admin:                p.Admin,
+		CSRF:                 p.CSRFToken,
+		AdminSection:         section,
+		Error:                message,
+		NewInviteLink:        link,
+		NewPasswordResetLink: resetLink,
+		NewAPIToken:          token,
 	}
 	worldRows, err := a.reg.ListWorlds(r.Context())
 	if err != nil {
@@ -688,9 +796,10 @@ func (a *App) adminView(
 		view.Identities = append(view.Identities, pages.AppIdentity{
 			ID:          identity.ID,
 			DisplayName: identity.DisplayName,
+			Username:    identity.Username,
 			Disabled:    identity.Disabled(),
 			Admin:       identity.Admin,
-			Bootstrap:   identity.ID == registry.BootstrapAdminID,
+			SystemAdmin: identity.ID == registry.SystemAdminID,
 			CreatedAt:   identity.CreatedAt,
 		})
 	}
@@ -880,7 +989,7 @@ func (a *App) PromoteIdentity(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
 }
 
-// DemoteIdentity removes the ADMIN role. The bootstrap admin keeps it.
+// DemoteIdentity removes the ADMIN role. The system admin keeps it.
 func (a *App) DemoteIdentity(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCSRF(w, r) {
 		return
@@ -893,6 +1002,39 @@ func (a *App) DemoteIdentity(w http.ResponseWriter, r *http.Request) {
 		a.cancelIdentityAdminStreams(id)
 	}
 	http.Redirect(w, r, "/admin/accounts", http.StatusSeeOther)
+}
+
+// ResetIdentityPassword issues one one-time reset link for an account.
+func (a *App) ResetIdentityPassword(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCSRF(w, r) {
+		return
+	}
+	p := principalFrom(r)
+	identityID := chi.URLParam(r, "id")
+	code, _, err := a.reg.CreatePasswordReset(r.Context(), p.IdentityID, identityID)
+	if err != nil {
+		a.logger.Warn("Failed to create a password reset", slog.Any("error", err))
+		a.renderAdmin(w, r, pages.AdminAccounts, "could not create a reset link", "")
+		return
+	}
+	identity, err := a.reg.GetIdentity(r.Context(), identityID)
+	if err != nil {
+		a.logger.Warn("Failed to name a password reset", slog.Any("error", err))
+	}
+	account := ""
+	if identity != nil {
+		account = identity.Username
+		if account == "" {
+			account = identity.DisplayName
+		}
+	}
+	if account == "" {
+		account = "this account"
+	}
+	a.renderAdminWith(w, r, pages.AdminAccounts, pages.AppView{
+		NewPasswordResetLink: appOrigin(r, a.cfg.Config) + pages.ResetPath(code),
+		NewPasswordResetFor:  account,
+	})
 }
 
 // DisableIdentity disables one account and closes its streams in every loaded

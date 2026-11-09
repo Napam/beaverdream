@@ -52,6 +52,7 @@ var (
 	ErrInvalidCredentials = errors.New("registry: invalid credentials")
 	ErrSessionInvalid     = errors.New("registry: session invalid")
 	ErrInviteInvalid      = errors.New("registry: invite invalid")
+	ErrResetInvalid       = errors.New("registry: reset invalid")
 	ErrUsernameTaken      = errors.New("registry: username taken")
 	ErrForbidden          = errors.New("registry: forbidden")
 	ErrBudget             = errors.New("registry: budget exhausted")

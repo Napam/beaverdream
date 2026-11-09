@@ -31,7 +31,7 @@ func TestPinnedStreamAfterDrainStarts(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer func() { _ = reg.Close() }()
-				boot, err := reg.EnsureBootstrapAdmin(ctx, "long-password")
+				boot, err := reg.EnsureSystemAdmin(ctx, "long-password")
 				if err != nil {
 					t.Fatal(err)
 				}

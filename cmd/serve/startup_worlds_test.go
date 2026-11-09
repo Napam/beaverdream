@@ -27,7 +27,7 @@ func TestStartupKeepsEmptyWorldRegistry(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				boot, err := reg.EnsureBootstrapAdmin(ctx, "long-password")
+				boot, err := reg.EnsureSystemAdmin(ctx, "long-password")
 				if err != nil {
 					t.Fatal(err)
 				}

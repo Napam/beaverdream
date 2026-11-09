@@ -261,7 +261,7 @@ func (a *App) anonymousApp(w http.ResponseWriter, r *http.Request) {
 	h := a.cfg.Config
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = pages.AppLogin(next, "", a.loginURL(r), h.DatastarSrc).Render(r.Context(), w)
+	_ = pages.AppLogin(next, "", "", a.loginURL(r), h.DatastarSrc).Render(r.Context(), w)
 }
 
 // gate is the play plane's only anonymous page. It points at the app login.

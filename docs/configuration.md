@@ -82,9 +82,10 @@ host-only with no `Domain`, and `Secure` in secure mode.
   `REGISTRY_MIGRATIONS_DIR` (default `./db/registry/migrations`) if the
   migration folder moves.
 - `task db.migrate.down` rolls the registry back to the auth migration. In the
-  current split that drops `000002_data.sql`, so invites, worlds, handoffs and
-  usage go while accounts, logins and sessions stay. `task db.migrate.up`
-  reapplies it empty. It deletes the `worlds` rows too, so the retained files
+  current split that drops `000002_data.sql` and `000003_password_resets.sql`,
+  so invites, worlds, handoffs, usage and outstanding reset links go while
+  accounts, logins and sessions stay. `task db.migrate.up` reapplies them
+  empty. It deletes the `worlds` rows too, so the retained files
   under `WORLDS_DIR` become orphaned: the app no longer lists or opens them.
   Delete `WORLDS_DIR` by hand for a full wipe. Stop the app first, and point
   `REGISTRY_PATH` at the file you mean.
@@ -94,10 +95,10 @@ files. Never copy a live `.db` file: the WAL may hold recent writes.
 
 ## Accounts, sessions and worlds
 
-- `ADMIN_PASSWORD` (default empty): the bootstrap admin password. On every
+- `ADMIN_PASSWORD` (default empty): the system admin password. On every
   start the server writes an argon2id hash into the admin identity, clears its
   disabled state, grants `ADMIN` if missing, and revokes the admin's sessions
-  when the password changed. The bootstrap identity uses the all-zero id and
+  when the password changed. The system admin identity uses the all-zero id and
   cannot be disabled or demoted. Empty generates a random password and logs it.
   Change the variable and restart; the UI does not change this login.
 - `APP_SESSION_TTL` (default `168h`): how long an app session lasts.

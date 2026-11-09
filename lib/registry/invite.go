@@ -226,6 +226,7 @@ func (r *Registry) RedeemInvite(
 		ID:          identityID,
 		DisplayName: displayName,
 		InviteID:    inviteID,
+		Username:    username,
 		CreatedAt:   nowTime,
 	}, session, token, nil
 }

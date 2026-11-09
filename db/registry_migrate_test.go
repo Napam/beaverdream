@@ -53,6 +53,7 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 		`INSERT INTO worlds (id, slug, status, created_by) VALUES ('world-1', 'first-world', 'ready', 'identity-1')`,
 		`INSERT INTO handoffs (code_hash, identity_id, login_id, world_id, expires_at) VALUES ('handoff-1', 'identity-1', 'login-1', 'world-1', '2999-01-01T00:00:00.000Z')`,
 		`INSERT INTO usage (id, identity_id, world_id, day) VALUES ('usage-1', 'identity-1', 'world-1', '2026-01-01')`,
+		`INSERT INTO password_resets (login_id, code_hash, expires_at) VALUES ('login-1', 'reset-code', '2999-01-01T00:00:00.000Z')`,
 	}
 	for _, statement := range append(authInserts, dataInserts...) {
 		if _, err := conn.ExecContext(ctx, statement); err != nil {
@@ -70,7 +71,7 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 			t.Errorf("%s rows after down = %d, want 1", table, got)
 		}
 	}
-	for _, table := range []string{"invites", "worlds", "handoffs", "usage"} {
+	for _, table := range []string{"invites", "worlds", "handoffs", "usage", "password_resets"} {
 		if tableExists(t, ctx, conn, table) {
 			t.Errorf("%s still exists after down to 1", table)
 		}
@@ -80,7 +81,9 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 		t.Fatalf("up again: %v", err)
 	}
 
-	for _, table := range []string{"invites", "worlds", "handoffs", "usage"} {
+	for _, table := range []string{
+		"invites", "worlds", "handoffs", "usage", "password_resets",
+	} {
 		if !tableExists(t, ctx, conn, table) {
 			t.Errorf("%s missing after the second up", table)
 			continue
@@ -101,8 +104,8 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 2 {
-		t.Errorf("goose version = %d, want 2", version)
+	if version != 3 {
+		t.Errorf("goose version = %d, want 3", version)
 	}
 }
 
@@ -276,6 +279,19 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 			t.Errorf("%s rows after upgrade = %d, want 1", table, got)
 		}
 	}
+	if !tableExists(t, ctx, conn, "password_resets") {
+		t.Fatal("password_resets missing after upgrade")
+	}
+	if got := countRows(t, ctx, conn, "password_resets"); got != 0 {
+		t.Fatalf("password_resets rows after upgrade = %d, want 0", got)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO password_resets (login_id, code_hash, expires_at)
+		 VALUES ('login-1', 'reset-code', '2999-01-01T00:00:00.000Z')`,
+	); err != nil {
+		t.Fatalf("insert password reset: %v", err)
+	}
+	resetTables := append(append([]string{}, dataTables...), "password_resets")
 
 	var version int
 	if err := conn.QueryRowContext(ctx,
@@ -283,8 +299,8 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 2 {
-		t.Errorf("goose version = %d, want 2", version)
+	if version != 3 {
+		t.Errorf("goose version = %d, want 3", version)
 	}
 
 	if _, err := provider.DownTo(ctx, 1); err != nil {
@@ -295,7 +311,7 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 			t.Errorf("%s rows after down = %d, want 1", table, got)
 		}
 	}
-	for _, table := range dataTables {
+	for _, table := range resetTables {
 		if tableExists(t, ctx, conn, table) {
 			t.Errorf("%s still exists after down to 1", table)
 		}
@@ -304,7 +320,7 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
-	for _, table := range dataTables {
+	for _, table := range resetTables {
 		if !tableExists(t, ctx, conn, table) {
 			t.Errorf("%s missing after the second up", table)
 			continue

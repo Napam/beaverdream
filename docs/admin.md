@@ -20,8 +20,9 @@ scripts off the origin that holds the app session.
 
 - `/admin`: the world list, the create form, and a delete button per world.
 - `/admin/invites`: invite creation and the current invites.
-- `/admin/accounts`: the accounts, with make admin, remove admin and disable
-  buttons. The bootstrap admin is marked and has no destructive controls.
+- `/admin/accounts`: the accounts, with make admin, remove admin, reset password
+  and disable buttons. The system admin is marked and has no destructive or
+  credential controls.
 - `/admin/model`: the registered skills and the tools the webmaster can call,
   read from the same definitions the model requests use. Skill bodies open in
   place; tool parameter schemas are shown as JSON.
@@ -49,8 +50,8 @@ an admin port.
 - The admin is an identity with the `ADMIN` role. Its username is `admin`, and
   it signs in with that username and the bootstrap password. Its identity id is
   all zeroes (`00000000000000000000000000000000`), so it is recognizable and
-  protected: no account, including itself, can disable or demote it.
-- Other admins are ordinary identities with the `ADMIN` role. The bootstrap
+  protected: no account, including itself, can disable, demote or reset it.
+- Other admins are ordinary identities with the `ADMIN` role. The system
   admin can make and remove them from `/admin/accounts`.
 - `ADMIN_PASSWORD` is the bootstrap. On every start the server writes an
   argon2id hash of it into the admin identity's `password` login, clears any
@@ -59,10 +60,26 @@ an admin port.
   references. Post authors, visitor counters and journal rows already stored
   under the old id in world files stay with that old id.
 - To change the password, change `ADMIN_PASSWORD` and restart. That revokes the
-  admin's existing sessions. The UI does not change the bootstrap login.
+  admin's existing sessions. The UI does not change the system admin login.
 - If `ADMIN_PASSWORD` is empty, the server generates one and logs it as a
   warning. A restart makes a new password. A chosen password must be at least
   8 characters.
+
+## Password resets
+
+An admin can issue a one-time reset link for an enabled account that has a
+password login. The link is valid for one hour and shown once. Issuing another
+link for the same login makes the older one stop working. The app does not send
+it; copy the link and give it to the person.
+
+The link opens `/reset/{code}`, where the person chooses a new password.
+Redeeming it changes that login's password, revokes every app, play and API
+session, deletes outstanding handoffs, and closes that identity's open streams.
+The app does not sign the person in afterwards. A used, expired, unknown or
+ineligible link shows the same refusal page.
+
+The system admin is never resettable. Change `ADMIN_PASSWORD` and restart
+instead.
 
 ## Sessions
 

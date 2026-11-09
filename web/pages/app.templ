@@ -213,6 +213,7 @@ templ loginCard(next string, failed string, notice string, action string) {
 			}
 			<button type="submit" class={ appUserButton + " mt-1 w-full" }>sign in</button>
 		</form>
+		<p class={ appUserMuted + " mt-4 text-xs" }>forgot your password? ask an admin for a reset link.</p>
 	</section>
 }
 
@@ -380,7 +381,11 @@ templ lobbyBody(view AppView) {
 						@beaverLogo(44)
 					</span>
 					<p class="text-sm text-[#3b2a20] dark:text-[#ece2d6]">no worlds yet.</p>
-					<p class="text-xs text-[#8a6f5c] dark:text-[#a6907d]">an admin creates the first one.</p>
+					if view.WorldCreationKnown && (view.WorldCreationOpen || view.Admin) {
+						<p class={ appUserMuted + " text-xs" }>make the first one below.</p>
+					} else if view.WorldCreationKnown {
+						<p class={ appUserMuted + " text-xs" }>an admin can make one.</p>
+					}
 				</div>
 			} else {
 				<div class={ worldGrid() }>
@@ -389,14 +394,18 @@ templ lobbyBody(view AppView) {
 					}
 				</div>
 			}
+			@lobbyCreateWorld(view)
 		</main>
 	</div>
 }
 
 templ worldCard(view AppView, world AppWorld) {
-	<article class={ appUserCard + " flex flex-wrap items-center gap-4 p-4" }>
+	<article id={ "world-" + world.Slug } class={ appUserCard + " scroll-mt-24 flex flex-wrap items-center gap-4 p-4" }>
 		<span class={ "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl font-semibold " + worldTone(world.Slug) }>{ avatarInitial(world.Slug) }</span>
 		<p class="min-w-0 flex-1 truncate font-mono text-base font-semibold text-[#3b2a20] dark:text-[#f5ece1]">{ world.Slug }</p>
+		if world.Slug == view.CreatedSlug {
+			<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">new</span>
+		}
 		<div class="flex w-full items-center gap-2 sm:w-auto">
 			<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="min-w-0 flex-1 sm:flex-none">
 				@csrfInput(view.CSRF)
@@ -406,7 +415,43 @@ templ worldCard(view AppView, world AppWorld) {
 				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
 			}
 		</div>
+		if world.Slug == view.CreatedSlug {
+			@userNotice("your world is ready. press enter.")
+		}
 	</article>
+}
+
+templ userNotice(text string) {
+	<p role="status" class="w-full text-sm text-emerald-700 dark:text-emerald-400">{ text }</p>
+}
+
+templ lobbyCreateWorld(view AppView) {
+	if view.WorldCreationKnown && (view.WorldCreationOpen || view.Admin) {
+		<section id="make-world" class={ appUserCard + " mt-8 scroll-mt-24 p-5" }>
+			<h2 class={ appUserLabel }>make a world</h2>
+			<p class={ appUserMuted + " mt-1" }>a world gets its own page and its own file. everyone can enter it.</p>
+			if !view.WorldCreationOpen {
+				<p class={ appUserMuted + " mt-2" }>closed for members. change it in the <a href="/admin" class="underline">back office</a>.</p>
+			}
+			<form method="post" action="/worlds#make-world" class="mt-4 flex flex-col gap-3">
+				@csrfInput(view.CSRF)
+				if view.Error != "" {
+					<p role="alert" class="text-sm text-red-600 dark:text-red-400">{ view.Error }</p>
+				}
+				<div>
+					<label class={ appUserField } for="world_name">world name</label>
+					<input id="world_name" name="slug" value={ view.NewWorldSlug } placeholder="heroes" required minlength="1" maxlength="48" pattern="[a-z0-9][a-z0-9\-]{0,47}" title="lowercase letters, digits and dashes" aria-describedby="world-name-help" class={ appUserInput + " mt-1" }/>
+					<p id="world-name-help" class={ appUserMuted + " mt-1 text-xs" }>lowercase letters, digits and dashes. heroes becomes /worlds/heroes.</p>
+					<p class={ appUserMuted + " mt-1 text-xs" }>pick carefully: only an admin can rename or delete it.</p>
+				</div>
+				<div><button type="submit" class={ appUserButton }>create world</button></div>
+			</form>
+		</section>
+	} else if view.Error != "" {
+		<p id="make-world" role="alert" class="mt-8 scroll-mt-24 text-sm text-red-600 dark:text-red-400">{ view.Error }</p>
+	} else if view.WorldCreationKnown && len(view.Worlds) > 0 {
+		<p class={ appUserMuted + " mt-8" }>making worlds is closed right now. an admin can open it.</p>
+	}
 }
 
 // AppAccount edits the display name and mints script tokens.
@@ -427,6 +472,9 @@ templ accountBody(view AppView) {
 					@adminFlash("api token · shown once", view.NewAPIToken, "")
 				</div>
 			}
+			if view.Notice != "" {
+				<div id="password-notice" class="mt-6 scroll-mt-24">@userNotice(view.Notice)</div>
+			}
 			<div class="mt-8 flex flex-col gap-4">
 				<section class={ appUserCard + " p-5" }>
 					<div class="flex items-center gap-3">
@@ -444,6 +492,7 @@ templ accountBody(view AppView) {
 						</div>
 					</form>
 				</section>
+				@passwordCard(view)
 				<section class={ appUserCard + " p-5" }>
 					<p class={ appUserLabel }>sessions</p>
 					<p class={ appUserMuted + " mt-1" }>sign out ends this browser. sign out everywhere closes every browser.</p>
@@ -479,6 +528,43 @@ templ accountBody(view AppView) {
 			</div>
 		</main>
 	</div>
+}
+
+templ passwordCard(view AppView) {
+	<section id="password" class={ appUserCard + " scroll-mt-24 p-5" }>
+		<h2 class={ appUserLabel }>password</h2>
+		if view.PasswordEditable {
+			<p class={ appUserMuted + " mt-1" }>this signs you out on every other browser and device. worlds open in this browser stop updating; go back to the <a href="/" class="underline">lobby</a> and press enter.</p>
+			if view.Admin {
+				<p class={ appUserMuted + " mt-1" }>it also revokes your api tokens.</p>
+			}
+			<form method="post" action="/account/password#password" class="mt-4 flex flex-col gap-3">
+				@csrfInput(view.CSRF)
+				<input type="text" hidden name="username" autocomplete="username" value={ view.Username }/>
+				<div>
+					<label class={ appUserField } for="current_password">current password</label>
+					<input id="current_password" name="current_password" type="password" autocomplete="current-password" required class={ appUserInput + " mt-1" }/>
+				</div>
+				<div>
+					<label class={ appUserField } for="new_password">new password</label>
+					<input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="8" required aria-describedby="password-help" class={ appUserInput + " mt-1" }/>
+					<p id="password-help" class={ appUserMuted + " mt-1 text-xs" }>at least 8 characters.</p>
+				</div>
+				<div>
+					<label class={ appUserField } for="confirm_password">confirm new password</label>
+					<input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required class={ appUserInput + " mt-1" }/>
+				</div>
+				if view.PasswordError != "" {
+					<p role="alert" class="text-sm text-red-600 dark:text-red-400">{ view.PasswordError }</p>
+				}
+				<div><button type="submit" class={ appUserButton }>change password</button></div>
+			</form>
+		} else if view.PasswordSystemAdmin {
+			<p class={ appUserMuted + " mt-1" }>the system admin password comes from <span class="font-mono">ADMIN_PASSWORD</span>. change it there and restart the server.</p>
+		} else {
+			<p class={ appUserMuted + " mt-1" }>{ view.PasswordNote }</p>
+		}
+	</section>
 }
 
 // The back office keeps the world admin's gray chrome. These constants are
@@ -633,13 +719,53 @@ templ worldsSection(view AppView) {
 			</div>
 		}
 	</section>
+	if view.WorldCreationKnown {
+		<section class={ adminCard }>
+			<p class={ adminLabel }>world creation</p>
+			<div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+				<strong class="text-sm">
+					if view.WorldCreationOpen {
+						open
+					} else {
+						admins only
+					}
+				</strong>
+				<form method="post" action="/admin/worlds/creation">
+					@csrfInput(view.CSRF)
+					if view.WorldCreationOpen {
+						<input type="hidden" name="open" value="0"/>
+						<button type="submit" class={ adminButton }>close to members</button>
+					} else {
+						<input type="hidden" name="open" value="1"/>
+						<button type="submit" class={ adminButton }>open to members</button>
+					}
+				</form>
+			</div>
+			<p class={ adminMuted + " mt-2" }>
+				if view.WorldCreationOpen {
+					anyone signed in can make a world.
+				} else {
+					only admins can make worlds.
+				}
+				existing worlds stay playable.
+			</p>
+		</section>
+	}
 }
 
 templ worldRow(view AppView, world AppWorld) {
 	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
 		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
 			<p class="truncate font-mono text-sm text-gray-900 dark:text-neutral-100">{ world.Slug }</p>
-			<p class={ adminMuted + " mt-0.5" }>created { world.CreatedAt.Format("Jan 2, 2006") }</p>
+			<p class={ adminMuted + " mt-0.5" }>
+				created { world.CreatedAt.Format("Jan 2, 2006") }
+				if world.CreatorName != "" || world.CreatorUsername != "" {
+					{ "by " + world.CreatorName }
+					if world.CreatorUsername != "" {
+						{ "(" + world.CreatorUsername + ")" }
+					}
+				}
+			</p>
 		</div>
 		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
 		<a class={ adminButton } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>

@@ -48,18 +48,19 @@ const (
 // a redeemer must not learn whether a code was unknown, expired, used up or
 // revoked.
 var (
-	ErrNotFound           = errors.New("registry: not found")
-	ErrInvalidCredentials = errors.New("registry: invalid credentials")
-	ErrSessionInvalid     = errors.New("registry: session invalid")
-	ErrInviteInvalid      = errors.New("registry: invite invalid")
-	ErrResetInvalid       = errors.New("registry: reset invalid")
-	ErrUsernameTaken      = errors.New("registry: username taken")
-	ErrForbidden          = errors.New("registry: forbidden")
-	ErrBudget             = errors.New("registry: budget exhausted")
-	ErrHandoffInvalid     = errors.New("registry: handoff invalid")
-	ErrWorldExists        = errors.New("registry: world slug exists")
-	ErrWorldNotReady      = errors.New("registry: world not ready")
-	ErrInvalidInput       = errors.New("registry: invalid input")
+	ErrNotFound            = errors.New("registry: not found")
+	ErrInvalidCredentials  = errors.New("registry: invalid credentials")
+	ErrSessionInvalid      = errors.New("registry: session invalid")
+	ErrInviteInvalid       = errors.New("registry: invite invalid")
+	ErrResetInvalid        = errors.New("registry: reset invalid")
+	ErrUsernameTaken       = errors.New("registry: username taken")
+	ErrForbidden           = errors.New("registry: forbidden")
+	ErrWorldCreationClosed = errors.New("registry: world creation closed")
+	ErrBudget              = errors.New("registry: budget exhausted")
+	ErrHandoffInvalid      = errors.New("registry: handoff invalid")
+	ErrWorldExists         = errors.New("registry: world slug exists")
+	ErrWorldNotReady       = errors.New("registry: world not ready")
+	ErrInvalidInput        = errors.New("registry: invalid input")
 )
 
 // Registry is the instance-wide store. It is safe for concurrent use; sqlite

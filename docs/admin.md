@@ -7,8 +7,9 @@ recent changesets with their prompts, tool calls and results. It also
 has a **talk to Naps** box that sends an instruction straight to the model, and
 a data page for shared state, visitor counters and journal feeds.
 
-The app also has pages for accounts, invites and the world registry. Only an
-identity with the `ADMIN` role can create or delete worlds and create invites.
+The app also has pages for accounts, invites and the world registry. Any enabled
+account can create a shared world from the lobby while creation is open. Only
+an identity with the `ADMIN` role can manage worlds and create invites.
 An admin can make another account an admin, or take the role back, from the
 accounts page.
 
@@ -18,7 +19,13 @@ The admin lives on the app port, `APP_PORT` (default `6930`), not a separate
 admin port. The play port never serves an admin page. That keeps the model's
 scripts off the origin that holds the app session.
 
-- `/admin`: the world list, the create form, and a delete button per world.
+- `/admin`: the world list with each creator's display name and username, the
+  create form, and a delete button per world. A separate world creation card
+  opens or closes creation for members. It starts open and survives restarts.
+  Closing hides the member's lobby form and refuses their create requests;
+  existing worlds stay playable. Admins can always create, in the lobby or here.
+  Rename, reset, heal, delete and model instructions stay admin-only, even for
+  the person who created the world.
 - `/admin/invites`: invite creation and the current invites.
 - `/admin/accounts`: the accounts, with make admin, remove admin, reset password
   and disable buttons. The system admin is marked and has no destructive or
@@ -80,6 +87,20 @@ ineligible link shows the same refusal page.
 
 The system admin is never resettable. Change `ADMIN_PASSWORD` and restart
 instead.
+
+## Changing your own password
+
+The password card on `/account` requires the current password and the new
+password twice. It keeps the current app session signed in. Every other app,
+play and API session is revoked, including worlds open in this browser. Those
+world tabs stop updating; go back to the lobby and press enter again.
+
+The change deletes outstanding handoffs and admin-issued reset links and closes
+the revoked sessions' streams. An API bearer request cannot change a password.
+The system admin is excluded: change `ADMIN_PASSWORD` and restart instead.
+
+There is no email recovery. Someone who forgot the password asks an admin for a
+reset link; the sign-in page explains this.
 
 ## Sessions
 

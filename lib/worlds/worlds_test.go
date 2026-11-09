@@ -125,7 +125,7 @@ func TestCreateOpenAndDeleteWorld(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresAdminAndValidSlug(t *testing.T) {
+func TestCreateRequiresActiveIdentityAndValidSlug(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	member, err := f.registry.CreateIdentityWithPassword(
@@ -134,10 +134,54 @@ func TestCreateRequiresAdminAndValidSlug(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member: %v", err)
 	}
-	if _, err := f.manager.Create(ctx, member.ID, "member-world"); !errors.Is(
-		err, registry.ErrForbidden,
+	info, err := f.manager.Create(ctx, member.ID, "member-world")
+	if err != nil {
+		t.Fatalf("member create: %v", err)
+	}
+	if info.CreatedBy != member.ID || info.Status != registry.WorldReady {
+		t.Fatalf("member world = %+v", info)
+	}
+	if _, err := os.Stat(f.manager.Path(info.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.manager.Delete(ctx, member.ID, info.ID); !errors.Is(err, registry.ErrForbidden) {
+		t.Fatalf("member delete = %v", err)
+	}
+	if err := f.registry.SetWorldCreationOpen(ctx, f.adminID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Create(
+		ctx,
+		member.ID,
+		"closed",
+	); !errors.Is(
+		err,
+		registry.ErrWorldCreationClosed,
 	) {
-		t.Fatalf("member create = %v", err)
+		t.Fatalf("closed create = %v", err)
+	}
+	if _, err := f.manager.Create(ctx, f.adminID, "admin-closed"); err != nil {
+		t.Fatalf("admin create while closed: %v", err)
+	}
+	if err := f.registry.SetWorldCreationOpen(ctx, f.adminID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.DisableIdentity(ctx, f.adminID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{member.ID, "missing", ""} {
+		if _, err := f.manager.Create(ctx, id, "refused"); !errors.Is(err, registry.ErrForbidden) {
+			t.Fatalf("create by %q = %v", id, err)
+		}
+	}
+	for _, slug := range []string{"closed", "refused"} {
+		if _, err := f.registry.GetWorldBySlug(ctx, slug); !errors.Is(err, registry.ErrNotFound) {
+			t.Fatalf("refused create left %s: %v", slug, err)
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(f.dir, "*.db"))
+	if err != nil || len(files) != 2 {
+		t.Fatalf("files after refusals = %v, %v", files, err)
 	}
 	for _, slug := range []string{"", "Heroes", "two words", "-leading", "sla/sh"} {
 		if _, err := f.manager.Create(ctx, f.adminID, slug); !errors.Is(

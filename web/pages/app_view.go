@@ -9,7 +9,9 @@ type AppWorld struct {
 	Status    string
 	CreatedAt time.Time
 	// WorldURL is the world's page on the play port, seen from the app.
-	WorldURL string
+	WorldURL        string
+	CreatorName     string
+	CreatorUsername string
 }
 
 // AppInviteRow is one invite row. The raw code is never stored, so it is absent.
@@ -80,7 +82,17 @@ type AppView struct {
 	Admin bool
 	CSRF  string
 	// Error is a refusal message. Every invalid invite shares the same one.
-	Error string
+	Error               string
+	Notice              string
+	Username            string
+	PasswordEditable    bool
+	PasswordSystemAdmin bool
+	PasswordNote        string
+	PasswordError       string
+	NewWorldSlug        string
+	CreatedSlug         string
+	WorldCreationOpen   bool
+	WorldCreationKnown  bool
 	// AdminSection is which app admin page is showing: worlds, invites or
 	// accounts. Empty on every other page.
 	AdminSection string

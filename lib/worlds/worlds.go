@@ -127,7 +127,8 @@ func (m *Manager) Path(id string) string {
 	return filepath.Join(m.dir, id+".db")
 }
 
-// Create makes a world file and its registry row. Only an admin may call it.
+// Create makes a world file and its registry row. Any active identity may call
+// it while creation is open; admins may always call it.
 // The row is inserted as creating, the file is migrated, then the row becomes
 // ready. A failure before ready removes both, so a returned error leaves no
 // orphan. A crash leaves a creating row plus a file, which Recover finishes.
@@ -135,8 +136,21 @@ func (m *Manager) Create(
 	ctx context.Context,
 	actorID, slug string,
 ) (*registry.World, error) {
-	if err := m.registry.RequireAdmin(ctx, actorID); err != nil {
+	if err := m.registry.RequireActiveIdentity(ctx, actorID); err != nil {
 		return nil, err
+	}
+	open, err := m.registry.WorldCreationOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !open {
+		admin, err := m.registry.IsAdmin(ctx, actorID)
+		if err != nil {
+			return nil, err
+		}
+		if !admin {
+			return nil, registry.ErrWorldCreationClosed
+		}
 	}
 	if err := ValidateSlug(slug); err != nil {
 		return nil, err

@@ -43,10 +43,12 @@ func (a *App) AppRouter() *chi.Mux {
 		r.Post("/logout", a.Logout)
 		r.Get("/account", a.Account)
 		r.Post("/account/name", a.UpdateName)
+		r.Post("/account/password", a.ChangePassword)
 		r.Post("/account/logout-all", a.LogoutAll)
 		r.Post("/account/tokens", a.CreateAPIToken)
 		r.Post("/account/tokens/revoke", a.RevokeAPIToken)
 		r.Post("/worlds/{slug}/play", a.PlayHandoff)
+		r.Post("/worlds", a.CreateLobbyWorld)
 
 		r.Group(func(ar chi.Router) {
 			ar.Use(a.requireAppAdmin)
@@ -55,6 +57,7 @@ func (a *App) AppRouter() *chi.Mux {
 			ar.Get("/admin/accounts", a.AdminAccounts)
 			ar.Get("/admin/model", a.AdminModel)
 			ar.Post("/admin/worlds", a.CreateWorld)
+			ar.Post("/admin/worlds/creation", a.SetWorldCreation)
 			ar.Post("/admin/worlds/{slug}/delete", a.DeleteWorld)
 			ar.Post("/admin/worlds/{slug}/rename", a.RenameWorld)
 			ar.Post("/admin/invites", a.CreateInvite)
@@ -174,6 +177,8 @@ func (a *App) LoginPage(w http.ResponseWriter, r *http.Request) {
 	notice := ""
 	if r.URL.Query().Get("reset") != "" {
 		notice = "password changed. sign in with the new one."
+	} else if r.URL.Query().Get("session") == "ended" {
+		notice = "your session ended. sign in again."
 	}
 	a.renderLogin(w, r, r.URL.Query().Get("next"), "", notice)
 }
@@ -457,6 +462,10 @@ func (a *App) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 
 // Lobby lists the ready worlds.
 func (a *App) Lobby(w http.ResponseWriter, r *http.Request) {
+	a.renderLobby(w, r, "")
+}
+
+func (a *App) renderLobby(w http.ResponseWriter, r *http.Request, message string) {
 	p := principalFrom(r)
 	worlds, err := a.reg.ListReadyWorlds(r.Context())
 	if err != nil {
@@ -465,6 +474,16 @@ func (a *App) Lobby(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := pages.AppView{Name: p.DisplayName, Admin: p.Admin, CSRF: p.CSRFToken}
+	view.Error = message
+	view.NewWorldSlug = r.PostFormValue("slug")
+	if message == "" {
+		view.CreatedSlug = r.URL.Query().Get("created")
+	}
+	view.WorldCreationOpen, err = a.reg.WorldCreationOpen(r.Context())
+	view.WorldCreationKnown = err == nil
+	if err != nil {
+		a.logger.Error("Failed to read world creation", slog.Any("error", err))
+	}
 	for _, world := range worlds {
 		view.Worlds = append(view.Worlds, appWorld(world, r, a.cfg.Config))
 	}
@@ -602,18 +621,113 @@ func (a *App) RedirectWorld(w http.ResponseWriter, r *http.Request) {
 
 // Account is the app account page.
 func (a *App) Account(w http.ResponseWriter, r *http.Request) {
-	a.renderAccount(w, r, "")
+	notice := ""
+	if r.URL.Query().Get("password") == "changed" {
+		notice = "password changed. you're signed out everywhere else, including worlds open in this browser."
+	}
+	a.renderAccount(w, r, "", notice, "")
 }
 
-func (a *App) renderAccount(w http.ResponseWriter, r *http.Request, token string) {
+func (a *App) renderAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+	token, notice, passwordErr string,
+) {
 	p := principalFrom(r)
-	view := pages.AppView{
-		Name:        p.DisplayName,
-		Admin:       p.Admin,
-		CSRF:        p.CSRFToken,
-		NewAPIToken: token,
+	identity, err := a.reg.GetIdentity(r.Context(), p.IdentityID)
+	if errors.Is(err, registry.ErrNotFound) {
+		a.clearSessionCookie(w, a.appCookieName())
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
 	}
-	a.renderApp(w, r, pages.AppAccount(view))
+	if err != nil {
+		a.logger.Error("Failed to read account", slog.Any("error", err))
+		http.Error(w, "Could not load the account", http.StatusInternalServerError)
+		return
+	}
+	view := pages.AppView{
+		Name:          p.DisplayName,
+		Admin:         p.Admin,
+		CSRF:          p.CSRFToken,
+		NewAPIToken:   token,
+		Username:      identity.Username,
+		Notice:        notice,
+		PasswordError: passwordErr,
+	}
+	switch {
+	case p.Scope != registry.ScopeApp:
+		view.PasswordNote = "sign in with a browser to change your password."
+	case p.IdentityID == registry.SystemAdminID:
+		view.PasswordSystemAdmin = true
+	case identity.Username == "":
+		view.PasswordNote = "this account does not use a password to sign in."
+	default:
+		view.PasswordEditable = true
+	}
+	status := http.StatusOK
+	if passwordErr != "" {
+		status = http.StatusBadRequest
+	}
+	a.renderAppStatus(w, r, pages.AppAccount(view), status)
+}
+
+// ChangePassword keeps this app session and signs out every other session.
+func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	if !a.requireCSRF(w, r) {
+		return
+	}
+	p := principalFrom(r)
+	if p.Scope != registry.ScopeApp || p.IdentityID == registry.SystemAdminID {
+		http.Error(w, "Password changes require a non-system browser account", http.StatusForbidden)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return
+	}
+	current, next := r.PostFormValue("current_password"), r.PostFormValue("new_password")
+	message := ""
+	switch {
+	case next != r.PostFormValue("confirm_password"):
+		message = "the new passwords do not match."
+	case len(next) > 1024:
+		message = "the new password is too long."
+	case len(next) < 8:
+		message = "the new password needs at least 8 characters."
+	}
+	if message != "" {
+		a.renderAccount(w, r, "", "", message)
+		return
+	}
+	revoked, err := a.reg.ChangePassword(
+		r.Context(),
+		p.IdentityID,
+		p.LoginID,
+		p.SessionHash,
+		current,
+		next,
+	)
+	switch {
+	case errors.Is(err, registry.ErrInvalidCredentials):
+		a.renderAccount(w, r, "", "", "that is not your current password.")
+		return
+	case errors.Is(err, registry.ErrForbidden):
+		http.Error(w, "Password change refused", http.StatusForbidden)
+		return
+	case errors.Is(err, registry.ErrSessionInvalid):
+		a.clearSessionCookie(w, a.appCookieName())
+		http.Redirect(w, r, "/login?session=ended", http.StatusSeeOther)
+		return
+	case err != nil:
+		a.logger.Error("Failed to change password", slog.Any("error", err))
+		http.Error(w, "Could not change the password", http.StatusInternalServerError)
+		return
+	}
+	for _, hash := range revoked {
+		a.cancelSessionStreams(hash)
+	}
+	a.logger.Info("Password changed", slog.String("identity_id", p.IdentityID))
+	http.Redirect(w, r, "/account?password=changed#password-notice", http.StatusSeeOther)
 }
 
 // UpdateName changes the display name every world reads.
@@ -675,7 +789,7 @@ func (a *App) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not create a token", http.StatusInternalServerError)
 		return
 	}
-	a.renderAccount(w, r, token)
+	a.renderAccount(w, r, token, "", "")
 }
 
 // RevokeAPIToken revokes a token by its raw value.
@@ -770,9 +884,6 @@ func (a *App) adminView(
 	if err != nil {
 		a.logger.Error("Failed to list worlds", slog.Any("error", err))
 	}
-	for _, world := range worldRows {
-		view.Worlds = append(view.Worlds, appWorld(world, r, a.cfg.Config))
-	}
 	invites, err := a.reg.ListInvites(r.Context(), p.IdentityID)
 	if err != nil {
 		a.logger.Error("Failed to list invites", slog.Any("error", err))
@@ -803,6 +914,21 @@ func (a *App) adminView(
 			CreatedAt:   identity.CreatedAt,
 		})
 	}
+	creators := make(map[string]registry.Identity, len(identities))
+	for _, identity := range identities {
+		creators[identity.ID] = identity
+	}
+	for _, world := range worldRows {
+		row := appWorld(world, r, a.cfg.Config)
+		creator := creators[world.CreatedBy]
+		row.CreatorName, row.CreatorUsername = creator.DisplayName, creator.Username
+		view.Worlds = append(view.Worlds, row)
+	}
+	view.WorldCreationOpen, err = a.reg.WorldCreationOpen(r.Context())
+	view.WorldCreationKnown = err == nil
+	if err != nil {
+		a.logger.Error("Failed to read world creation", slog.Any("error", err))
+	}
 	if section == pages.AdminModel {
 		for _, skill := range skills.All {
 			view.Skills = append(view.Skills, pages.AppSkill{
@@ -823,8 +949,20 @@ func (a *App) adminView(
 }
 
 func (a *App) renderApp(w http.ResponseWriter, r *http.Request, component templ.Component) {
+	a.renderAppStatus(w, r, component, http.StatusOK)
+}
+
+func (a *App) renderAppStatus(
+	w http.ResponseWriter,
+	r *http.Request,
+	component templ.Component,
+	status int,
+) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+	}
 	if err := component.Render(r.Context(), w); err != nil {
 		a.logger.Error("Failed to render an app page", slog.Any("error", err))
 	}
@@ -832,6 +970,77 @@ func (a *App) renderApp(w http.ResponseWriter, r *http.Request, component templ.
 
 // CreateWorld makes a world file and its registry row.
 func (a *App) CreateWorld(w http.ResponseWriter, r *http.Request) {
+	_, message, wrote := a.createWorld(w, r)
+	if wrote {
+		return
+	}
+	if message != "" {
+		a.renderAdmin(w, r, pages.AdminWorlds, message, "")
+		return
+	}
+	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+}
+
+// CreateLobbyWorld creates a shared world and returns to its lobby card.
+func (a *App) CreateLobbyWorld(w http.ResponseWriter, r *http.Request) {
+	world, message, wrote := a.createWorld(w, r)
+	if wrote {
+		return
+	}
+	if message != "" {
+		a.renderLobby(w, r, message)
+		return
+	}
+	http.Redirect(
+		w,
+		r,
+		"/?created="+url.QueryEscape(world.Slug)+"#world-"+url.PathEscape(world.Slug),
+		http.StatusSeeOther,
+	)
+}
+
+func (a *App) createWorld(w http.ResponseWriter, r *http.Request) (*registry.World, string, bool) {
+	if !a.requireCSRF(w, r) {
+		return nil, "", true
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Bad form", http.StatusBadRequest)
+		return nil, "", true
+	}
+	p := principalFrom(r)
+	if p == nil {
+		http.Error(w, "Sign in first", http.StatusForbidden)
+		return nil, "", true
+	}
+	slug := strings.TrimSpace(r.FormValue("slug"))
+	world, err := a.worlds.Create(r.Context(), p.IdentityID, slug)
+	switch {
+	case errors.Is(err, registry.ErrWorldExists):
+		return nil, "that name is taken.", false
+	case errors.Is(err, worlds.ErrInvalidSlug):
+		return nil, "use lowercase letters, digits and dashes.", false
+	case errors.Is(err, registry.ErrWorldCreationClosed):
+		return nil, "making worlds is closed right now. an admin can open it.", false
+	case errors.Is(err, registry.ErrForbidden):
+		return nil, "could not create the world", false
+	case err != nil:
+		a.logger.Error("Failed to create a world", slog.Any("error", err))
+		return nil, "could not create the world", false
+	}
+	a.logger.Info(
+		"World created",
+		slog.String(
+			"world_id",
+			world.ID,
+		),
+		slog.String("slug", world.Slug),
+		slog.String("identity_id", p.IdentityID),
+	)
+	return world, "", false
+}
+
+// SetWorldCreation changes whether members may create worlds.
+func (a *App) SetWorldCreation(w http.ResponseWriter, r *http.Request) {
 	if !a.requireCSRF(w, r) {
 		return
 	}
@@ -839,20 +1048,22 @@ func (a *App) CreateWorld(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
 	}
-	p := principalFrom(r)
-	slug := strings.TrimSpace(r.FormValue("slug"))
-	world, err := a.worlds.Create(r.Context(), p.IdentityID, slug)
-	switch {
-	case errors.Is(err, registry.ErrWorldExists), errors.Is(err, worlds.ErrInvalidSlug):
-		a.renderAdmin(w, r, pages.AdminWorlds, "that world name is not available", "")
-		return
-	case err != nil:
-		a.logger.Error("Failed to create a world", slog.Any("error", err))
-		a.renderAdmin(w, r, pages.AdminWorlds, "could not create the world", "")
+	value := r.PostFormValue("open")
+	if value != "0" && value != "1" {
+		http.Error(w, "Bad form", http.StatusBadRequest)
 		return
 	}
-	a.logger.Info("World created",
-		slog.String("world_id", world.ID), slog.String("slug", world.Slug))
+	p := principalFrom(r)
+	if err := a.reg.SetWorldCreationOpen(r.Context(), p.IdentityID, value == "1"); err != nil {
+		a.logger.Error("Failed to change world creation", slog.Any("error", err))
+		a.renderAdmin(w, r, pages.AdminWorlds, "could not change world creation", "")
+		return
+	}
+	a.logger.Info(
+		"World creation changed",
+		slog.Bool("open", value == "1"),
+		slog.String("identity_id", p.IdentityID),
+	)
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 

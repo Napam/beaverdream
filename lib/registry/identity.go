@@ -440,6 +440,20 @@ func (r *Registry) IsAdmin(ctx context.Context, identityID string) (bool, error)
 	return true, nil
 }
 
+// RequireActiveIdentity returns ErrForbidden unless identityID is enabled.
+func (r *Registry) RequireActiveIdentity(ctx context.Context, identityID string) error {
+	var found int
+	err := r.db.QueryRowContext(ctx, `SELECT 1 FROM identities WHERE id = ? AND disabled_at IS NULL`, identityID).
+		Scan(&found)
+	if identityID == "" || errors.Is(err, sql.ErrNoRows) {
+		return ErrForbidden
+	}
+	if err != nil {
+		return fmt.Errorf("read active identity: %w", err)
+	}
+	return nil
+}
+
 // RequireAdmin returns ErrForbidden unless identityID is an active admin.
 func (r *Registry) RequireAdmin(ctx context.Context, identityID string) error {
 	admin, err := r.IsAdmin(ctx, identityID)

@@ -10,9 +10,11 @@ prefer simple, readable code over production hardening.
 - World migrations and registry migrations are separate sets, in separate
   folders, because the registry and each world are separate SQLite files.
   Pre-production, a world keeps one migration file edited in place
-  (`000001_init.sql`). The registry has two: `000001_auth.sql` (identities,
-  logins, sessions, roles) and `000002_data.sql` (invites, worlds, handoffs,
-  usage). `task db.migrate.down` rolls the registry back to the auth migration,
+  (`000001_init.sql`). The registry has `000001_auth.sql` (identities,
+  logins, sessions, roles), `000002_data.sql` (invites, worlds, handoffs,
+  usage), `000003_password_resets.sql` and `000004_settings.sql` (the world
+  creation policy). `task db.migrate.down` rolls the registry back to the auth
+  migration,
   keeping accounts and sessions; `task db.migrate.up` applies the data again.
   Both sets freeze at the first production deploy; after
   that every schema change is a new numbered migration in the matching set,
@@ -399,6 +401,12 @@ prefer simple, readable code over production hardening.
   issued. Redeeming it updates the password login, revokes every session,
   deletes the identity's handoffs, and closes its streams. The system admin is
   never resettable; use `ADMIN_PASSWORD` and a restart.
+- An account can change its password from `/account` with the current password.
+  The change keeps the current app session, revokes every other app, play and
+  API session, deletes handoffs and outstanding reset links, and closes the
+  revoked sessions' streams. The system admin uses `ADMIN_PASSWORD` and a
+  restart. Password hashing stays outside the write lock; the transaction
+  rechecks the app session and the verified hash before writing.
 - `ADMIN_PASSWORD` is the bootstrap, not a login cookie. On every start the
   server writes an argon2id hash of it into the admin identity's password
   login, clears `disabled_at`, grants `ADMIN` when missing, moves an older
@@ -499,6 +507,14 @@ prefer simple, readable code over production hardening.
   refuses new turns and plays, drains the world's worker and closes its streams,
   closes the database, removes the file and its `-wal` and `-shm`, then deletes
   the registry row.
+- Any active identity can create a shared world from the lobby while creation
+  is open. `worlds.Create` applies the registry setting and refuses members
+  with `ErrWorldCreationClosed` when closed. Admins always create. The lobby
+  posts to `/worlds`, the admin panel to `/admin/worlds`, through one creation
+  path. `/admin/worlds/creation` changes the policy, which starts open and
+  survives restarts. The admin list identifies creators by display name and
+  username. Creation grants no management rights: rename, reset, heal, delete
+  and model instructions stay admin-only.
 - Open an existing world with `mode=rw`, never `rwc`, so a request after a
   delete cannot rebuild an orphan file. Migrations run on every open, each file
   keeps its own `goose_db_version`, and a world that sat idle catches up when it

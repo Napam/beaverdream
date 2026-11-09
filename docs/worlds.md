@@ -10,12 +10,13 @@ and the lobby; the play port serves the worlds.
 2. Open the app port, `http://localhost:6930`.
 3. The log prints the generated admin password unless `ADMIN_PASSWORD` is set.
    Sign in as `admin` with that password.
-4. Open the first world, named `heroes`. If the lobby is empty, create it. The
-   name is a slug: lowercase letters, digits and dashes work best.
+4. Open a world, or create the first one from the lobby. The name uses
+   lowercase letters, digits and dashes.
 5. Create an invite on the admin invite page. Copy the link and send it to the
    people you want on the instance.
 
-Only an admin creates worlds and invites. To keep the same admin password
+Any signed-in account can create worlds while an admin keeps creation open.
+Only admins create invites or manage worlds. To keep the same admin password
 across restarts, set `ADMIN_PASSWORD` in `.env`.
 
 ## Accounts
@@ -24,8 +25,12 @@ across restarts, set `ADMIN_PASSWORD` in `.env`.
   password.
 - Usernames are the login name. Display names are separate, not unique, and can
   be changed without touching the login.
-- There is no email and no forgotten-password flow yet. An admin action is the
-  way back.
+- Change a password from `/account` with the current password. The current app
+  session stays signed in; every other app, play and API session is revoked.
+  Worlds open in this browser stop updating; return to the lobby and press
+  enter again. The system admin uses `ADMIN_PASSWORD` and a restart instead.
+- There is no email recovery. Ask an admin for a one-time password reset link
+  when the current password is forgotten.
 - The admin can play like anyone else. Admin turns never count toward a token
   budget.
 
@@ -43,6 +48,13 @@ across restarts, set `ADMIN_PASSWORD` in `.env`.
 
 ## Worlds
 
+- The lobby has a create form below the world list. Every new world is shared
+  with every signed-in account. Creation records the creator; the admin list
+  shows their display name and username. Creators cannot rename, reset, heal,
+  delete or send model instructions: those actions stay admin-only.
+- Creation starts open. An admin can close it from `/admin`; the setting
+  survives a restart. Closing hides the member form and refuses their creates,
+  but existing worlds stay playable and admins can always create.
 - Each world is one SQLite file under `WORLDS_DIR`, named by its random id.
   The slug is only a label in the registry, so renaming or reusing a slug never
   touches a path.

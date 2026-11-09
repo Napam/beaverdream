@@ -60,6 +60,12 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
+	if _, err := conn.ExecContext(
+		ctx,
+		`UPDATE settings SET value = '0' WHERE key = 'world_creation_open'`,
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := provider.DownTo(ctx, 1); err != nil {
 		t.Fatalf("down to 1: %v", err)
@@ -71,7 +77,7 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 			t.Errorf("%s rows after down = %d, want 1", table, got)
 		}
 	}
-	for _, table := range []string{"invites", "worlds", "handoffs", "usage", "password_resets"} {
+	for _, table := range []string{"invites", "worlds", "handoffs", "usage", "password_resets", "settings"} {
 		if tableExists(t, ctx, conn, table) {
 			t.Errorf("%s still exists after down to 1", table)
 		}
@@ -79,6 +85,12 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up again: %v", err)
+	}
+	var open string
+	if err := conn.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'world_creation_open'`).
+		Scan(&open); err != nil ||
+		open != "1" {
+		t.Fatalf("world creation after re-up = %q, %v", open, err)
 	}
 
 	for _, table := range []string{
@@ -104,8 +116,8 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 3 {
-		t.Errorf("goose version = %d, want 3", version)
+	if version != 4 {
+		t.Errorf("goose version = %d, want 4", version)
 	}
 }
 
@@ -292,6 +304,13 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 		t.Fatalf("insert password reset: %v", err)
 	}
 	resetTables := append(append([]string{}, dataTables...), "password_resets")
+	var open string
+	if err := conn.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'world_creation_open'`).
+		Scan(&open); err != nil ||
+		open != "1" {
+		t.Fatalf("world creation after upgrade = %q, %v", open, err)
+	}
+	resetTables = append(resetTables, "settings")
 
 	var version int
 	if err := conn.QueryRowContext(ctx,
@@ -299,8 +318,8 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 3 {
-		t.Errorf("goose version = %d, want 3", version)
+	if version != 4 {
+		t.Errorf("goose version = %d, want 4", version)
 	}
 
 	if _, err := provider.DownTo(ctx, 1); err != nil {
@@ -325,8 +344,12 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 			t.Errorf("%s missing after the second up", table)
 			continue
 		}
-		if got := countRows(t, ctx, conn, table); got != 0 {
-			t.Errorf("%s rows after recreate = %d, want 0", table, got)
+		want := 0
+		if table == "settings" {
+			want = 1
+		}
+		if got := countRows(t, ctx, conn, table); got != want {
+			t.Errorf("%s rows after recreate = %d, want %d", table, got, want)
 		}
 	}
 	for _, table := range authTables {

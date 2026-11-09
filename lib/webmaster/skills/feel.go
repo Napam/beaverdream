@@ -164,7 +164,18 @@ WIRING:
   p.size * f wide, globalAlpha f. 3D: one THREE.Points with a 500-slot
   position buffer written from fx.each each frame, dead slots moved far away.
   Speeds and GRAVITY are px, so in meters divide them by about 40, and flip
-  GRAVITY for y up. Color by event when you draw.
+  GRAVITY for y up. For event-specific colors, keep a particle's event or
+  color when spawning it; the core above does not store either.
+- Layer an impact in time: a brief bright flash at contact, fast sparks or
+  fragments moving away, then slower dust that expands and fades. Give each
+  layer a distinct lifetime and speed so the motion stays readable. Keep the
+  contact point and direction consistent with the actual hit.
+- Dust and smoke are soft, translucent shapes with normal alpha blending: they
+  can obscure what is behind them. Draw luminous sparks or glows separately
+  with additive blending. In 3D use separate materials; depth-test both
+  against the world, and normally disable depth writes for transparent layers.
+  Reuse bounded slots for each layer, reset all fields on reuse, and retire
+  them at the end of their lives. Reuse textures and materials too.
 - A body that is hit: fx.pop(body, 0.2 to 0.4), then fx.settle(body, dt) each
   frame. Draw it scaled (1 + pop, 1 - pop), white while body.flash > 0.
 - A mute: the M key and a small button toggle fx.muted, kept with bd.save('muted', fx.muted).
@@ -172,6 +183,9 @@ WIRING:
   action row. Local and remote actions call the same effect renderer, which
   calls fx.impact there, with mine if it happened to you. Generate particles,
   shake, sound and rumble locally; do not send each particle or shake value.
+  Apply a shared hit or carve once from the ordered action row; its visual
+  layers never do collision or damage. Replay old rows to rebuild shared state
+  without replaying their transient effects.
 
 TUNING: a post that asks for more or less of something changes that event's
 row in EVENTS and nothing else. A new kind of event is a new row. Keep the

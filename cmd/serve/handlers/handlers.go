@@ -244,14 +244,6 @@ func New(d Deps) *Handlers {
 	if h.compactAfterTurns <= 0 {
 		h.compactAfterTurns = defaultCompactAfterTurns
 	}
-	// Compaction treats the budget as the whole prompt. A page cap that fills
-	// it switches compaction off once the page grows that large.
-	if pageTokens := webmaster.PageBytes() / 4; pageTokens >= h.compactAfterTokens {
-		d.Logger.Warn("MAX_PAGE_BYTES fills the compaction budget; compaction will stop",
-			slog.Int("page_tokens", pageTokens),
-			slog.Int("budget_tokens", h.compactAfterTokens),
-		)
-	}
 	if site, err := d.Queries.CurrentSite(context.Background()); err == nil {
 		h.version = site.ID
 	}

@@ -31,16 +31,32 @@ const maxStallStreak = 3
 // to as much again in jitter, so a retry is not a hammer.
 const defaultStallPause = 2 * time.Second
 
-// Page and state limits.
+// Prompt, page and state limits.
 
-// The size cap exists to stop a runaway write, not to keep the page small. It
-// covers css and html together: the model owns both fields and the prompt
-// carries both, so one budget is simpler than two that can drift.
-// MAX_PAGE_BYTES overrides it; keep it under four times CompactAfterTokens.
-var maxPageLen = env.GetEnvPositiveInt("MAX_PAGE_BYTES", 524_288)
+// CompactAfterTokens is the prompt budget in estimated tokens at four runes
+// per token. It covers the whole prompt, transcript plus page, so the server
+// compacts the history once the two together reach it. It depends on the
+// model's context window, so COMPACT_AT_PROMPT_TOKENS overrides it.
+var CompactAfterTokens = env.GetEnvPositiveInt("COMPACT_AT_PROMPT_TOKENS", 200_000)
+
+// compactPageShare is the page's share of the prompt budget, in thirds. The
+// page is part of the same prompt as the transcript, so its cap is a slice of
+// that budget, not a separate number. Two thirds leaves the rest for history.
+const compactPageShare = 2
+
+// maxPageLen caps css plus html together in bytes. It exists to stop a runaway
+// write, not to keep the page small. Four bytes per token times the page's
+// share of CompactAfterTokens.
+var maxPageLen = int(int64(CompactAfterTokens) * 4 * compactPageShare / 3)
 
 // PageBytes is the cap on css plus html together, in bytes.
 func PageBytes() int { return maxPageLen }
+
+// roomLogBudget is the backstop above the compaction threshold, in runes. It
+// is the whole budget at four runes per token, so the log never drops a turn
+// before compaction folds it in. The oldest lines are dropped first: the
+// newest conversation is what the next turn has to continue.
+var roomLogBudget = 4 * CompactAfterTokens
 
 // Visitor counters are whole numbers. One op moves at most MaxVisitorAmount,
 // one visitor gains at most MaxVisitorPerHour of a key in a rolling hour, and
@@ -110,18 +126,6 @@ const (
 	// webmaster can see that its own script broke.
 	TurnAlert = "alert"
 )
-
-// CompactAfterTokens is the default prompt budget, in estimated tokens at four
-// runes per token. It covers the whole prompt, transcript plus page, so the
-// server compacts the history once the two together reach it. It depends on
-// the model's context window, so COMPACT_AT_PROMPT_TOKENS overrides it.
-var CompactAfterTokens = env.GetEnvPositiveInt("COMPACT_AT_PROMPT_TOKENS", 200_000)
-
-// roomLogBudget is the backstop above the compaction threshold, in runes. It
-// is the whole budget at four runes per token, so the log never drops a turn
-// before compaction folds it in. The oldest lines are dropped first: the
-// newest conversation is what the next turn has to continue.
-var roomLogBudget = 4 * CompactAfterTokens
 
 // The summarizer's caps. A summary folds one chunk of turns, and one
 // compaction can follow a transcript as large as the prompt budget.

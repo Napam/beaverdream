@@ -160,16 +160,18 @@ deployment.
 - `COMPACT_AT_PROMPT_TOKENS` (default `200000`): the prompt budget, transcript
   plus page, in estimated tokens at four runes each. Past it the history is
   compacted. The room log backstop is four times this, in runes.
-- `MAX_PAGE_BYTES` (default `524288`): css and html together, in bytes. Keep
-  `MAX_PAGE_BYTES/4` below `COMPACT_AT_PROMPT_TOKENS`, or a full page fills the
-  budget and compaction stops. The server logs a warning at startup if it does.
+- CSS and html are capped at two thirds of `COMPACT_AT_PROMPT_TOKENS`, in
+  bytes (default `533333`), so a full page still leaves room for history. The
+  cap is derived, not a separate setting. The server skips compaction while the
+  rendered page alone fills the budget and logs that once.
 - `LLM_IDLE_TIMEOUT` (default: 3m before the first event and while thinking, 2m
   once a tool call starts): how long a stream may go quiet before the round is
   retried. Setting it uses one value for every phase. Zero turns the check off.
 
-A full 512 KiB page is about 131k tokens at the four-runes-per-token estimate.
-Check that the model's context holds `COMPACT_AT_PROMPT_TOKENS` plus the system
-prompt and `LLM_MAX_OUTPUT_TOKENS`.
+A full page at the default budget is about 133k tokens at the
+four-runes-per-token estimate. Check that the model's context holds
+`COMPACT_AT_PROMPT_TOKENS` plus the system and tool overhead plus
+`LLM_MAX_OUTPUT_TOKENS`.
 
 ## Admin and API tokens
 

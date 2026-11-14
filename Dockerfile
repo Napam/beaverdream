@@ -2,7 +2,7 @@
 
 # Go matches go.mod. bun and task match mise.toml. Neither comes from an
 # installer script: bun is copied from its image, task is built from the module.
-FROM golang:1.27.3-trixie AS builder
+FROM golang:1.27.4-trixie AS builder
 
 COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx && \

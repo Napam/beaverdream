@@ -536,16 +536,20 @@ func TestAdminChangesetsShowsAWaitingInstruction(t *testing.T) {
 	h.HoldInstruction("make it pink")
 
 	body := getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
-	for _, want := range []string{">next<", "make it pink", "1 queued"} {
+	for _, want := range []string{
+		">next<",
+		"make it pink",
+		"1 queued",
+		"requestSubmit()",
+		"elements.instruction.value",
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("the waiting instruction is missing %q", want)
+			t.Errorf("the changesets page is missing %q", want)
 		}
 	}
 
 	overview := getAdmin(t, h.Admin, "/admin").Body.String()
-	for _, want := range []string{"requestSubmit()", "elements.instruction.value"} {
-		if !strings.Contains(overview, want) {
-			t.Errorf("the instruction form is missing %q", want)
-		}
+	if strings.Contains(overview, "elements.instruction.value") {
+		t.Error("the overview still carries the instruction form")
 	}
 }

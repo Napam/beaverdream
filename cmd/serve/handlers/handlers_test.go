@@ -369,6 +369,56 @@ func TestSendInstructionDoesNotCreatePost(t *testing.T) {
 	}
 }
 
+// The panel names which admin sent an instruction. The turn row carries the
+// name; the stored posts and the room log do not.
+func TestSendInstructionRecordsTheAdminWhoSentIt(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/changeset", strings.NewReader(
+		url.Values{"instruction": {"make it pink"}, "csrf": {"test-csrf"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Datastar-Request", "true")
+	req = handlers.WithTestAdmin(req, "ada-id", "ada")
+	rec := httptest.NewRecorder()
+	h.SendInstruction(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	runs, err := queries.ListChangesets(ctx, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %d, err = %v", len(runs), err)
+	}
+	if runs[0].Author != "admin (ada)" {
+		t.Errorf("turn author = %q, want %q", runs[0].Author, "admin (ada)")
+	}
+}
+
+// An instruction stored as a post still names the admin on the turn row.
+func TestSendInstructionAlsoPostNamesTheAdmin(t *testing.T) {
+	h, queries := setup(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/changeset", strings.NewReader(
+		url.Values{
+			"instruction": {"make it pink"},
+			"also_post":   {"1"},
+			"csrf":        {"test-csrf"},
+		}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Datastar-Request", "true")
+	req = handlers.WithTestAdmin(req, "ada-id", "ada")
+	h.SendInstruction(httptest.NewRecorder(), req)
+
+	runs, err := queries.ListChangesets(context.Background(), 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %d, err = %v", len(runs), err)
+	}
+	if runs[0].Author != "admin (ada)" {
+		t.Errorf("turn author = %q, want %q", runs[0].Author, "admin (ada)")
+	}
+}
+
 func TestIndexServesTheModelPageInline(t *testing.T) {
 	h, _ := setup(t)
 
@@ -541,7 +591,7 @@ func TestAdminPanelNeedsAnAdminPrincipal(t *testing.T) {
 	if anonymous.Code != http.StatusNotFound {
 		t.Fatalf("without principal: status = %d, want 404", anonymous.Code)
 	}
-	if strings.Contains(anonymous.Body.String(), "talk to Naps") {
+	if strings.Contains(anonymous.Body.String(), "context budget") {
 		t.Fatal("an anonymous request carries admin data")
 	}
 
@@ -557,7 +607,7 @@ func TestAdminPanelNeedsAnAdminPrincipal(t *testing.T) {
 	req = withAdmin(httptest.NewRequest(http.MethodGet, "/admin", nil))
 	h.Admin(admin, req)
 	if admin.Code != http.StatusOK ||
-		!strings.Contains(admin.Body.String(), "talk to Naps") {
+		!strings.Contains(admin.Body.String(), "context budget") {
 		t.Fatalf("admin: status = %d, want the panel", admin.Code)
 	}
 	if got := admin.Header().Get("Referrer-Policy"); got != "no-referrer" {

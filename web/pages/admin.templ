@@ -404,23 +404,23 @@ templ worldSwitcher(view AdminView) {
 	}
 }
 
-// overviewPage is the glance, top to bottom: talk to Naps, how
-// recent changesets went, how close the room is to compaction, and what it
-// remembers: the compacted history and its own notes.
+// overviewPage is the glance, top to bottom: how recent changesets went, how
+// close the room is to compaction, and what it remembers: the compacted
+// history and its own notes.
 templ overviewPage(view AdminView) {
 	<div class="flex flex-col gap-6">
-		@adminInstruct(view.Panel, view.CSRF)
 		@AdminMetrics(view.Metrics, view.Panel)
 		@AdminBudget(view.Budget)
 		@AdminMemory(view.Summary, view.SummaryThrough, view.Notes)
 	</div>
 }
 
-// changesetsPage shows the list of recent changesets, then one turn: the newest
-// or the one in the URL.
+// changesetsPage is where an admin talks to Naps, then the list of recent
+// changesets, then one turn: the newest or the one in the URL.
 templ changesetsPage(view AdminView) {
 	{{ older, newer := view.turnNeighbours() }}
 	<div class="flex flex-col gap-3">
+		@adminInstruct(view.Panel, view.CSRF)
 		@AdminHistory(view.Turns, view.Panel.Turn, view.Queue, view.Panel)
 		@AdminTurn(view.Turn, view.Panel.Turn == 0, older, newer, view.Run, view.CSRF, view.Panel)
 	</div>

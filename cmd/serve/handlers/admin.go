@@ -588,9 +588,10 @@ func (h *Handlers) SendInstruction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	panel := h.panel(pages.PageChangesets)
 	instruction := truncate(strings.TrimSpace(r.FormValue("instruction")), webmaster.MaxBodyLen)
 	if instruction == "" {
-		h.adminDone(w, r, h.panel(pages.PageOverview), "nothing to send")
+		h.adminDone(w, r, panel, "nothing to send")
 		return
 	}
 
@@ -612,11 +613,11 @@ func (h *Handlers) SendInstruction(w http.ResponseWriter, r *http.Request) {
 	res, err := h.runChangeset(r.Context(), "admin", instruction, trigger)
 	switch {
 	case err != nil:
-		h.adminDone(w, r, h.panel(pages.PageOverview), "changeset failed: "+err.Error())
+		h.adminDone(w, r, panel, "changeset failed: "+err.Error())
 	case res.Changed:
-		h.adminDone(w, r, h.panel(pages.PageOverview), "changed: "+res.Reason)
+		h.adminDone(w, r, panel, "changed: "+res.Reason)
 	default:
-		h.adminDone(w, r, h.panel(pages.PageOverview), "no change: "+res.Reason)
+		h.adminDone(w, r, panel, "no change: "+res.Reason)
 	}
 }
 

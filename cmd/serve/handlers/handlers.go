@@ -408,6 +408,17 @@ func (h *Handlers) recentPosts(ctx context.Context, limit int64) ([]sqlc.Post, e
 	return rows, nil
 }
 
+// adminAuthor is how the panel names an admin instruction's sender: the role
+// word and the signed-in display name. The model prompt and the room log keep
+// the bare role, which no visitor can claim.
+func adminAuthor(ctx context.Context) string {
+	p, _ := ctx.Value(principalKey{}).(*principal)
+	if p == nil || p.DisplayName == "" {
+		return "admin"
+	}
+	return "admin (" + p.DisplayName + ")"
+}
+
 // runChangeset runs one admin changeset and waits for it. It takes h.mu, then starts
 // the timeout, so time spent queued behind another changeset does not eat the
 // model's budget.
@@ -480,7 +491,11 @@ func (h *Handlers) runChangesetLocked(
 	}
 	defer h.clearRun()
 
-	h.beginRun(origin, postAuthors(triggers))
+	runAuthors := postAuthors(triggers)
+	if origin == "admin" {
+		runAuthors = []string{adminAuthor(ctx)}
+	}
+	h.beginRun(origin, runAuthors)
 	res, err := h.runChangesetHeld(ctx, origin, instruction, triggers)
 	h.endRun(err)
 	return res, err
@@ -520,8 +535,8 @@ func (h *Handlers) runChangesetHeld(
 	if origin == "admin" {
 		turnBody = instruction
 	}
-	authors := []string{"admin"}
-	if len(triggerPosts) > 0 {
+	authors := []string{adminAuthor(ctx)}
+	if origin != "admin" && len(triggerPosts) > 0 {
 		authors = h.postAuthorNames(ctx, triggerPosts)
 	}
 	turn, err := h.queries.StartTurn(ctx, sqlc.StartTurnParams{

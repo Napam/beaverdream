@@ -9,7 +9,8 @@ package skills
 // together.
 const controlsReference = `CONTROLS REFERENCE:
 Use this when you build or change a world someone moves through. Make it feel
-good without being asked. Pick the genre from the post and use its GENRES line.
+good without being asked. Start from the nearest GENRES line, then tune it to
+this world with TUNING: a heavy mech and a squirrel should not move alike.
 
 This platformer core is tested. Reuse helpers already on the page. Copy only
 the functions you need, with their dependencies intact, for any genre:
@@ -136,7 +137,28 @@ the first frame and after a respawn. A fixed factor like 0.1 jitters.
 - Chase: behind and above, k 5, aimed ahead, FOV 70 to 85 with speed.
 - Orbit: drag orbits, wheel zooms, k 6, pitch 0.1..1.4, auto-rotate if asked.
 
-GENRES:
+TUNING: what each number feels like, for any genre, including ones not
+listed below.
+- Weight is how fast speed changes. A high START and STOP is snappy and
+  light; a low one is heavy, icy or a vehicle. A STOP lower than START
+  slides. Never zero: instant speed feels like a cursor, not a body.
+- Air control is the 0.6 in the core: 1 steers freely, 0.2 commits to the
+  jump. Lower suits weight, higher suits a precise platformer.
+- Design a jump by height and time to the top, then work out the rest:
+  GRAVITY = 2 * height / time^2, JUMP = GRAVITY * time. 0.3s is snappy, 0.5s
+  floaty. Falling faster than rising (gravity x1.5 to x2 on the way down)
+  feels firm; equal feels like the moon.
+- Forgiveness keeps the controls fair: coyote time, a jump buffer and a short
+  hop when the key is let go early. Keep them in anything with jumps or
+  timing. Lower them only when the post asks for something punishing.
+- Speed is relative to the view. Cross the screen in 1 to 3 s on foot; a
+  vehicle can be faster if the camera pulls back or the FOV opens.
+- Movement can be the theme. Swimming eases slowly and floats up, a skater
+  keeps speed and turns wide, a grappling hook swings on a rope as a
+  pendulum, a ghost passes through walls, a tank turns before it drives.
+  Build that from the same parts: ease rates, gravity, what blocks.
+
+GENRES: starting points, not rules.
 - FPS: first person. Walk 4.5 m/s, Shift x1.6, Space jump, C crouch at half
   speed, start k 10, stop k 15, FOV 75.
 - Third-person action: third person, jumps like the core.

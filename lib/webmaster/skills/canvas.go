@@ -239,9 +239,11 @@ bugs: aim that misses, a HUD that scrolls away, sprites that drift on zoom.
 - Mouse: cam.toWorld(e.offsetX, e.offsetY), then Math.floor(p.x / size) is
   the tile under the cursor. Lamps on screen: cam.toScreen(x, y), radius
   r * cam.zoom.
-- Tiles: one layer per map. drawTile reads the map and draws with
-  draw2d.autotile(same, x, y): a solid block with a lighter top strip where
-  mask & 1 is 0, a dark rim on the other open sides. With the space skill,
+- Tiles: one layer per map. drawTile reads the map and uses
+  draw2d.autotile(same, x, y) to know which sides are edges, then draws in
+  the world's own style: grass or snow on a top edge (mask & 1 is 0), a rim,
+  cracks, moss, bricks, a soft rounded blob, a hand-drawn wobble. Vary tiles
+  of one kind with a hash of x and y so a wall is not a stamp. With the space skill,
   after a carve: g.takeDirty().forEach(function (k) { var p = k.split(',');
   layer.mark(p[0] * 8, p[1] * 8, p[0] * 8 + 7, p[1] * 8 + 7) }).
 - Without a layer (a small map), loop only over cam.visible(size).
@@ -249,13 +251,21 @@ bugs: aim that misses, a HUD that scrolls away, sprites that drift on zoom.
   Make the mirrored copy too, and draw by facing. Animation is a list of
   sprites switched by time. A hit flash is the same rows with
   draw2d.solid(palette, '#fff'), shown 0.08s.
-- Palette: pick 6 to 12 colors once and use only those. The player is the
-  brightest thing, enemies get their own hue, the background is the dullest.
-  One dark outline color for everything.
+- Readability over style: what the player can touch has the most contrast in
+  light and dark, the background the least, so the eye finds the player, the
+  danger and the pickups first. Hue carries meaning: enemies share one hue,
+  pickups another, and none of them matches the ground. Check by imagining
+  it gray: the important things should still stand out.
+- Style is a choice for each world: a small fixed palette with dark
+  outlines (retro), flat shapes without outlines (modern), soft gradients
+  and glow (dreamy), ink lines on paper (sketch), heavy shadows (noir). Pick
+  colors once, as a palette, and use only those, whatever the style.
 - Pixel art: art at 1 world unit per pixel, cam.zoom 2 to 4, res of the
   layer equal to cam.zoom times v.ratio.
 - Depth: top-down worlds ysort everything that stands. Side views get two
-  or three parallax layers: far hills at depth 0.2, near ones at 0.5.
+  or three parallax layers that fit the place (mountains, a city skyline,
+  cave stalactites, clouds, coral), farther ones at a lower depth (about 0.2)
+  and paler, nearer ones around 0.5.
 - Light: night, caves and torches. A day cycle sets dark from 0 to 0.85.
   Glows are cheap; use one for every shot and blast too.
 - Never create canvases, gradients, sprites or big arrays inside the frame.

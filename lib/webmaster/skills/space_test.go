@@ -75,6 +75,10 @@ out.clamped = [g.get(2, 5, 2), g.get(3, 5, 3)]
 g.set(4, 5, 4, 3); g.carve(4.5, 5.5, 4.5, 0.4, -10)
 out.noHeal = g.get(4, 5, 4)
 out.carve3d = g.carve(5, 0.5, 5, 1.2)
+// A blast far bigger than the world empties it and ends at once.
+const blastStart = Date.now()
+const blasted = g.carve(5, 5, 5, 1e9)
+out.blast = [blasted > 0, g.get(0, 0, 0) + g.get(9, 0, 9), Date.now() - blastStart < 1000]
 
 // Hash: only things that touch the query circle come back.
 const h = space.hash(10)
@@ -88,6 +92,13 @@ things.forEach(h.add)
 const found = []
 h.near(1, 1, 0, 8, (e) => found.push(e.id))
 out.near = found.sort()
+// A reach wider than a bucket, a thing wider than one, and no reach limit.
+const wide = [], fat = [], all = []
+h.near(1, 1, 0, 55, (e) => wide.push(e.id))
+h.add({ id: 'e', x: 90, y: 1, r: 60 })
+h.near(35, 1, 0, 1, (e) => fat.push(e.id))
+h.near(0, 0, 0, Infinity, (e) => all.push(e.id))
+out.reach = [wide.sort().join(''), fat.sort().join(''), all.length]
 h.clear()
 const none = []
 h.near(1, 1, 0, 5, (e) => none.push(e.id))
@@ -115,6 +126,7 @@ func TestSpaceReferenceCore(t *testing.T) {
 		RestoreDirty                   bool
 		Near                           []string
 		Cleared                        int
+		Blast, Reach                   []any
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
@@ -173,6 +185,12 @@ func TestSpaceReferenceCore(t *testing.T) {
 	}
 	if got.Carve3d != 4 {
 		t.Errorf("3D carve broke %d floor cells, want 4", got.Carve3d)
+	}
+	if fmt.Sprint(got.Blast) != "[true 0 true]" {
+		t.Errorf("huge carve [broke some, cells left, fast] = %v, want [true 0 true]", got.Blast)
+	}
+	if fmt.Sprint(got.Reach) != "[abcd e 5]" {
+		t.Errorf("hash [wide reach, wide thing, no limit] = %v, want [abcd e 5]", got.Reach)
 	}
 	if fmt.Sprint(got.Near) != "[a b c]" || got.Cleared != 0 {
 		t.Errorf("hash near = %v, after clear %d; want [a b c] and 0", got.Near, got.Cleared)

@@ -323,10 +323,11 @@ function blend(fps) {
   out.blob = [hi - lo > 0.1, bottom > -0.01]
 }
 
-// 2D: the documented drawing math puts the lowest foot on the ground and a
-// planted foot stays put.
+// 2D: a kit made without three.js still has motion, and the documented
+// drawing math puts the lowest foot on the ground and a planted foot stays
+// put.
 {
-  const m = kit.motion({ legs: [{ L: 16, phase: 0 }, { L: 16, phase: 0.5 }], arms: 2, H: 48 })
+  const m = ctx.characterKit().motion({ legs: [{ L: 16, phase: 0 }, { L: 16, phase: 0.5 }], arms: 2, H: 48 })
   let x = 0, worst = 0, under = 0, slide = 0
   const planted = [null, null]
   for (let f = 0; f < 240; f++) {

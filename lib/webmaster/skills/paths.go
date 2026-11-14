@@ -4,9 +4,9 @@ package skills
 // cells, path following and spreading apart. The model reads it with
 // load_skill. The script block is run by paths_test.go, which checks the
 // heap, that A* finds the shortest way and agrees with the flow field on a
-// random maze, the closest cell when the goal is shut in, corner cutting,
-// the node budget, walkers arriving without entering a wall, and spreading;
-// change both together.
+// random maze, the closest cell when the goal is shut in or off the map,
+// corner cutting, the node budget, walkers arriving without entering a wall,
+// and spreading; change both together.
 const pathsReference = `PATHS REFERENCE:
 Use this when enemies, units, pets or anything else must find its way around
 walls to a target, instead of walking straight into the nearest wall. This
@@ -75,16 +75,19 @@ var paths = (function () {
     }
 
     // find returns the cell centers from the start to the goal, start
-    // excluded, with path.reached true. When the goal is shut in or the
-    // budget of cells runs out, it leads to the closest cell it found and
-    // reached is false. null means the start is inside a wall.
+    // excluded, with path.reached true. When the goal is shut in or off the
+    // map, or the budget of cells runs out, it leads to the closest cell it
+    // found and reached is false. null means the start is inside a wall.
     m.find = function (ax, ay, bx, by, budget) {
       var sx = cell(ax), sy = cell(ay), tx = cell(bx), ty = cell(by)
       if (!ok(sx, sy)) return null
       budget = budget || 3000
       stamp++
       q.clear()
-      var start = sy * w + sx, goal = ty * w + tx, best = start, bestGuess = guess(sx, sy, tx, ty)
+      // A goal off the map has no cell: -1, so it cannot pass for the cell
+      // its number would wrap to.
+      var start = sy * w + sx, goal = tx >= 0 && ty >= 0 && tx < w && ty < h ? ty * w + tx : -1
+      var best = start, bestGuess = guess(sx, sy, tx, ty)
       cost[start] = 0; from[start] = -1; seen[start] = stamp
       q.push(start, bestGuess)
       for (var n = 0; q.size() && n < budget;) {

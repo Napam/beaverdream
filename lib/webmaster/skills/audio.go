@@ -2,11 +2,12 @@ package skills
 
 // audioReference is the audio skill: background music from a seed. The model
 // reads it with load_skill. The script block is run by audio_test.go, which
-// checks that every note is in its scale, that a seed always writes the same
-// song, that the lead leaves rests and stays in range, that the scheduler
-// starts every step once and on the beat, that a second start does not make a
-// second loop, that nothing sounds before a gesture or when muted, and that
-// the mood switches the layers; change both together.
+// checks that every note is in its scale, that a seed, a number or text,
+// always writes the same song, that the lead leaves rests and stays in range,
+// that the scheduler starts every step once and on the beat, drops the steps
+// a hidden tab missed and survives a bad bpm, that a second start does not
+// make a second loop, that nothing sounds before a gesture or when muted, and
+// that the mood switches the layers; change both together.
 const audioReference = `AUDIO REFERENCE:
 Use this when a page wants background music. One-shot sounds (a coin, a hit,
 an explosion) belong to the feel skill and its zzfx synth. This core is
@@ -23,6 +24,10 @@ var music = (function () {
 
   function rng(seed) {
     var a = seed >>> 0
+    if (typeof seed !== 'number') {  // text, such as the random skill's seeds
+      a = 2166136261
+      for (var i = 0; i < String(seed).length; i++) a = Math.imul(a ^ String(seed).charCodeAt(i), 16777619) >>> 0
+    }
     return function () {
       a = (a + 0x6D2B79F5) >>> 0
       var t = a
@@ -38,9 +43,10 @@ var music = (function () {
     return root + 12 * oct + scale[((d % n) + n) % n]
   }
 
-  // compose writes a whole song from a seed: same seed, same song, so every
-  // visitor hears the same one. opt may fix scale (minor, major, dorian) and
-  // bpm. The lead is a walk over the scale with rests, the bass a root pulse.
+  // compose writes a whole song from a seed, a number or any text: same seed,
+  // same song, so every visitor hears the same one. opt may fix scale (minor,
+  // major, dorian) and bpm. The lead is a walk over the scale with rests, the
+  // bass a root pulse.
   function compose(seed, opt) {
     var r = rng(seed), o = opt || {}
     var name = SCALES[o.scale] ? o.scale : ['minor', 'major', 'dorian'][Math.floor(r() * 3)]
@@ -125,7 +131,7 @@ var music = (function () {
     pump()
   }
   function pump() {
-    var len = 60 / api.song.bpm / 2
+    var len = 60 / Math.min(300, Math.max(30, +api.song.bpm || 100)) / 2  // a bad bpm must not loop forever
     // A hidden tab parks its timer and the clock runs on. Drop the steps
     // that were missed instead of starting them all at once.
     if (next < ctx.currentTime) {
@@ -195,7 +201,8 @@ WIRING:
   room for the sound effects: they sit on top of the music, not under it.
 - A mute button and the M key flip music.muted, then call music.level(). Keep
   it with bd.save('muted', ...) and restore it on load, with fx.muted if the
-  feel skill is on the page, so one switch silences both.
+  feel skill is on the page, so one switch silences both. Skip the key while
+  the visitor types in the post form or any other field.
 - Music is on by default only if the page is a game that wants it. A quiet
   page stays quiet; never autoplay over a form or reading.
 

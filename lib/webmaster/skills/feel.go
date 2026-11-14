@@ -3,9 +3,9 @@ package skills
 // feelReference is the feel skill: shake, hit stop, particles, squash, sound
 // and rumble from one impact call. The model reads it with load_skill. The
 // script block is run by feel_test.go, which checks the shake curve and its
-// decay, the distance falloff, hum, the hit stop, the particle pool, the
-// spring, the audio voice cap, the named sounds' gate and the rumble; change
-// both together.
+// decay, the distance falloff, an impact without a place, hum, the hit stop,
+// the particle pool, the spring and its cap, the audio voice cap, the named
+// sounds' gate and the rumble; change both together.
 const feelReference = `FEEL REFERENCE:
 Use this when a page has actions: hits, shots, jumps, things breaking, a
 score. Make every action answer the player, without being asked. This core is
@@ -37,15 +37,18 @@ var fx = (function () {
 
   // impact is the one call for anything that happens. strength scales it
   // (1 is normal), mine is true when it happens to this visitor's own avatar.
+  // Without at it happens where the listener is.
   api.impact = function (type, at, strength, mine) {
     var e = EVENTS[type]
     if (!e) return
+    var flat = !at || at.z == null  // no place, or a place on a 2D page
+    at = at || api.at
     if (strength == null) strength = 1
     var d = Math.hypot((at.x || 0) - (api.at.x || 0), (at.y || 0) - (api.at.y || 0), (at.z || 0) - (api.at.z || 0))
     var near = mine ? 1 : Math.max(0, 1 - d / HEAR)
     trauma = Math.min(1, trauma + e.trauma * strength * near)
     if (mine) { stop = Math.max(stop, e.stop); buzz(e.buzz * strength) }
-    burst(at, e, Math.min(strength, 2))
+    burst(at, e, Math.min(strength, 2), flat)
     if (e.sound && sounds[e.sound]) api.sound(e.sound, at, strength, mine)
     else tone(e.tone, strength * near)
   }
@@ -108,7 +111,8 @@ var fx = (function () {
   }
   // pop squashes a body that was hit and flashes it white; settle springs it
   // back, overshooting about once. Draw it scaled (1 + o.pop, 1 - o.pop).
-  api.pop = function (o, amount) { o.pop = (o.pop || 0) + amount; o.popV = o.popV || 0; o.flash = 0.08 }
+  // Hits in a row add up to 0.8 at most, or the body would turn inside out.
+  api.pop = function (o, amount) { o.pop = Math.min(0.8, (o.pop || 0) + amount); o.popV = o.popV || 0; o.flash = 0.08 }
   api.settle = function (o, dt) {
     o.popV = (o.popV || 0) + (-300 * (o.pop || 0) - 14 * o.popV) * dt
     o.pop = (o.pop || 0) + o.popV * dt
@@ -119,8 +123,8 @@ var fx = (function () {
   function wave(k) {  // smooth noise, a different one per axis
     return Math.sin(clock * (31 + 7 * k) + 1.7 * k) * 0.6 + Math.sin(clock * (17 + 5 * k) + 4.1 * k) * 0.4
   }
-  function burst(at, e, strength) {
-    var n = Math.round(e.burst * strength), flat = at.z == null
+  function burst(at, e, strength, flat) {
+    var n = Math.round(e.burst * strength)
     for (var i = 0; i < n; i++) {
       var p = pool[cursor]
       cursor = (cursor + 1) % MAX  // a full pool reuses the oldest
@@ -180,8 +184,8 @@ WIRING:
   step the game with g, then draw. Particles and shake keep running during a
   hit stop, the game does not. With the controls core, drop its own loop and
   call game.update(g) from this one.
-- fx.at is the listener: set it to the camera or the visitor's avatar every
-  frame. Far events shake less and sound quieter.
+- fx.at is the listener: set its x and y (and z in 3D) to the camera or the
+  visitor's avatar every frame. Far events shake less and sound quieter.
 - Call fx.impact on the frame something happens, never every frame: a shot
   leaves, a hit lands, a body lands hard, a block breaks, something dies. Pass
   mine = true when this visitor's avatar did it or took it. Only those freeze
@@ -214,7 +218,9 @@ WIRING:
   them at the end of their lives. Reuse textures and materials too.
 - A body that is hit: fx.pop(body, 0.2 to 0.4), then fx.settle(body, dt) each
   frame. Draw it scaled (1 + pop, 1 - pop), white while body.flash > 0.
-- A mute: the M key and a small button toggle fx.muted, kept with bd.save('muted', fx.muted).
+- A mute: the M key and a small button toggle fx.muted, kept with
+  bd.save('muted', fx.muted) and restored on load with bd.load('muted', false).
+  Skip the key while the visitor types in the post form or any other field.
 - Multiplayer: share what happened, its actor, position and parameters in an
   action row. Local and remote actions call the same effect renderer, which
   calls fx.impact there, with mine if it happened to you. Generate particles,

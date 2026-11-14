@@ -62,6 +62,9 @@ let p = m.find(0.5, 0.5, 5.5, 5.5)
 out.open = [p.length, p.reached, Math.round(cost({ x: 0.5, y: 0.5 }, p) * 1000) / 1000]
 p = m.find(3.5, 3.5, 3.2, 3.9)
 out.sameCell = [p.length, p.reached]
+// A goal off the map is not reached: the way ends at the edge next to it.
+p = m.find(0.5, 0.5, 10.5, 3.5)
+out.offMap = [p.reached, at(p[p.length - 1])[0]]
 
 // A wall at x = 5 with one gap at the bottom: the way goes through the gap.
 let walls = new Set()
@@ -202,6 +205,7 @@ func TestPathsReferenceCore(t *testing.T) {
 		HeapSorted bool
 		Open       []any
 		SameCell   []any
+		OffMap     []any
 		Around     []bool
 		Followed   []bool
 		Broken     int
@@ -265,6 +269,9 @@ func TestPathsReferenceCore(t *testing.T) {
 	}
 	if got.Corner {
 		t.Error("a path slipped between two walls that touch at a corner")
+	}
+	if fmt.Sprint(got.OffMap) != "[false 9]" {
+		t.Errorf("goal off the map [reached, last cell x] = %v, want [false 9]", got.OffMap)
 	}
 	if fmt.Sprint(got.Budget) != "[false true]" {
 		t.Errorf("budget [reached has-way] = %v, want [false true]", got.Budget)

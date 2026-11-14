@@ -51,6 +51,14 @@ out.capAmp = amp(fx, 0.05)
 run(fx, 1 / 1.5, 60)
 out.afterDecay = Math.hypot(fx.shake.x, fx.shake.y)
 
+// An impact without a place happens at the listener.
+fx = fresh(); fx.at.x = 300; fx.at.y = 40
+fx.impact('smash')
+out.noPlaceAmp = amp(fx, 0.05)
+let atListener = true
+fx.each((p) => { if (Math.hypot(p.x - 300, p.y - 40) > 60 || p.z !== 0 || p.vz !== 0) atListener = false })
+out.noPlaceAtListener = atListener
+
 // Distance: an impact past HEAR adds nothing, unless it is mine.
 fx = fresh(); fx.at.x = 0
 fx.impact('kill', { x: 900, y: 0 })
@@ -192,6 +200,11 @@ fx.pop(slow, 0.3)
 for (let i = 0; i < 6; i++) fx.settle(slow, fx.update(0.25))
 out.slowPop = Math.abs(slow.pop)
 
+// Many hits in a row never squash a body past flat.
+const mashed = {}
+for (let i = 0; i < 10; i++) fx.pop(mashed, 0.4)
+out.mashedPop = mashed.pop
+
 // An impact without y, as a 3D page might send, leaves the shake a number.
 fx = fresh()
 fx.impact('hit', { x: 0, z: 0 })
@@ -223,6 +236,8 @@ func TestFeelReferenceCore(t *testing.T) {
 		MineRumble                           []int
 		Capped, SlowPop                      float64
 		NoY                                  bool
+		NoPlaceAmp, MashedPop                float64
+		NoPlaceAtListener                    bool
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
@@ -252,6 +267,16 @@ func TestFeelReferenceCore(t *testing.T) {
 			got.FarAmp,
 			got.FarMineAmp,
 		)
+	}
+	if got.NoPlaceAmp == 0 || !got.NoPlaceAtListener {
+		t.Errorf(
+			"an impact without a place shook %v with particles at the listener %v, want some and true",
+			got.NoPlaceAmp,
+			got.NoPlaceAtListener,
+		)
+	}
+	if got.MashedPop <= 0 || got.MashedPop >= 1 {
+		t.Errorf("ten pops in a row squash to %v, want above 0 and under 1", got.MashedPop)
 	}
 	if got.HumOn == 0 || got.HumOff != 0 {
 		t.Errorf("hum shook %v while called and %v after, want some and 0", got.HumOn, got.HumOff)

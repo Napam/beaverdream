@@ -29,10 +29,13 @@ function fresh() {
   out.globals = Object.keys(ctx).filter((k) => before.indexOf(k) < 0)
   return ctx.game
 }
-function key(type, code, inForm) {
+function key(type, code, inForm, meta, ctrl, alt) {
   let prevented = false
   handlers[type]({
     code: code,
+    metaKey: !!meta,
+    ctrlKey: !!ctrl,
+    altKey: !!alt,
     target: { closest: () => (inForm ? {} : null) },
     preventDefault: () => { prevented = true },
   })
@@ -108,6 +111,34 @@ g = fresh()
 key('keydown', 'KeyD', true)
 run(g, 0.5, 60)
 out.typedVx = g.me.vx
+// Cmd+D is a shortcut, and its keyup never comes: it must not hold the key.
+key('keydown', 'KeyD', false, true)
+run(g, 0.5, 60)
+out.shortcutVx = g.me.vx
+// Ctrl and Alt are shortcuts too.
+g = fresh(); run(g, 0.5, 60)
+key('keydown', 'KeyD', false, false, true)
+run(g, 0.3, 60)
+out.ctrlVx = g.me.vx
+g = fresh(); run(g, 0.5, 60)
+key('keydown', 'KeyD', false, false, false, true)
+run(g, 0.3, 60)
+out.altVx = g.me.vx
+// A keyup for a key never pressed here (typed into the form) does not cut a
+// jump short.
+g = fresh(); run(g, 0.5, 60)
+key('keydown', 'Space'); run(g, 0.05, 60)
+const rising = g.me.vy
+key('keyup', 'KeyW')
+out.strayRelease = g.me.vy === rising && rising < 0
+key('keyup', 'Space')
+// A key let go while Cmd is down sends no keyup on macOS: letting go of Cmd
+// drops what is held, so the box coasts to a stop instead of running on.
+g = fresh(); run(g, 0.5, 60)
+key('keydown', 'KeyD'); run(g, 0.3, 60)
+handlers.keyup({ code: 'MetaLeft', key: 'Meta' })
+run(g, 0.2, 60)
+out.afterCmd = g.me.vx < 50
 out.arrowPrevented = key('keydown', 'ArrowLeft')
 out.spaceInFormPrevented = key('keydown', 'Space', true)
 out.letterPrevented = key('keydown', 'KeyA')
@@ -124,6 +155,10 @@ func TestControlsReferenceCore(t *testing.T) {
 		Globals               []string
 		LandBottom, WallRight float64
 		WallVx, Tap, TypedVx  float64
+		ShortcutVx            float64
+		CtrlVx, AltVx         float64
+		StrayRelease          bool
+		AfterCmd              bool
 		LandGround            bool
 		X, Vx, Jump           map[string]float64
 		Coyote, Late          struct{ Immediate, Later bool }
@@ -183,6 +218,21 @@ func TestControlsReferenceCore(t *testing.T) {
 	}
 	if got.TypedVx != 0 {
 		t.Errorf("a key typed into the form moved the avatar: vx %v", got.TypedVx)
+	}
+	if !got.StrayRelease || !got.AfterCmd {
+		t.Errorf(
+			"a stray keyup left the jump alone %v, letting go of Cmd dropped the held key %v; want both",
+			got.StrayRelease,
+			got.AfterCmd,
+		)
+	}
+	if got.ShortcutVx != 0 || got.CtrlVx != 0 || got.AltVx != 0 {
+		t.Errorf(
+			"a key pressed with Cmd, Ctrl or Alt moved the avatar: vx %v, %v, %v",
+			got.ShortcutVx,
+			got.CtrlVx,
+			got.AltVx,
+		)
 	}
 	if !got.ArrowPrevented || got.SpaceInFormPrevented || got.LetterPrevented ||
 		got.OtherPrevented {

@@ -193,6 +193,17 @@ const runner = w.spawn('scout', 0, 0, true)
 runner.mx = 1
 const alpha = w.frame(1.5 / 60)
 out.alpha = [Math.round(alpha * 100) / 100, runner.px < runner.x]
+// The dead do nothing, and a kind whose brain is not written yet still steps.
+w = fresh()
+let lateMoves = 0
+w.onMove = () => lateMoves++
+const ghost = w.spawn('scout', 0, 0, true)
+ghost.hp = 0
+w.press(ghost, 'KeyX')
+w.KINDS.walker.brain = 'unwritten'
+w.spawn('walker', 5, 5)
+run(w, 0.1, 60)
+out.dead = [lateMoves, w.things.length]
 
 console.log(JSON.stringify(out))
 `
@@ -202,6 +213,7 @@ func TestEntitiesReferenceCore(t *testing.T) {
 	t.Logf("%s", out)
 	var got struct {
 		Globals          []string
+		Dead             []int
 		WrongKeys, Grown []any
 		GrownShoots      int
 		Tap, Half, Full  []float64
@@ -294,6 +306,12 @@ func TestEntitiesReferenceCore(t *testing.T) {
 	}
 	if fmt.Sprint(got.Driven) != "[3 3 true]" {
 		t.Errorf("driven [x y cooling] = %v, want [3 3 true]: unmoved, timers running", got.Driven)
+	}
+	if fmt.Sprint(got.Dead) != "[0 1]" {
+		t.Errorf(
+			"dead thing [moves run, things left with an unwritten brain] = %v, want [0 1]",
+			got.Dead,
+		)
 	}
 	if got.PauseSteps != 6 {
 		t.Errorf("a 5s frame ran %d steps, want 6 (0.1s)", got.PauseSteps)

@@ -6,7 +6,7 @@ package skills
 // against the vendored three.js, which checks every plan's height, feet on
 // the ground without sliding, gait phases, arm swing, bob, lean, landing,
 // smooth blends, seeded looks, actions, wheels, wings, hops and the 2D
-// numbers; change both together.
+// numbers from a kit made without three.js; change both together.
 const charactersReference = `CHARACTERS REFERENCE:
 Use this for any character someone plays or meets: players, enemies,
 animals, pets, monsters, robots, vehicles. The kit is a helper: it gives a
@@ -568,7 +568,8 @@ the same figure, and a good character is fun to look at.
   light: a HemisphereLight plus a DirectionalLight. Use emissive for small
   accents only.
 - 2D or a drawn style (pixel art, paper, sprites): skip rig and draw the
-  characters your way, with motion for the movement.
+  characters your way, with motion for the movement. The page needs no
+  three.js for that: const kit = characterKit().
   kit.motion({ legs: [{ L: 16, phase: 0 }, { L: 16, phase: 0.5 }], arms:
   2, H: 48 }) gives the same gait with no three.js; m.update(dt, { speed:
   vx * facing, vy: -vy, grounded }) each frame. Hip at x, ground - (m.hip +

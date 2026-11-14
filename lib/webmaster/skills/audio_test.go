@@ -67,6 +67,9 @@ out.inScale = inScale
 // options are honored.
 out.sameSeed = JSON.stringify(music.compose(7)) === JSON.stringify(music.compose(7))
 out.otherSeed = JSON.stringify(music.compose(7)) !== JSON.stringify(music.compose(8))
+// A text seed, as the random skill makes them, is a seed like any other.
+const text = (s) => JSON.stringify(Object.assign(music.compose(s), { seed: 0 }))
+out.textSeed = [text('world:1') === text('world:1'), text('world:1') !== text('world:2'), text('world:1') !== text(0)]
 const fixed = music.compose(3, { scale: 'dorian', bpm: 100 })
 out.options = [fixed.name, fixed.bpm]
 
@@ -114,6 +117,20 @@ ctx.currentTime = 20
 intervals.filter(Boolean)[0]()
 out.caughtUp = Math.min.apply(null, sources.map((s) => s.at)) >= 20 - 1e-9
 
+// A song with a bpm that is no tempo still plays, and the loop ends.
+music = fresh(); handlers.keydown()
+const broken = music.compose(5)
+broken.bpm = -120
+music.play(broken)
+out.badBpm = sources.length > 0 && sources.length < 50
+
+// An endless bpm is no tempo either: the clamp holds, and the loop ends.
+music = fresh(); handlers.keydown()
+const endless = music.compose(5)
+endless.bpm = Infinity
+music.play(endless)
+out.fastBpm = sources.length > 0 && sources.length < 50
+
 // Mood: a pad and a bass alone at 0, a lead at 0.4, drums at 1.
 function voices(mood) {
   music = fresh(); handlers.keydown()
@@ -150,13 +167,14 @@ func TestAudioReferenceCore(t *testing.T) {
 		Globals                          []string
 		InScale, SameSeed, OtherSeed     bool
 		Options                          []any
+		TextSeed                         []bool
 		LeadRests, LeadBreath, LeadRange bool
 		BeforeGesture                    []int
 		AfterGesture                     []any
 		OneLoop, Steps                   int
 		Gaps                             []int
 		StepLen                          int
-		Ahead, CaughtUp                  bool
+		Ahead, CaughtUp, BadBpm, FastBpm bool
 		Mood                             []any
 		Muted, Unmuted                   float64
 		Stopped, Restarted               int
@@ -177,6 +195,12 @@ func TestAudioReferenceCore(t *testing.T) {
 			got.OtherSeed,
 		)
 	}
+	if len(got.TextSeed) != 3 || !got.TextSeed[0] || !got.TextSeed[1] || !got.TextSeed[2] {
+		t.Errorf(
+			"text seeds [same repeats, another differs, differs from seed 0] = %v, want all true",
+			got.TextSeed,
+		)
+	}
 	if len(got.Options) != 2 || got.Options[0] != "dorian" || got.Options[1] != 100.0 {
 		t.Errorf("options gave %v, want dorian at 100", got.Options)
 	}
@@ -194,6 +218,12 @@ func TestAudioReferenceCore(t *testing.T) {
 	}
 	if got.OneLoop != 1 {
 		t.Errorf("play three times left %d loops, want 1", got.OneLoop)
+	}
+	if !got.BadBpm {
+		t.Error("a negative bpm did not play a bounded number of steps")
+	}
+	if !got.FastBpm {
+		t.Error("an endless bpm did not play a bounded number of steps")
 	}
 	if !got.CaughtUp {
 		t.Error("after a hidden tab, a step was scheduled in the past instead of dropped")

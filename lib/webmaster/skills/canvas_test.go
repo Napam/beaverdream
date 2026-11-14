@@ -40,9 +40,10 @@ class FakeCanvas {
   getContext() { return this.ctx || (this.ctx = fakeCtx(this)) }
   getBoundingClientRect() { return this.box }
 }
-let onResize = null
+let onResize = null, onBox = null
 const fakes = {
   OffscreenCanvas: FakeCanvas,
+  ResizeObserver: function (fn) { this.observe = () => { onBox = fn } },
   devicePixelRatio: 2,
   addEventListener: (name, fn) => { if (name === 'resize') onResize = fn },
 }
@@ -63,6 +64,23 @@ onResize()
 v.begin()
 out.view = [...first, el.width, el.height, v.ctx.at(10, 10)[0], v.ctx.imageSmoothingEnabled]
 ctx.devicePixelRatio = 2
+el.box = { width: 400, height: 300 }
+onResize()
+
+// The box changes with no window resize: the view follows it. A canvas whose
+// box is its own pixels (no CSS size) does not grow each time it is fitted.
+onBox()
+el.box = { width: 320, height: 240 }
+onBox()
+const followed = [el.width, el.height, v.w]
+const bare = new FakeCanvas()
+bare.box = { get width() { return bare.width }, get height() { return bare.height } }
+const mainResize = onResize
+d.view(bare)
+// The browser reports the first box, then every change of it.
+for (let i = 0, last = -1; i < 5 && bare.width !== last; i++) { last = bare.width; onBox() }
+out.box = [...followed, bare.width, bare.height]
+onBox = null; onResize = mainResize
 el.box = { width: 400, height: 300 }
 onResize()
 
@@ -158,6 +176,10 @@ d.parallax(v, par, [
   { depth: 1, width: 300, draw: (c, x) => copies.near.push(x) },
 ])
 out.parallax = [copies.far[0] <= 0, copies.far[copies.far.length - 1] + 300 >= v.w, copies.far[1] - copies.far[0], copies.far[0], copies.near[0]]
+// A layer with no width, or a zero or negative one, is drawn once and ends.
+let lone = 0
+d.parallax(v, par, [{ depth: 0.5, draw: () => lone++ }, { depth: 0.5, width: 0, draw: () => lone++ }, { depth: 0.5, width: -300, draw: () => lone++ }])
+out.loneLayers = lone
 
 // ysort puts the lower thing in front.
 out.ysort = d.ysort([{ id: 'a', y: 5 }, { id: 'b', y: 1 }, { id: 'c', y: 3 }]).map((t) => t.id)
@@ -193,6 +215,8 @@ func TestCanvasReferenceCore(t *testing.T) {
 		Mirror   []string
 		Flash    []string
 		Parallax []any
+		Box      []int
+		Lone     int `json:"loneLayers"`
 		Ysort    []string
 		Light    []any
 	}
@@ -230,6 +254,8 @@ func TestCanvasReferenceCore(t *testing.T) {
 		got.Parallax,
 		"[true true 300 -200 -100]",
 	)
+	check("box change [w h cssW, unsized w h]", got.Box, "[640 480 320 600 300]")
+	check("layers without a positive width drawn", got.Lone, "3")
 	check("ysort", got.Ysort, "[b c a]")
 	check(
 		"light [day calls, night draws, w h, cuts, mode, x, w]",

@@ -4,8 +4,9 @@ package skills
 // feel. The model reads it with load_skill, so it arrives as a tool result
 // and never in the prompt prefix. The script block is run by
 // controls_test.go, which checks the landing, the wall, the jump height,
-// the coyote time, the buffer, the keys and frame-rate independence; change
-// both together.
+// the coyote time, the buffer, frame-rate independence and the keys: typing
+// in a form, shortcuts, a stray keyup and keys let go under Cmd; change both
+// together.
 const controlsReference = `CONTROLS REFERENCE:
 Use this when you build or change a world someone moves through. Make it feel
 good without being asked. Pick the genre from the post and use its GENRES line.
@@ -34,15 +35,20 @@ var game = (function () {
     keys[code] = true
   }
   function release(code) {
+    if (!keys[code]) return  // never pressed here: typed into a form
     if (KEYS[code] === 2 && me.vy < 0) me.vy *= 0.5
     keys[code] = false
   }
   addEventListener('keydown', function (e) {
     if (!KEYS[e.code] || e.target.closest && e.target.closest('input, textarea, select, [contenteditable]')) return
+    if (e.metaKey || e.ctrlKey || e.altKey) return  // a shortcut, and macOS sends no keyup after Cmd
     if (e.code.indexOf('Key') !== 0) e.preventDefault()  // arrows and Space scroll
     press(e.code)
   })
-  addEventListener('keyup', function (e) { release(e.code) })
+  addEventListener('keyup', function (e) {
+    if (e.key === 'Meta') keys = {}  // macOS sent no keyup for keys let go under Cmd
+    release(e.code)
+  })
   addEventListener('blur', function () { keys = {} })
 
   function held(a, b) { return keys[a] || keys[b] ? 1 : 0 }
@@ -146,8 +152,8 @@ GENRES:
 - Flight, space: chase at k 6. W thrusts along facing, A/D roll, mouse pitch.
   No gravity, drag k 0.3, a top speed, no stop on release.
 - Multiplayer: your avatar, physics and camera are local. Motion rows carry
-  position, facing and look; action rows carry what happened. Others ease to their newest row
-  at k 10 and snap past a few tiles.
+  position, facing and look; action rows carry what happened. Others ease to
+  their newest row at k 10 and snap past a few tiles.
 
 ROWS: free movement sends on the journal example's 60ms timer, even while
 still. A grid or step world sends one row per step, and again every 2s while

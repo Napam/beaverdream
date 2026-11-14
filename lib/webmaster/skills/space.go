@@ -3,8 +3,8 @@ package skills
 // spaceReference is the space skill: a grid world that rays, collision,
 // damage and drawing all read, plus a spatial hash. The model reads it with
 // load_skill. The script block is run by space_test.go, which checks the
-// rays in 2D and 3D, the carve, line of sight, hit points, restore and the
-// hash; change both together.
+// rays in 2D and 3D, the carve and one far bigger than the grid, line of
+// sight, hit points, restore and the hash at any reach; change both together.
 const spaceReference = `SPACE REFERENCE:
 Use this for a world whose walls, buildings or ground can be hit, broken, dug,
 seen through or collided with, and for many things that must find each other.
@@ -82,9 +82,11 @@ var space = (function () {
     // of the point, and returns how many it emptied. Without power it empties.
     g.carve = function (px, py, pz, r, power) {
       var broke = 0, flat = d === 1
-      for (var z = cell((pz || 0) - r); z <= cell((pz || 0) + r); z++)
-        for (var y = cell(py - r); y <= cell(py + r); y++)
-          for (var x = cell(px - r); x <= cell(px + r); x++) {
+      function lo(v) { return Math.max(0, cell(v - r)) }  // only cells inside the grid
+      function hi(v, n) { return Math.min(n - 1, cell(v + r)) }
+      for (var z = lo(pz || 0); z <= hi(pz || 0, d); z++)
+        for (var y = lo(py); y <= hi(py, h); y++)
+          for (var x = lo(px); x <= hi(px, w); x++) {
             var v = g.get(x, y, z)
             if (!v) continue
             var cz = flat ? 0 : (z + 0.5) * size - (pz || 0)
@@ -112,29 +114,36 @@ var space = (function () {
   // hash finds things near a point without testing every pair. Clear and
   // add everything once a step, then ask near(). Things have x, y, z and r.
   function hash(size) {
-    var buckets = new Map()
+    var buckets = new Map(), big = 0  // big is the largest r added
     function key(x, y, z) { return x + ',' + y + ',' + z }
     var h = {}
-    h.clear = function () { buckets.clear() }
+    h.clear = function () { buckets.clear(); big = 0 }
     h.add = function (e) {
+      if (e.r > big) big = e.r
       var k = key(Math.floor(e.x / size), Math.floor(e.y / size), Math.floor((e.z || 0) / size))
       if (!buckets.has(k)) buckets.set(k, [])
       buckets.get(k).push(e)
     }
     // near calls fn for every thing whose circle or sphere touches the one at
-    // (x, y, z) with radius r, the asker included. It looks one bucket around,
-    // so size must be at least r plus the largest e.r.
+    // (x, y, z) with radius r, the asker included. It reads every bucket the
+    // reach covers, or all of them when the reach covers more, so any r is
+    // right and a small r usually touches only a few.
     h.near = function (x, y, z, r, fn) {
-      var cx = Math.floor(x / size), cy = Math.floor(y / size), cz = Math.floor((z || 0) / size)
-      for (var k = cz - 1; k <= cz + 1; k++)
-        for (var j = cy - 1; j <= cy + 1; j++)
-          for (var i = cx - 1; i <= cx + 1; i++) {
+      z = z || 0
+      function test(list) {
+        for (var n = 0; n < list.length; n++) {
+          var e = list[n]
+          if (Math.hypot(e.x - x, e.y - y, (e.z || 0) - z) <= r + (e.r || 0)) fn(e)
+        }
+      }
+      var m = r + big, x0 = Math.floor((x - m) / size), y0 = Math.floor((y - m) / size), z0 = Math.floor((z - m) / size)
+      var x1 = Math.floor((x + m) / size), y1 = Math.floor((y + m) / size), z1 = Math.floor((z + m) / size)
+      if (!((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) <= buckets.size)) return buckets.forEach(test)
+      for (var k = z0; k <= z1; k++)
+        for (var j = y0; j <= y1; j++)
+          for (var i = x0; i <= x1; i++) {
             var list = buckets.get(key(i, j, k))
-            if (!list) continue
-            for (var n = 0; n < list.length; n++) {
-              var e = list[n]
-              if (Math.hypot(e.x - x, e.y - y, (e.z || 0) - (z || 0)) <= r + (e.r || 0)) fn(e)
-            }
+            if (list) test(list)
           }
     }
     return h
@@ -170,9 +179,9 @@ changes every cell or none.
   by 8 cells, keyed by g.takeDirty(), rebuilt only when dirty. Skip cells
   with all six neighbors solid. Shade by depth or hp so a hole's inside
   shows.
-- Many things: rebuild a space.hash(size) every step, with size at least
-  twice the largest r, then ask near() for hits, pickups and crowding instead
-  of every pair. near() also returns the asker: skip it.
+- Many things: rebuild a space.hash(size) every step, with size about twice
+  the usual r, then ask near() for hits, pickups and crowding instead of
+  every pair. near() also returns the asker: skip it.
 - Size: keep the grid under 2 million cells. Make cells bigger before you
   make the world bigger.
 - Multiplayer: a carve is a row {x, y, z, r, power}. Every page applies the

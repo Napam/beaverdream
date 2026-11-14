@@ -3,8 +3,9 @@ package skills
 // canvasReference is the canvas skill: sharp 2D drawing with a camera, a
 // cached tile layer, autotiling, sprites from text, parallax, y sorting and
 // a light layer. The model reads it with load_skill. The script block is
-// run by canvas_test.go, which checks the pixel ratio, that the camera's
-// drawing transform and toWorld agree, the visible range, the chunk cache
+// run by canvas_test.go, which checks the pixel ratio, that a sized canvas
+// follows its box without growing, that the camera's drawing transform and
+// toWorld agree, the visible range, the chunk cache
 // and its eviction, autotile masks, sprite pixels, parallax copies and the
 // light layer; change both together.
 const canvasReference = `CANVAS REFERENCE:
@@ -23,17 +24,17 @@ var draw2d = (function () {
   }
 
   // view fits a canvas to its CSS box times the screen's pixel ratio, now
-  // and on every resize, so nothing is blurry. With pixel, pixel art stays
+  // and whenever the window or the box changes, so nothing is blurry. With pixel, pixel art stays
   // crisp. Draw in CSS px: call v.begin() first every frame.
   function view(el, pixel) {
-    var ctx = el.getContext('2d'), v = { el: el, ctx: ctx, w: 0, h: 0, ratio: 1 }
+    var ctx = el.getContext('2d'), v = { el: el, ctx: ctx, w: 0, h: 0, ratio: 1 }, wrote = false
     if (pixel) el.style.imageRendering = 'pixelated'
     v.fit = function () {
       var box = el.getBoundingClientRect()
       v.ratio = (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1
       v.w = box.width; v.h = box.height
       var bw = Math.round(v.w * v.ratio), bh = Math.round(v.h * v.ratio)
-      if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
+      if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh; wrote = true }
     }
     v.begin = function () {
       ctx.setTransform(v.ratio, 0, 0, v.ratio, 0, 0)
@@ -41,7 +42,16 @@ var draw2d = (function () {
       ctx.clearRect(0, 0, v.w, v.h)
     }
     v.fit()
-    addEventListener('resize', v.fit)
+    addEventListener('resize', v.fit)  // also fires when the pixel ratio changes
+    // The box also changes with no window resize: a panel opens, posts
+    // arrive. A canvas that CSS does not size takes its box from its own
+    // pixels, so a change fit itself caused is skipped, or it would grow
+    // forever.
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(function () {
+      var box = el.getBoundingClientRect(), own = wrote && box.width === el.width && box.height === el.height
+      wrote = false
+      if (!own) v.fit()
+    }).observe(el)
     return v
   }
 
@@ -160,11 +170,13 @@ var draw2d = (function () {
   // parallax draws layers behind the world, before cam.begin(). Each layer
   // is { depth, width, draw(ctx, x, y) }: depth 0 stays put, 1 moves with
   // the world. draw paints one copy with its left edge at screen x, shifted
-  // down by y; copies repeat every width px to fill the screen.
+  // down by y; copies repeat every width px to fill the screen. A layer
+  // without a width is drawn once.
   function parallax(v, cam, layers) {
     for (var i = 0; i < layers.length; i++) {
-      var l = layers[i], W = l.width
+      var l = layers[i], W = l.width > 0 ? l.width : Infinity
       var shift = -cam.x * cam.zoom * l.depth, y = -cam.y * cam.zoom * l.depth
+      if (W === Infinity) { l.draw(v.ctx, shift, y); continue }
       for (var x = ((shift % W) + W) % W - W; x < v.w; x += W) l.draw(v.ctx, x, y)
     }
   }

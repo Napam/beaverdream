@@ -272,7 +272,8 @@ and restores them from rows rather than generating them again.
 - Generate with plain math. Math.sin, Math.cos, Math.pow, Math.exp and
   Math.hypot may differ in the last digit between browsers, and one
   different digit can grow into a different world. The core uses only
-  + - * / and floor; keep generation that way.
+  + - * / and floor; keep generation that way. Math.sqrt is correctly rounded
+  in every browser, so distances are safe.
 - Generate once at load, from the seed, before anything is drawn. Rows in
   the journal (a carve, a door opened) apply on top of that world. If the
   page changes how the world is generated, old rows describe a different

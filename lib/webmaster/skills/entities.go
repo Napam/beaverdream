@@ -5,7 +5,8 @@ package skills
 // model reads it with load_skill. The script block is run by
 // entities_test.go, which checks that a kind only runs its own moves, the
 // charge curve, the cooldown, the shot range at three frame rates, hits,
-// walls, the pool and spawning; change both together.
+// walls, the pool, spawning, brains, the fixed step and that the dead run no
+// moves; change both together.
 const entitiesReference = `ENTITIES REFERENCE:
 Use this when a page has several kinds of characters, enemies, units or
 vehicles, each with its own moves. This core is tested. Reuse helpers already
@@ -119,7 +120,7 @@ var world = (function () {
       for (var c in e.cool) e.cool[c] = Math.max(0, e.cool[c] - STEP)
       for (var h in e.held) e.held[h] += STEP
       if (e.driven) continue  // the page moves it, world only runs its moves
-      if (k.brain) BRAINS[k.brain](e)
+      if (BRAINS[k.brain]) BRAINS[k.brain](e)
       var len = Math.max(1, Math.hypot(e.mx, e.my))
       var tx = e.mx / len * k.speed, ty = e.my / len * k.speed
       e.vx = tx + (e.vx - tx) * ease; e.vy = ty + (e.vy - ty) * ease
@@ -158,7 +159,7 @@ var world = (function () {
     return null  // every shot is in flight
   }
   function use(e, name, p) {
-    if (e.cool[name] > 0 || MOVES[name].run(e, p) === false) return
+    if (e.hp <= 0 || e.cool[name] > 0 || MOVES[name].run(e, p) === false) return  // the dead do nothing
     e.cool[name] = MOVES[name].cooldown
     api.onMove(name, e, p)
   }
@@ -190,8 +191,8 @@ point at the same MOVES name; when one needs it different, it gets its own
 move. A post about one kind changes that kind's lines and no others.
 
 - Transform (a person who turns into a giant, a car into a plane) is
-  world.become(e, other): a second entry with its own stats and moves, one of them
-  a move back.
+  world.become(e, other): a second entry with its own stats and moves, one
+  of them a move back.
 - Moving: world moves every thing on the ground. For the visitor's avatar,
   set e.mx and e.my (-1 to 1) from the held keys and e.face (radians) from
   the last input or the aim; world eases the velocity to them at the kind's
@@ -200,7 +201,8 @@ move. A post about one kind changes that kind's lines and no others.
   its avatar: set e.driven, copy game.me's center into e.x and e.y each
   frame, and apply pushes in onMove yourself.
 - Keys: each kind maps key codes to moves; press and release run them. Skip
-  a keydown with e.repeat, or held keys autofire. Show the kind's keys.
+  a keydown with e.repeat, or held keys autofire, and one typed into the post
+  form or any other field. Show the kind's keys.
 - Tap, hold, charge: a move with charge runs on release, scaled by how long
   it was held. It covers "hold to charge" and "tap for small, hold for big".
   Draw world.charging(e, code) as a bar.
@@ -230,5 +232,6 @@ move. A post about one kind changes that kind's lines and no others.
   shooter's page judges its own hits and sends them as rows. Shared enemies
   use the system prompt's recorded owner: only that page runs brains and
   spawnAway, then publishes snapshots and hits for the others. Math.random
-  in spawnAway is local to that owner; never run it independently in every tab.
+  in spawnAway is local to that owner; never run it independently in every
+  tab.
 `

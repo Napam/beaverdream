@@ -240,14 +240,36 @@ empty slot keeps its default. The order:
   deltaSlide, pitchJump, pitchJumpTime, repeatTime, noise, modulation,
   bitCrush, delay, sustainVolume, decay, tremolo, filter (negative is high
   pass, positive is low pass, in Hz).
-Seconds for the time slots, Hz for frequency. Starting points to
-tune, kept in one SOUNDS table like EVENTS:
-  coin:     [, , 1675, , .06, .24, 1, 1.82, , , 837, .06]
-  thud:     [, , 129, .01, , .15, , , , , , , , 5]
-  boom:     [, , 333, .01, 0, .9, 4, 1.9, , , , , , .5, , .6]
-  gameover: [, , 925, .04, .3, .6, 1, .3, , 6.27, -184, .09, .17]
-gameover is long (about a second), so it is a jingle for the end of a round,
-never a shot. A short sound is a small attack and release with a slide.
+Seconds for the time slots, Hz for frequency. The envelope runs attack,
+decay, sustain at sustainVolume, then release.
+DESIGNING A SOUND: decide what it means, then pick each part.
+- Direction is meaning. A positive slide or pitchJump rises: a jump, a
+  pickup, a power-up, a level done. A negative one falls: a hit taken, a
+  fall, a death, a power down.
+- Size is pitch and length. Small, light things are high and short (a
+  click, a coin, a footstep on wood). Big, heavy things are low and long (a
+  door, a giant's step, a boulder).
+- Material is shape. Sine and triangle are soft: magic, bubbles, the UI.
+  Saw and square are bright and retro: lasers, blips. Shape 4 is noise:
+  wind, explosions, dust, waves. The noise slot adds grit to any shape,
+  bitCrush makes it lo-fi.
+- Time shape is the feel of it. An impact has attack 0 and a short release.
+  A swell has a long attack. repeatTime warbles (an alarm, a charge), tremolo
+  throbs (an engine), delay echoes (a cave, a big hall), and filter softens
+  (positive) or thins (negative).
+- A big event can be two sounds at once: a low noise body and a short
+  pitched crack.
+- Give a world one family: its sounds share a shape, a pitch range and a
+  texture, so they belong together. Another world gets another family:
+  soft sines for a dreamy one, crunchy noise for a war, squares for an
+  arcade.
+Examples of the format, not sounds to reuse:
+  coin:     [, , 1675, , .06, .24, 1, 1.82, , , 837, .06]   a rising jump, short
+  thud:     [, , 129, .01, , .15, , , , , , , , 5]          low, short, gritty
+  boom:     [, , 333, .01, 0, .9, 4, 1.9, , , , , , .5, , .6]  noise, long
+  gameover: [, , 925, .04, .3, .6, 1, .3, , 6.27, -184, .09, .17]  falls, about a second
+A sound over half a second is a jingle for a moment that matters, never a
+shot. Keep the world's sounds in one SOUNDS table, like EVENTS.
 - Register the table once: fx.sounds(SOUNDS, zzfx), and call
   fx.sound(name, at, strength, mine), or give an EVENTS row sound: 'thud' so
   fx.impact plays it. The core then mutes, waits for a gesture, drops a repeat
@@ -259,8 +281,8 @@ never a shot. A short sound is a small attack and release with a slide.
 - Raise randomness (0.05 is the default) to 0.1 for sounds that repeat fast,
   footsteps, shots, pickups, so they do not sound like a machine gun.
 - Keep volume under 1 and call setVolume(0.2 to 0.4) once.
-- Changing one number changes the sound a lot. Change one at a time, and
-  prefer a nearby preset over inventing a sound from nothing.
+- Changing one number changes the sound a lot. Build a sound from the rules
+  above, then tune it one number at a time.
 - Music is not in ZzFX: load the audio skill for background music.
 
 TUNING: a post that asks for more or less of something changes that event's

@@ -1536,7 +1536,13 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString(trigger.Body)
 		b.WriteString("\n")
 	} else {
-		b.WriteString("NEW POSTS since the last change:\n")
+		// An admin turn can run between a post and the turn that answers
+		// it, so these are not "since the last change".
+		fmt.Fprintf(
+			&b.Builder,
+			"NEW POSTS to answer this turn, oldest first (%d):\n",
+			len(triggers),
+		)
 		for _, trigger := range triggers {
 			author := trigger.Author
 			if author == "" {

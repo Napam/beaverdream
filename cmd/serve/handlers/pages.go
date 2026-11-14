@@ -145,12 +145,6 @@ func (h *Handlers) CreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 	h.hub.publish(topicPosts)
 
-	if !h.allowRewrite(p.IdentityID) {
-		h.logger.Warn("Post stored without a rewrite", slog.Bool("throttled", true))
-		h.postDone(w, r)
-		return
-	}
-
 	h.queuePost(createdPost(post))
 	h.postDone(w, r)
 }

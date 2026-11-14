@@ -75,10 +75,11 @@ func TestFailedTurnWithoutMessagesShowsItsPost(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+	post, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
 		Author: "dave",
 		Body:   "give the world a moon",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create post: %v", err)
 	}
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
@@ -88,6 +89,7 @@ func TestFailedTurnWithoutMessagesShowsItsPost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start turn: %v", err)
 	}
+	addTriggers(t, queries, turn.ID, post.ID)
 	if err := queries.FailRunningTurns(ctx); err != nil {
 		t.Fatalf("fail running turns: %v", err)
 	}

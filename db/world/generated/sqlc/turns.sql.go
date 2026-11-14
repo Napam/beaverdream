@@ -10,6 +10,23 @@ import (
 	"database/sql"
 )
 
+const addTurnTrigger = `-- name: AddTurnTrigger :exec
+INSERT INTO
+  turn_triggers (turn_id, post_id)
+VALUES
+  (?, ?)
+`
+
+type AddTurnTriggerParams struct {
+	TurnID int64
+	PostID int64
+}
+
+func (q *Queries) AddTurnTrigger(ctx context.Context, arg AddTurnTriggerParams) error {
+	_, err := q.db.ExecContext(ctx, addTurnTrigger, arg.TurnID, arg.PostID)
+	return err
+}
+
 const countChangedSinceHeal = `-- name: CountChangedSinceHeal :one
 SELECT
   count(*)
@@ -487,62 +504,6 @@ func (q *Queries) ListPostsAfter(ctx context.Context, arg ListPostsAfterParams) 
 	return items, nil
 }
 
-const listPostsForTurn = `-- name: ListPostsForTurn :many
-SELECT
-  p.id, p.author, p.body, p.created_at, p.kind
-FROM
-  posts p
-WHERE
-  p.kind = 'post'
-  AND p.id < ?1
-  AND p.id > COALESCE(
-    (
-      SELECT
-        MAX(t.id)
-      FROM
-        turns t
-      WHERE
-        t.kind = 'changeset'
-        AND t.id < ?1
-    ),
-    0
-  )
-ORDER BY
-  p.id ASC
-`
-
-// The posts a changeset answered: the ones between it and the changeset
-// before it, which is the range the worker coalesced into that turn.
-// Replies are the webmaster's own words, never a trigger.
-func (q *Queries) ListPostsForTurn(ctx context.Context, turnID int64) ([]Post, error) {
-	rows, err := q.db.QueryContext(ctx, listPostsForTurn, turnID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Post
-	for rows.Next() {
-		var i Post
-		if err := rows.Scan(
-			&i.ID,
-			&i.Author,
-			&i.Body,
-			&i.CreatedAt,
-			&i.Kind,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listRecentPosts = `-- name: ListRecentPosts :many
 SELECT
   id, author, body, created_at, kind
@@ -660,22 +621,48 @@ func (q *Queries) ListRoomLog(ctx context.Context, arg ListRoomLogParams) ([]Lis
 	return items, nil
 }
 
-const previousChangesetID = `-- name: PreviousChangesetID :one
+const listTriggerPosts = `-- name: ListTriggerPosts :many
 SELECT
-  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+  p.id, p.author, p.body, p.created_at, p.kind
 FROM
-  turns
+  posts p
+  JOIN turn_triggers tt ON tt.post_id = p.id
 WHERE
-  kind = 'changeset'
-  AND id < ?
+  tt.turn_id = ?
+  AND p.kind = 'post'
+ORDER BY
+  p.id ASC
 `
 
-// The changeset before this one, or 0 when there is none.
-func (q *Queries) PreviousChangesetID(ctx context.Context, id int64) (int64, error) {
-	row := q.db.QueryRowContext(ctx, previousChangesetID, id)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+// The posts a changeset was started to answer. Replies are the webmaster's
+// own words, never a trigger.
+func (q *Queries) ListTriggerPosts(ctx context.Context, turnID int64) ([]Post, error) {
+	rows, err := q.db.QueryContext(ctx, listTriggerPosts, turnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Post
+	for rows.Next() {
+		var i Post
+		if err := rows.Scan(
+			&i.ID,
+			&i.Author,
+			&i.Body,
+			&i.CreatedAt,
+			&i.Kind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const saveRunningMessages = `-- name: SaveRunningMessages :exec
@@ -754,4 +741,22 @@ func (q *Queries) StartTurn(ctx context.Context, arg StartTurnParams) (Turn, err
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const turnForPost = `-- name: TurnForPost :one
+SELECT
+  CAST(COALESCE(MAX(turn_id), 0) AS INTEGER)
+FROM
+  turn_triggers
+WHERE
+  post_id = ?
+`
+
+// The newest changeset that was started to answer this post, or 0 when none
+// was. A retry copies its triggers, so a post can have several.
+func (q *Queries) TurnForPost(ctx context.Context, postID int64) (int64, error) {
+	row := q.db.QueryRowContext(ctx, turnForPost, postID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }

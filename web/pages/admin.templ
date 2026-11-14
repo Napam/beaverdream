@@ -76,8 +76,10 @@ const (
 	adminDangerButton = "cursor-pointer rounded-md border border-red-500/40 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50 disabled:cursor-default disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950/30"
 	// historyGrid is one set of column tracks for the changeset list's header and
 	// every row, so a status badge or a missing version cannot shift the
-	// columns behind it.
-	historyGrid = "grid grid-cols-[2.25rem_4.25rem_4.5rem_minmax(0,1fr)_2.5rem_3.5rem_3rem] items-center gap-x-3"
+	// columns behind it. A phone keeps the first four columns; the version,
+	// tokens and time columns (historyExtra) show from sm up.
+	historyGrid  = "grid grid-cols-[3.25rem_4.25rem_4.5rem_minmax(0,1fr)] items-center gap-x-3 sm:grid-cols-[3.25rem_4.25rem_4.5rem_minmax(0,1fr)_2.5rem_3.5rem_3rem]"
+	historyExtra = "hidden sm:block"
 )
 
 func dash(s string) string {
@@ -128,14 +130,16 @@ const (
 )
 
 // Panel names one admin page. Turn is the turn the changesets page shows, or 0
-// to follow the newest.
+// to follow the newest. Queued is the queued post whose detail the changesets
+// page has open, or 0.
 type Panel struct {
 	// Base is the world's admin mount path, for example
 	// "/admin/worlds/heroes". Empty uses "/admin", which keeps the root panel
 	// and its tests working.
-	Base string
-	Page string
-	Turn int64
+	Base   string
+	Page   string
+	Turn   int64
+	Queued int64
 	// Key, Match, Visitor and Before are what the journal page browses: a
 	// key, one match of it, one visitor's rows, and the row id to page back
 	// from. They live in the URL, so the stream renders the same selection.
@@ -165,9 +169,9 @@ func (p Panel) Action(path string) string {
 func (p Panel) Path() string {
 	switch {
 	case p.Page == PageChangesets && p.Turn > 0:
-		return p.Action("/changesets/" + i64(p.Turn))
+		return p.Action("/changesets/"+i64(p.Turn)) + p.queuedQuery()
 	case p.Page == PageChangesets:
-		return p.Action("/changesets")
+		return p.Action("/changesets") + p.queuedQuery()
 	case p.Page == PageSite:
 		return p.Action("/site")
 	case p.Page == PageJournal:
@@ -182,6 +186,20 @@ func (p Panel) changesetPath(id int64, newest bool) string {
 		return p.Action("/changesets")
 	}
 	return p.Action("/changesets/" + i64(id))
+}
+
+// queuedPath is this panel with a queued post open, or closed when id is 0.
+func (p Panel) queuedPath(id int64) string {
+	p.Queued = id
+	return p.Path()
+}
+
+// queuedQuery is the open queued post as a query string.
+func (p Panel) queuedQuery() string {
+	if p.Queued > 0 {
+		return "?queued=" + i64(p.Queued)
+	}
+	return ""
 }
 
 // query is the journal selection as a query string, empty when nothing is
@@ -217,6 +235,9 @@ func (p Panel) LivePath() string {
 	}
 	if p.Live {
 		path += "&live=1"
+	}
+	if p.Queued > 0 {
+		path += "&queued=" + i64(p.Queued)
 	}
 	if q := p.query(); q != "" {
 		path += "&" + q[1:]
@@ -291,6 +312,14 @@ func navTo(path string) string {
 		fetchPage(path) + "; window.scrollTo(0, 0) }"
 }
 
+// navKeep is navTo without the jump to the top, for a click that changes what
+// one panel shows and should leave the admin where they are.
+func navKeep(path string) string {
+	return "if (!evt.metaKey && !evt.ctrlKey && !evt.shiftKey && !evt.altKey) { " +
+		"evt.preventDefault(); history.pushState(null, '', '" + path + "'); " +
+		fetchPage(path) + " }"
+}
+
 // AdminPage is the shell. Back and forward fetch the page the address bar
 // names; everything else lives in AdminBody, which navigation replaces.
 templ AdminPage(view AdminView, datastar string) {
@@ -308,7 +337,7 @@ templ AdminPage(view AdminView, datastar string) {
 			<div
 				class="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6"
 				data-signals={ adminSignals() }
-				data-on:popstate__window="@get(location.pathname)"
+				data-on:popstate__window="@get(location.pathname + location.search)"
 			>
 				@AdminBody(view)
 			</div>
@@ -506,7 +535,8 @@ templ adminInstruct(panel Panel, csrf string) {
 				rows="3"
 				required
 				maxlength={ strconv.Itoa(webmaster.MaxBodyLen) }
-				placeholder="make it look like a 1998 guestbook"
+				aria-label="instruction for Naps"
+				placeholder="make it look like a 1998 guestbook. Enter sends, Shift+Enter adds a line."
 				data-on:keydown="if (evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) { evt.preventDefault(); evt.target.form.requestSubmit() }"
 				class={ adminInput }
 			></textarea>
@@ -733,6 +763,9 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 			<p class={ adminLabel }>changesets</p>
 			<p class={ adminMuted }>{ historyCount(len(turns), queue.Count()) }</p>
 		</div>
+		if queue.Count() > 0 {
+			<p class={ adminMuted + " border-b border-gray-200 px-4 py-1.5 dark:border-neutral-800" }>Visitor posts run together as one turn. Each admin instruction runs as its own turn.</p>
+		}
 		if len(turns) == 0 && queue.Count() == 0 {
 			<p class="px-4 py-3 text-sm text-gray-400 dark:text-neutral-600">nothing yet</p>
 		} else {
@@ -742,40 +775,25 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 					<span>status</span>
 					<span>who</span>
 					<span>post</span>
-					<span>ver</span>
-					<span class="text-right">in</span>
-					<span class="text-right">time</span>
+					<span class={ historyExtra }>ver</span>
+					<span class={ historyExtra + " text-right" }>in</span>
+					<span class={ historyExtra + " text-right" }>time</span>
 				</div>
 				<ol>
-					if queue.Posts > 0 {
+					@queuedPosts(queue, panel)
+					for _, item := range queue.Instructions {
 						<li>
 							<div
-								title={ queue.Title }
+								title={ item.Text }
 								class={ historyGrid + " border-l-2 border-transparent px-3 py-1.5 text-sm" }
 							>
-								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">next</span>
+								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">wait</span>
 								<span class="justify-self-start">@statusBadge("queued")</span>
-								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(queue.Authors) }</span>
-								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(queue.Text)) }</span>
-								<span></span>
-								<span></span>
-								<span></span>
-							</div>
-						</li>
-					}
-					for _, text := range queue.Instructions {
-						<li>
-							<div
-								title={ text }
-								class={ historyGrid + " border-l-2 border-transparent px-3 py-1.5 text-sm" }
-							>
-								<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">next</span>
-								<span class="justify-self-start">@statusBadge("queued")</span>
-								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">admin</span>
-								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(text)) }</span>
-								<span></span>
-								<span></span>
-								<span></span>
+								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(item.Author) }</span>
+								<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(item.Text)) }</span>
+								<span class={ historyExtra }></span>
+								<span class={ historyExtra }></span>
+								<span class={ historyExtra }></span>
 							</div>
 						</li>
 					}
@@ -791,17 +809,17 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 								<span class="justify-self-start">@statusBadge(row.Run.Status)</span>
 								<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ turnAuthor(row) }</span>
 								<span class={ "truncate " + turnTextTone(row) }>{ dash(oneLine(turnText(row))) }</span>
-								<span class="truncate font-mono text-[11px] text-gray-400 dark:text-neutral-500">
+								<span class={ historyExtra + " truncate font-mono text-[11px] text-gray-400 dark:text-neutral-500" }>
 									if row.Run.VersionID.Valid {
 										v{ i64(row.Run.VersionID.Int64) }
 									}
 								</span>
-								<span class="text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
+								<span class={ historyExtra + " text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500" }>
 									if row.Rounds > 0 {
 										{ short(row.PromptTokens) } in
 									}
 								</span>
-								<span class="text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500">
+								<span class={ historyExtra + " text-right font-mono text-[11px] text-gray-400 tabular-nums dark:text-neutral-500" }>
 									if row.Run.Status != "running" {
 										{ millis(row.Run.DurationMs) }
 									}
@@ -812,7 +830,110 @@ templ AdminHistory(turns []TurnRow, picked int64, queue QueueView, panel Panel) 
 				</ol>
 			</div>
 		}
+		if queue.Pick != nil {
+			@queuedDetail(queue, *queue.Pick, panel)
+		}
 	</section>
+}
+
+// queuedPosts lists the waiting posts. More than one gets a batch row that
+// says they run as one turn, with every post under it as its own row that
+// opens its detail. The amber bar on the left ties the rows together.
+templ queuedPosts(queue QueueView, panel Panel) {
+	if len(queue.Posts) > 1 {
+		<li>
+			<div class={ historyGrid + " border-l-2 border-amber-400 px-3 py-1.5 text-sm" }>
+				<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">next</span>
+				<span class="justify-self-start">@statusBadge("queued")</span>
+				<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(queue.Authors) }</span>
+				<span class="truncate text-gray-500 dark:text-neutral-400">{ batchLabel(queue) }</span>
+				<span class={ historyExtra }></span>
+				<span class={ historyExtra }></span>
+				<span class={ historyExtra }></span>
+			</div>
+		</li>
+	}
+	for _, post := range queue.Posts {
+		<li>
+			<a
+				href={ templ.SafeURL(panel.queuedPath(post.ID)) }
+				data-on:click={ navKeep(panel.queuedPath(post.ID)) }
+				title={ post.Author + ": " + post.Body }
+				if post.ID == panel.Queued {
+					aria-current="true"
+				}
+				class={ historyGrid + " border-l-2 px-3 py-1.5 text-sm hover:bg-gray-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 dark:hover:bg-neutral-800/60 " + queuedRow(post.ID, panel.Queued) }
+			>
+				<span class="font-mono text-xs text-gray-400 tabular-nums dark:text-neutral-500">#{ i64(post.ID) }</span>
+				<span class="justify-self-start">
+					if post.History {
+						@statusBadge("log only")
+					} else {
+						@statusBadge("queued")
+					}
+				</span>
+				<span class="truncate text-xs font-medium text-indigo-700 dark:text-indigo-400">{ dash(post.Author) }</span>
+				<span class="truncate text-gray-900 dark:text-neutral-100">{ dash(oneLine(post.Body)) }</span>
+				<span class={ historyExtra }></span>
+				<span class={ historyExtra }></span>
+				<span class={ historyExtra }></span>
+			</a>
+		</li>
+	}
+}
+
+// queuedDetail is one queued post in full, and what the next turn does with
+// it. It does not predict the model: the prompt is built when the turn
+// starts, from whatever the room holds then.
+templ queuedDetail(queue QueueView, pick QueuePick, panel Panel) {
+	<div class="border-t border-gray-200 px-4 py-3 text-sm dark:border-neutral-800">
+		<div class="flex items-baseline justify-between gap-3">
+			<p class={ adminLabel }>
+				if pick.Post.ID > 0 {
+					post #{ i64(pick.Post.ID) } from { dash(pick.Post.Author) }
+					if pick.Post.When != "" {
+						<span class="font-normal normal-case">· { clock(pick.Post.When) } UTC</span>
+					}
+				} else {
+					post #{ i64(panel.Queued) }
+				}
+			</p>
+			<a
+				href={ templ.SafeURL(panel.queuedPath(0)) }
+				data-on:click={ navKeep(panel.queuedPath(0)) }
+				class="text-xs text-sky-700 hover:underline dark:text-sky-400"
+			>close</a>
+		</div>
+		if pick.Post.ID > 0 {
+			<p class="mt-2 whitespace-pre-wrap text-gray-900 [overflow-wrap:anywhere] dark:text-neutral-100">{ pick.Post.Body }</p>
+		}
+		<p class={ adminMuted + " mt-2" }>
+			switch pick.State {
+				case "queued":
+					if pick.Post.History {
+						Older than the newest { itoa(queue.Limit) } waiting posts, so the next turn does not receive it. Naps still reads it in the room log, clipped.
+					} else if pick.Together > 0 {
+						The next turn receives it together with { plural(pick.Together, "other post") }.
+					} else {
+						The next turn receives it alone.
+					}
+					if queue.Running > 0 {
+						It waits for turn #{ i64(queue.Running) }, which is running.
+					}
+				case "included":
+					A turn was started for it:
+					<a
+						href={ templ.SafeURL(panel.changesetPath(pick.Turn, false)) }
+						data-on:click={ navTo(panel.changesetPath(pick.Turn, false)) }
+						class="text-sky-700 hover:underline dark:text-sky-400"
+					>turn #{ i64(pick.Turn) }</a>.
+				case "unqueued":
+					Stored, but no turn was started for it: it fell outside the newest { itoa(queue.Limit) } waiting posts, or it was never queued. A later turn reads it in the room log.
+				default:
+					That post is gone. A reset removes the whole room.
+			}
+		</p>
+	</div>
 }
 
 // csrfInput is the hidden field every action form carries. The value is
@@ -1037,6 +1158,11 @@ templ turnHeader(d TurnDetail, csrf string, panel Panel) {
 			}
 			if d.Row.Run.VersionID.Valid {
 				<span class={ adminChip }>wrote v{ i64(d.Row.Run.VersionID.Int64) }</span>
+			} else if d.Row.Run.Status != "running" && d.Row.Run.Status != "error" {
+				<span class={ adminChip }>page unchanged</span>
+			}
+			if d.Row.SilentTurn() {
+				<span class={ adminChip } title="the turn posted nothing in the room">no room reply</span>
 			}
 			<span class="ml-auto font-mono text-xs text-gray-500 dark:text-neutral-500">{ clock(d.Row.Run.CreatedAt) } UTC</span>
 		</div>
@@ -1055,6 +1181,12 @@ templ turnHeader(d TurnDetail, csrf string, panel Panel) {
 			if d.Row.Trigger != "" {
 				@labelled(triggerLabel(d.Row), d.Row.Trigger)
 			}
+		} else if d.Row.Batched {
+			@labelledMax("posts sent to the model", d.Row.Trigger, "max-h-64")
+			<div class="grid gap-3 md:grid-cols-2">
+				@labelled("reason", d.Row.Run.Said)
+				@labelled("changes", d.Row.Run.Changes)
+			</div>
 		} else {
 			<div class="grid gap-3 md:grid-cols-3">
 				@labelled(triggerLabel(d.Row), d.Row.Trigger)
@@ -1082,9 +1214,15 @@ templ turnHeader(d TurnDetail, csrf string, panel Panel) {
 }
 
 templ labelled(label string, text string) {
+	@labelledMax(label, text, "max-h-32")
+}
+
+// labelledMax is labelled with a chosen height cap, for text that is the point
+// of the card, like the posts a batch sent.
+templ labelledMax(label string, text string, maxHeight string) {
 	<div class="min-w-0">
 		<p class="text-[11px] tracking-wide text-gray-500 uppercase dark:text-neutral-500">{ label }</p>
-		<p class="mt-0.5 max-h-32 overflow-auto text-sm whitespace-pre-wrap text-gray-800 dark:text-neutral-200">{ dash(text) }</p>
+		<p class={ "mt-0.5 overflow-auto text-sm whitespace-pre-wrap text-gray-800 dark:text-neutral-200 " + maxHeight }>{ dash(text) }</p>
 	</div>
 }
 

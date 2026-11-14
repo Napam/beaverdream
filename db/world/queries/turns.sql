@@ -52,41 +52,35 @@ ORDER BY
 LIMIT
   ?;
 
--- name: ListPostsForTurn :many
--- The posts a changeset answered: the ones between it and the changeset
--- before it, which is the range the worker coalesced into that turn.
--- Replies are the webmaster's own words, never a trigger.
+-- name: AddTurnTrigger :exec
+INSERT INTO
+  turn_triggers (turn_id, post_id)
+VALUES
+  (?, ?);
+
+-- name: ListTriggerPosts :many
+-- The posts a changeset was started to answer. Replies are the webmaster's
+-- own words, never a trigger.
 SELECT
   p.*
 FROM
   posts p
+  JOIN turn_triggers tt ON tt.post_id = p.id
 WHERE
-  p.kind = 'post'
-  AND p.id < sqlc.arg(turn_id)
-  AND p.id > COALESCE(
-    (
-      SELECT
-        MAX(t.id)
-      FROM
-        turns t
-      WHERE
-        t.kind = 'changeset'
-        AND t.id < sqlc.arg(turn_id)
-    ),
-    0
-  )
+  tt.turn_id = ?
+  AND p.kind = 'post'
 ORDER BY
   p.id ASC;
 
--- name: PreviousChangesetID :one
--- The changeset before this one, or 0 when there is none.
+-- name: TurnForPost :one
+-- The newest changeset that was started to answer this post, or 0 when none
+-- was. A retry copies its triggers, so a post can have several.
 SELECT
-  CAST(COALESCE(MAX(id), 0) AS INTEGER)
+  CAST(COALESCE(MAX(turn_id), 0) AS INTEGER)
 FROM
-  turns
+  turn_triggers
 WHERE
-  kind = 'changeset'
-  AND id < ?;
+  post_id = ?;
 
 -- name: ListPostsAfter :many
 -- The posts an open page has not shown yet, newest first, the order the page

@@ -154,13 +154,13 @@ func (a *App) AcquireStaleForTest(
 // HoldPost queues a post without waking the worker, so it stays pending.
 func (h *Handlers) HoldPost(post sqlc.Post) {
 	h.liveMu.Lock()
-	h.pending = append(h.pending, post)
+	h.addPending(post)
 	h.liveMu.Unlock()
 }
 
 // HoldInstruction shows an admin instruction as waiting for a turn, the way a
 // real one does while it waits for the changeset lock.
-func (h *Handlers) HoldInstruction(text string) { h.addWaiting(text) }
+func (h *Handlers) HoldInstruction(text, author string) { h.addWaiting(text, author) }
 
 // TableCountsForTest counts the rows of every table, so a test can check
 // that reset reaches tables it does not know by name.

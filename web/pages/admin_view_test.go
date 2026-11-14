@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func TestTurnAuthorHidesTheOldConstant(t *testing.T) {
 }
 
 func storedTurn() (sqlc.ListChangesetsRow, []webmaster.Message) {
-	user := "COMPACTED HISTORY:\n(nothing)\n\nNEW POST #4 from dave:\nmake it pink\nThe poster is looking at this post.\n"
+	user := "COMPACTED HISTORY:\n(nothing)\n\nNEW POST #4 from dave:\nmake it pink\n"
 	split := strings.Index(user, "NEW POST")
 	return sqlc.ListChangesetsRow{
 		ID:        5,
@@ -75,33 +76,36 @@ func storedTurn() (sqlc.ListChangesetsRow, []webmaster.Message) {
 	}
 }
 
-// A queue row reads like a turn row: who posted, the first body with a count,
-// and the whole batch in its title.
-func TestNewQueueNamesTheBatch(t *testing.T) {
+// A burst lists every post in order, names each author once on the batch
+// row, and marks the posts the turn will not answer.
+func TestNewQueueListsEachPostAndMarksTheOverflow(t *testing.T) {
 	view := NewQueue([]sqlc.Post{
-		{Author: "dave", Body: "first"},
-		{Author: "kit", Body: "second"},
-		{Author: "dave", Body: "third"},
-		{Author: "", Body: "anonymous"},
-	}, nil)
-	if view.Posts != 4 {
-		t.Errorf("posts = %d, want 4", view.Posts)
+		{ID: 4, Author: "dave", Body: "first"},
+		{ID: 5, Author: "kit", Body: "second"},
+		{ID: 6, Author: "dave", Body: "third"},
+		{ID: 7, Author: "", Body: "anonymous"},
+	}, nil, 3)
+	if len(view.Posts) != 4 {
+		t.Fatalf("posts = %d, want 4", len(view.Posts))
 	}
 	if view.Authors != "dave, kit, anon" {
 		t.Errorf("authors = %q", view.Authors)
 	}
-	if view.Text != "first (+3 more)" {
-		t.Errorf("text = %q", view.Text)
-	}
-	for _, want := range []string{
-		"dave: first", "kit: second", "dave: third", "anon: anonymous",
-	} {
-		if !strings.Contains(view.Title, want) {
-			t.Errorf("title is missing %q", want)
+	for i, wantHistory := range []bool{true, false, false, false} {
+		if view.Posts[i].History != wantHistory {
+			t.Errorf(
+				"post %d history = %v, want %v",
+				view.Posts[i].ID,
+				view.Posts[i].History,
+				wantHistory,
+			)
 		}
 	}
-	if empty := NewQueue(nil, nil); empty.Posts != 0 {
-		t.Errorf("an empty queue has %d posts", empty.Posts)
+	if got := view.Answered(); got != 3 {
+		t.Errorf("answered = %d, want the newest 3", got)
+	}
+	if empty := NewQueue(nil, nil, 3); len(empty.Posts) != 0 || empty.Count() != 0 {
+		t.Errorf("an empty queue has %d posts", len(empty.Posts))
 	}
 }
 
@@ -109,12 +113,13 @@ func TestNewQueueNamesTheBatch(t *testing.T) {
 func TestNewQueueCountsInstructionsSeparately(t *testing.T) {
 	view := NewQueue(
 		[]sqlc.Post{{Author: "dave", Body: "hi"}},
-		[]string{"make it pink", "undo that"},
+		[]QueuedInstruction{{Author: "admin (ada)", Text: "make it pink"}, {Text: "undo that"}},
+		10,
 	)
 	if got := view.Count(); got != 3 {
 		t.Errorf("count = %d, want one post plus two instructions", got)
 	}
-	if got := NewQueue(nil, []string{"x"}).Count(); got != 1 {
+	if got := NewQueue(nil, []QueuedInstruction{{Text: "x"}}, 10).Count(); got != 1 {
 		t.Errorf("instruction-only count = %d, want 1", got)
 	}
 }
@@ -177,6 +182,116 @@ func TestErroredTurnShowsItsError(t *testing.T) {
 	row = NewTurnRow(run, messages)
 	if got := turnText(row); got != row.Trigger {
 		t.Errorf("a changed turn's row text = %q, want the trigger %q", got, row.Trigger)
+	}
+}
+
+// The row names every post the prompt listed, the last one included, and a
+// post with several lines keeps all of them.
+func TestNewTurnRowKeepsEveryPostOfTheNewPostSection(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		section string
+		want    string
+		batched bool
+	}{
+		{
+			"one post",
+			"NEW POST #4 from dave:\nmake it pink\n",
+			"make it pink",
+			false,
+		},
+		{
+			"a post with several lines",
+			"NEW POST #4 from dave:\nfirst line\nsecond line\nthird line\n",
+			"first line\nsecond line\nthird line",
+			false,
+		},
+		{
+			"a batch",
+			"NEW POSTS to answer this turn, oldest first (2):\n#3 bingo: here we go again\n#5 bingo: mymy\n",
+			"#3 bingo: here we go again\n#5 bingo: mymy",
+			true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := "ROOM LOG:\n(nothing)\n\n" + tc.section
+			split := strings.Index(user, "NEW POST")
+			row := NewTurnRow(sqlc.ListChangesetsRow{ID: 5, Kind: "changeset"}, []webmaster.Message{
+				{Role: "user", Content: user, Sections: []webmaster.PromptSection{
+					{Name: "room log", Start: 0, End: split},
+					{Name: "new post", Start: split, End: len(user)},
+				}},
+			})
+			if row.Trigger != tc.want {
+				t.Errorf("trigger = %q, want %q", row.Trigger, tc.want)
+			}
+			if row.Batched != tc.batched {
+				t.Errorf("batched = %v, want %v", row.Batched, tc.batched)
+			}
+		})
+	}
+}
+
+// A batch shows every post it sent in the inspector, in its own block, and
+// in the list row's tooltip.
+func TestTurnViewShowsEveryPostABatchSent(t *testing.T) {
+	user := "ROOM LOG:\n(nothing)\n\nNEW POSTS to answer this turn, oldest first (2):\n" +
+		"#3 bingo: here we go again\n#5 bingo: mymy\n"
+	split := strings.Index(user, "NEW POSTS")
+	row := NewTurnRow(
+		sqlc.ListChangesetsRow{ID: 7, Kind: "changeset", Status: "kept"},
+		[]webmaster.Message{{Role: "user", Content: user, Sections: []webmaster.PromptSection{
+			{Name: "room log", Start: 0, End: split},
+			{Name: "new post", Start: split, End: len(user)},
+		}}},
+	)
+	if title := turnTitle(row); !strings.Contains(title, "mymy") {
+		t.Errorf("the list tooltip lost a post: %q", title)
+	}
+	var b strings.Builder
+	if err := turnInspector(
+		TurnDetail{Row: row},
+		nil,
+		"csrf",
+		Panel{},
+	).Render(context.Background(), &b); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{"here we go again", "mymy"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("the inspector is missing %q", want)
+		}
+	}
+}
+
+// A finished turn is silent when it posted nothing in the room, whatever it
+// did to the page. A say or a done with a reply counts; a rejected call does
+// not.
+func TestSilentTurnReadsWhatTheTurnPosted(t *testing.T) {
+	call := func(name, args, result string) webmaster.Message {
+		return webmaster.Message{
+			Role:      "assistant",
+			ToolCalls: []webmaster.ToolCall{{Name: name, Arguments: args, Result: result}},
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		status string
+		calls  []webmaster.Message
+		silent bool
+	}{
+		{"kept with no reply", "kept", []webmaster.Message{call("done", `{"reason":"chat"}`, "ok")}, true},
+		{"kept with a reply", "kept", []webmaster.Message{call("done", `{"reason":"x","reply":"hi"}`, "ok")}, false},
+		{"changed after a say", "changed", []webmaster.Message{call("say", `{"text":"on it"}`, "ok"), call("done", `{"reason":"x"}`, "ok")}, false},
+		{"a rejected say", "kept", []webmaster.Message{call("say", `{"text":"on it"}`, "rejected: twice")}, true},
+		{"an errored turn", "error", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := NewTurnRow(sqlc.ListChangesetsRow{Status: tc.status}, tc.calls)
+			if got := row.SilentTurn(); got != tc.silent {
+				t.Errorf("silent = %v, want %v", got, tc.silent)
+			}
+		})
 	}
 }
 

@@ -83,3 +83,8 @@ type Turn struct {
 	DurationMs int64
 	CreatedAt  string
 }
+
+type TurnTrigger struct {
+	TurnID int64
+	PostID int64
+}

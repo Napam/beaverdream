@@ -166,7 +166,7 @@ func TestRetryChargingPolicy(t *testing.T) {
 		t.Errorf("admin retry charged %d tokens", used)
 	}
 
-	// Post retry: the posts are read back from turns and charged once.
+	// Post retry: the posts are read back from the turn and charged once.
 	post, err := queries.CreatePost(
 		ctx,
 		sqlc.CreatePostParams{Author: "id-post", Body: "mockedit retry me"},
@@ -174,13 +174,13 @@ func TestRetryChargingPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	_ = post
 	postTurn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
 		Kind: webmaster.TurnChangeset, Author: "id-post",
 	})
 	if err != nil {
 		t.Fatalf("start post turn: %v", err)
 	}
+	addTriggers(t, queries, postTurn.ID, post.ID)
 	if err := queries.FailTurn(
 		ctx,
 		sqlc.FailTurnParams{ErrorText: "failed", ID: postTurn.ID},

@@ -662,11 +662,16 @@ func TestUserPromptCreditsABurstToEveryone(t *testing.T) {
 		{ID: 8, Author: "kit", Body: "one"},
 		{ID: 9, Author: "dave", Body: "two"},
 	})
-	if !strings.Contains(got, "NEW POSTS since the last change") {
+	// The admin panel tells a batch from one post by this prefix.
+	if !strings.Contains(got, "NEW POSTS") {
 		t.Errorf("burst is not labeled as several posts: %s", got)
 	}
-	if !strings.Contains(got, "#8 kit: one") || !strings.Contains(got, "#9 dave: two") {
+	first, second := strings.Index(got, "#8 kit: one"), strings.Index(got, "#9 dave: two")
+	if first < 0 || second < 0 {
 		t.Errorf("burst is missing a poster: %s", got)
+	}
+	if first > second {
+		t.Errorf("burst is not oldest first: %s", got)
 	}
 }
 

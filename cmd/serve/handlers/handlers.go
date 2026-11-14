@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -163,11 +165,10 @@ type Handlers struct {
 	pending []sqlc.Post
 	// waiting holds the admin instructions that have been sent and are
 	// waiting for the changeset lock, so the panel can show them queued.
-	waiting       []string
-	running       *runState
-	lastError     string
-	lastRewriteAt map[string]time.Time
-	lastStateAt   map[string]time.Time
+	waiting     []waitingInstruction
+	running     *runState
+	lastError   string
+	lastStateAt map[string]time.Time
 	// stateCooldown is the gap between one browser's writes to one key.
 	stateCooldown time.Duration
 	journalBucket map[string]*journalBucket
@@ -219,7 +220,6 @@ func New(d Deps) *Handlers {
 		budget:        d.Budget,
 		modelSem:      d.ModelSem,
 		hub:           newHub(),
-		lastRewriteAt: make(map[string]time.Time),
 		lastStateAt:   make(map[string]time.Time),
 		stateCooldown: stateCooldown,
 		journalBucket: make(map[string]*journalBucket),
@@ -443,30 +443,38 @@ func (h *Handlers) runChangesetBatch(
 	instruction string,
 	triggers []sqlc.Post,
 ) (webmaster.Result, error) {
+	sender := adminAuthor(ctx)
 	if origin == "admin" {
-		h.addWaiting(instruction)
+		h.addWaiting(instruction, sender)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if origin == "admin" {
-		h.removeWaiting(instruction)
+		h.removeWaiting(instruction, sender)
 	}
 	return h.runChangesetLocked(ctx, origin, instruction, triggers)
 }
 
+// waitingInstruction is an admin instruction queued behind a running turn,
+// with the sender the panel names on its row.
+type waitingInstruction struct {
+	Text   string
+	Author string
+}
+
 // addWaiting and removeWaiting show an admin instruction as queued while it
 // waits for the changeset lock behind a running turn.
-func (h *Handlers) addWaiting(instruction string) {
+func (h *Handlers) addWaiting(instruction, author string) {
 	h.liveMu.Lock()
-	h.waiting = append(h.waiting, instruction)
+	h.waiting = append(h.waiting, waitingInstruction{Text: instruction, Author: author})
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
 }
 
-func (h *Handlers) removeWaiting(instruction string) {
+func (h *Handlers) removeWaiting(instruction, author string) {
 	h.liveMu.Lock()
-	for i, text := range h.waiting {
-		if text == instruction {
+	for i, item := range h.waiting {
+		if item.Text == instruction && item.Author == author {
 			h.waiting = append(h.waiting[:i], h.waiting[i+1:]...)
 			break
 		}
@@ -539,10 +547,27 @@ func (h *Handlers) runChangesetHeld(
 	if origin != "admin" && len(triggerPosts) > 0 {
 		authors = h.postAuthorNames(ctx, triggerPosts)
 	}
-	turn, err := h.queries.StartTurn(ctx, sqlc.StartTurnParams{
-		Kind:   webmaster.TurnChangeset,
-		Author: strings.Join(authors, ", "),
-		Body:   turnBody,
+	var turn sqlc.Turn
+	err = h.inTx(ctx, func(q *sqlc.Queries) error {
+		var err error
+		turn, err = q.StartTurn(ctx, sqlc.StartTurnParams{
+			Kind:   webmaster.TurnChangeset,
+			Author: strings.Join(authors, ", "),
+			Body:   turnBody,
+		})
+		if err != nil {
+			return err
+		}
+		for _, post := range triggerPosts {
+			err = q.AddTurnTrigger(ctx, sqlc.AddTurnTriggerParams{
+				TurnID: turn.ID,
+				PostID: post.ID,
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return webmaster.Result{}, fmt.Errorf("start turn: %w", err)
@@ -1143,7 +1168,7 @@ func (h *Handlers) roomFor(ctx context.Context, before int64) (webmaster.Room, e
 // rewrite rather than a long queue.
 func (h *Handlers) queuePost(post sqlc.Post) {
 	h.liveMu.Lock()
-	h.pending = append(h.pending, post)
+	h.addPending(post)
 	pending := len(h.pending)
 	h.liveMu.Unlock()
 	h.hub.publish(topicBusy)
@@ -1158,6 +1183,16 @@ func (h *Handlers) queuePost(post sqlc.Post) {
 	case h.wake <- struct{}{}:
 	default:
 	}
+}
+
+// addPending keeps the queue in post id order. Concurrent requests store their
+// post before they queue it, so arrival order need not match id order, and the
+// batch cap must keep the newest ids. Needs h.liveMu.
+func (h *Handlers) addPending(post sqlc.Post) {
+	h.pending = append(h.pending, post)
+	slices.SortStableFunc(h.pending, func(a, b sqlc.Post) int {
+		return cmp.Compare(a.ID, b.ID)
+	})
 }
 
 // worker is the single background runner. It drains the queue, runs one
@@ -1625,10 +1660,11 @@ func (h *Handlers) liveSnapshot() (int64, int, *runState, string) {
 // queuedWork copies the posts waiting for the next turn and the admin
 // instructions waiting behind the running one, so a page can show them
 // without holding the lock while it renders.
-func (h *Handlers) queuedWork() ([]sqlc.Post, []string) {
+func (h *Handlers) queuedWork() ([]sqlc.Post, []waitingInstruction) {
 	h.liveMu.Lock()
 	defer h.liveMu.Unlock()
-	return append([]sqlc.Post(nil), h.pending...), append([]string(nil), h.waiting...)
+	return append([]sqlc.Post(nil), h.pending...),
+		append([]waitingInstruction(nil), h.waiting...)
 }
 
 // runProgress is the live turn for the inspector, or nil when nothing runs.
@@ -1681,8 +1717,7 @@ func (h *Handlers) currentVersion(ctx context.Context) (int64, error) {
 }
 
 const (
-	rewriteCooldown = time.Second
-	stateCooldown   = 250 * time.Millisecond
+	stateCooldown = 250 * time.Millisecond
 	// stateSlotsSweep is how many cooldown entries are kept before the
 	// expired ones are swept.
 	stateSlotsSweep = 1024
@@ -1753,20 +1788,6 @@ func (h *Handlers) allowStateWrite(visitor, key string) bool {
 		}
 	}
 	h.lastStateAt[slot] = now
-	return true
-}
-
-// allowRewrite stops a script on the model's page from triggering a rewrite
-// from every open tab in a loop. The post is still stored; only the costly
-// model call is skipped.
-func (h *Handlers) allowRewrite(name string) bool {
-	now := time.Now()
-	h.liveMu.Lock()
-	defer h.liveMu.Unlock()
-	if last, ok := h.lastRewriteAt[name]; ok && now.Sub(last) < rewriteCooldown {
-		return false
-	}
-	h.lastRewriteAt[name] = now
 	return true
 }
 

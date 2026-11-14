@@ -30,7 +30,10 @@ type TurnRow struct {
 	// posts as the prompt showed them.
 	Trigger string
 	// Batched is true when the turn started from several posts at once.
-	Batched          bool
+	Batched bool
+	// Replied is true when the turn said something in the room: a say, or a
+	// done with a reply.
+	Replied          bool
 	Rounds           int
 	PromptTokens     int64
 	CachedTokens     int64
@@ -48,6 +51,9 @@ func NewTurnRow(run sqlc.ListChangesetsRow, messages []webmaster.Message) TurnRo
 			row.Trigger = newPostText(message)
 			row.Batched = newPostsBatched(message)
 		}
+		if repliedIn(message) {
+			row.Replied = true
+		}
 		if message.Stats == nil {
 			continue
 		}
@@ -58,6 +64,41 @@ func NewTurnRow(run sqlc.ListChangesetsRow, messages []webmaster.Message) TurnRo
 		row.Rejected += message.Stats.Rejected
 	}
 	return row
+}
+
+// repliedIn reports whether an assistant message asked to post in the room:
+// a say with text, or a done with a reply, and the call was not rejected.
+func repliedIn(message webmaster.Message) bool {
+	for _, call := range message.ToolCalls {
+		if strings.HasPrefix(call.Result, "rejected") {
+			continue
+		}
+		var args struct {
+			Text  string `json:"text"`
+			Reply string `json:"reply"`
+		}
+		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+			continue
+		}
+		switch {
+		case call.Name == "say" && strings.TrimSpace(args.Text) != "":
+			return true
+		case call.Name == "done" && strings.TrimSpace(args.Reply) != "":
+			return true
+		}
+	}
+	return false
+}
+
+// SilentTurn is true for a finished turn that said nothing in the room. The
+// status describes the page, so a kept turn alone does not tell an admin
+// whether Naps spoke.
+func (row TurnRow) SilentTurn() bool {
+	switch row.Run.Status {
+	case "changed", "kept", "silent":
+		return !row.Replied
+	}
+	return false
 }
 
 // WithPosts names the posts a turn answered when its conversation does not:
@@ -79,59 +120,113 @@ func (row TurnRow) WithPosts(posts []sqlc.Post) TurnRow {
 	return row
 }
 
-// QueueView is what waits for a turn: the batch of posts, which the worker
-// coalesces into one turn and the list shows as one queued row, and the admin
-// instructions, which each get their own row.
+// QueuedPost is one post waiting for a turn.
+type QueuedPost struct {
+	ID     int64
+	Author string
+	Body   string
+	When   string
+	// History is true for a post older than the newest batch limit. The turn
+	// does not answer it; the model still reads it in the room log.
+	History bool
+}
+
+// QueuedInstruction is an admin instruction waiting behind a running turn.
+type QueuedInstruction struct {
+	Author string
+	Text   string
+}
+
+// QueuePick is the queued post the panel has open, resolved against what is
+// queued now: the post may have run since the link was made.
+type QueuePick struct {
+	// State is "queued", "included" (a turn was started for it), "unqueued"
+	// (stored, but no turn was ever started for it) or "gone" (no such post).
+	State string
+	Post  QueuedPost
+	// Turn is the changeset that included the post, for "included".
+	Turn int64
+	// Together is how many other posts the next turn answers with this one,
+	// for "queued".
+	Together int
+}
+
+// QueueView is what waits for a turn: the posts, which the worker coalesces
+// into one turn, and the admin instructions, which each get their own turn.
 type QueueView struct {
-	Posts        int
+	// Posts are the waiting posts in post id order.
+	Posts []QueuedPost
+	// Authors names who posted, once each, for the batch row.
 	Authors      string
-	Text         string
-	Title        string
-	Instructions []string
+	Instructions []QueuedInstruction
+	// Limit is how many of the newest posts one turn takes.
+	Limit int
+	// Running is the turn in flight, or 0. Everything queued waits for it.
+	Running int64
+	// Pick is the queued post the panel has open, or nil.
+	Pick *QueuePick
 }
 
 // Count is how many posts and instructions are waiting.
 func (q QueueView) Count() int {
-	return q.Posts + len(q.Instructions)
+	return len(q.Posts) + len(q.Instructions)
 }
 
-// queueTitleRunes caps the tooltip, since the visible row is one line and a
-// burst can carry a lot of text.
-const queueTitleRunes = 500
-
-// NewQueue lays the pending posts out the way a turn row reads: who posted,
-// what the batch says, and a count when more than one post is waiting.
-func NewQueue(posts []sqlc.Post, instructions []string) QueueView {
-	if len(posts) == 0 {
-		return QueueView{Instructions: instructions}
+// Answered is how many of the waiting posts the next turn answers.
+func (q QueueView) Answered() int {
+	n := 0
+	for _, post := range q.Posts {
+		if !post.History {
+			n++
+		}
 	}
-	view := QueueView{Posts: len(posts), Instructions: instructions}
+	return n
+}
+
+// NewQueue lays the pending posts out for the list. posts are in id order and
+// limit is how many of the newest the worker takes into one turn.
+func NewQueue(posts []sqlc.Post, instructions []QueuedInstruction, limit int) QueueView {
+	view := QueueView{Instructions: instructions, Limit: limit}
 	seen := make(map[string]bool, len(posts))
 	authors := make([]string, 0, len(posts))
-	title := make([]string, 0, len(posts))
-	for _, post := range posts {
+	for i, post := range posts {
 		// The worker names an empty author "anon" in the running row, so the
 		// queued row says the same.
 		author := post.Author
 		if author == "" {
 			author = "anon"
 		}
+		view.Posts = append(view.Posts, QueuedPost{
+			ID:      post.ID,
+			Author:  author,
+			Body:    post.Body,
+			When:    post.CreatedAt,
+			History: i < len(posts)-limit,
+		})
 		if !seen[author] {
 			seen[author] = true
 			authors = append(authors, author)
 		}
-		title = append(title, author+": "+post.Body)
 	}
 	view.Authors = strings.Join(authors, ", ")
-	view.Text = posts[0].Body
-	if len(posts) > 1 {
-		view.Text += fmt.Sprintf(" (+%d more)", len(posts)-1)
-	}
-	view.Title = strings.Join(title, "\n\n")
-	if runes := []rune(view.Title); len(runes) > queueTitleRunes {
-		view.Title = string(runes[:queueTitleRunes]) + "…"
-	}
 	return view
+}
+
+// batchLabel is the batch row's text: how many posts wait and how they run.
+func batchLabel(q QueueView) string {
+	if answered := q.Answered(); answered < len(q.Posts) {
+		return fmt.Sprintf("%d posts, the newest %d run as one turn", len(q.Posts), answered)
+	}
+	return fmt.Sprintf("%d posts, run as one turn", len(q.Posts))
+}
+
+// queuedRow marks the queued post whose detail is open, like pickedRow does
+// for turns. The amber bar ties the waiting posts together.
+func queuedRow(id, picked int64) string {
+	if id == picked {
+		return "border-sky-500 bg-sky-50 dark:border-sky-500 dark:bg-sky-950/40"
+	}
+	return "border-amber-400"
 }
 
 // historyCount is the changeset list's subtitle: the stored changesets, plus
@@ -145,17 +240,16 @@ func historyCount(turns, queued int) string {
 }
 
 // newPostText is the body of the prompt's new post section without its
-// heading and closing line.
+// heading line: the post itself, or one "#id author: text" line per post of a
+// batch. Nothing follows the posts in that section, so nothing else is cut.
 func newPostText(message webmaster.Message) string {
 	for _, section := range message.Sections {
 		if section.Name != "new post" || section.End > len(message.Content) {
 			continue
 		}
-		lines := strings.Split(strings.TrimSpace(message.Content[section.Start:section.End]), "\n")
-		if len(lines) > 2 {
-			lines = lines[1 : len(lines)-1]
-		}
-		return strings.Join(lines, "\n")
+		text := strings.TrimSpace(message.Content[section.Start:section.End])
+		_, body, _ := strings.Cut(text, "\n")
+		return strings.TrimSpace(body)
 	}
 	return ""
 }
@@ -876,10 +970,11 @@ func turnTitle(row TurnRow) string {
 	if reason := strings.TrimSpace(row.Run.Said); reason != "" {
 		title += "\nreason: " + reason
 	}
-	if failure := turnError(row); failure != "" {
-		if row.Trigger != "" {
-			title += "\n" + triggerLabel(row) + ": " + row.Trigger
-		}
+	failure := turnError(row)
+	if row.Trigger != "" && (failure != "" || row.Batched) {
+		title += "\n" + triggerLabel(row) + ": " + row.Trigger
+	}
+	if failure != "" {
 		title += "\nerror: " + failure
 	}
 	return title

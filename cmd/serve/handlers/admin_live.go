@@ -36,6 +36,7 @@ func (h *Handlers) AdminLive(w http.ResponseWriter, r *http.Request) {
 		panel = h.journalPanel(r.URL.Query())
 	case pages.PageChangesets:
 		panel.Turn, _ = strconv.ParseInt(r.URL.Query().Get("turn"), 10, 64)
+		panel.Queued = queuedParam(r)
 		// The page says whether it rendered the turn in flight, so a turn
 		// that lands before this stream connects still replaces it.
 		panel.Live = r.URL.Query().Get("live") == "1"
@@ -306,7 +307,7 @@ func (h *Handlers) patchAdminChangesets(
 		ctx,
 		sse,
 		"admin-history",
-		pages.AdminHistory(turns, picked, h.queueView(ctx), panel),
+		pages.AdminHistory(turns, picked, h.queueView(ctx, panel), panel),
 	); err != nil {
 		return err
 	}

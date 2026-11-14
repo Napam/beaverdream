@@ -82,7 +82,7 @@ func TestReplyReachesThePageAfterPostsDuringTheRun(t *testing.T) {
 		return err == nil && len(turns) == 2 && turns[0].Status != "running"
 	})
 	turns, _ := queries.ListChangesets(ctx, 1)
-	triggers, err := queries.ListPostsForTurn(ctx, turns[0].ID)
+	triggers, err := queries.ListTriggerPosts(ctx, turns[0].ID)
 	if err != nil {
 		t.Fatalf("posts for turn: %v", err)
 	}

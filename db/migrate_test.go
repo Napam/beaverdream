@@ -6,10 +6,12 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/Napam/beaverdream"
 	"github.com/Napam/beaverdream/db"
+	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )
 
@@ -75,6 +77,92 @@ func TestMigrationsCreateTheWorldSchema(t *testing.T) {
 	} {
 		if _, err := conn.ExecContext(ctx, statement); err != nil {
 			t.Errorf("%s: %v", statement, err)
+		}
+	}
+}
+
+// A world that ran before turn_triggers existed keeps its history: the
+// upgrade gives each post turn the posts it answered under the old rule, the
+// newest 10, and leaves admin instructions without any.
+func TestTurnTriggersMigrationBackfillsExistingTurns(t *testing.T) {
+	ctx := context.Background()
+	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "world.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, conn, beaverdream.WorldMigrationsFS)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 1); err != nil {
+		t.Fatalf("migrate to the first version: %v", err)
+	}
+
+	insert := func(kind, body string) int64 {
+		t.Helper()
+		res, err := conn.ExecContext(ctx,
+			`INSERT INTO turns (kind, author, body) VALUES (?, 'x', ?)`, kind, body)
+		if err != nil {
+			t.Fatalf("insert %s: %v", kind, err)
+		}
+		id, _ := res.LastInsertId()
+		return id
+	}
+	first, second := insert("post", "one"), insert("post", "two")
+	answered := insert("changeset", "")
+	insert("post", "between")
+	instruction := insert("changeset", "make it pink")
+	var burst []int64
+	for range 12 {
+		burst = append(burst, insert("post", "burst"))
+	}
+	capped := insert("changeset", "")
+	// Two retries of the capped turn: no posts of their own between them and
+	// the turn before.
+	retry, retryOfRetry := insert("changeset", ""), insert("changeset", "")
+
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+
+	triggers := func(turn int64) []int64 {
+		t.Helper()
+		rows, err := conn.QueryContext(ctx,
+			`SELECT post_id FROM turn_triggers WHERE turn_id = ? ORDER BY post_id`, turn)
+		if err != nil {
+			t.Fatalf("read triggers: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read triggers: %v", err)
+		}
+		return ids
+	}
+	if got := triggers(answered); len(got) != 2 || got[0] != first || got[1] != second {
+		t.Errorf("first turn triggers = %v, want %d and %d", got, first, second)
+	}
+	if got := triggers(instruction); len(got) != 0 {
+		t.Errorf("an admin instruction got triggers %v", got)
+	}
+	got := triggers(capped)
+	if len(got) != 10 || got[0] != burst[2] || got[9] != burst[11] {
+		t.Errorf("capped turn triggers = %v, want the newest 10 of the burst", got)
+	}
+	// A failed retry from before the upgrade can still be retried: it reads
+	// the posts of the turn it copied, and so does a retry of that retry.
+	for _, turn := range []int64{retry, retryOfRetry} {
+		if again := triggers(turn); !slices.Equal(again, got) {
+			t.Errorf("retry %d triggers = %v, want the capped turn's %v", turn, again, got)
 		}
 	}
 }

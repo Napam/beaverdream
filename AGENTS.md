@@ -9,22 +9,24 @@ prefer simple, readable code over production hardening.
 - Use `tmp/` for scratch files and test output. It is gitignored.
 - World migrations and registry migrations are separate sets, in separate
   folders, because the registry and each world are separate SQLite files.
-  Pre-production, a world keeps one migration file edited in place
-  (`000001_init.sql`). The registry has `000001_auth.sql` (identities,
-  logins, sessions, roles), `000002_data.sql` (invites, worlds, handoffs,
-  usage), `000003_password_resets.sql` and `000004_settings.sql` (the world
-  creation policy). `task db.migrate.down` rolls the registry back to the auth
-  migration,
-  keeping accounts and sessions; `task db.migrate.up` applies the data again.
-  Both sets freeze at the first production deploy; after
-  that every schema change is a new numbered migration in the matching set,
-  because goose will not re-run an applied version and a live world keeps its
-  data. Never edit an applied migration. World reset keeps the oldest
-  `site_versions` row and rewinds its sequence, and clears the turns, room
-  summaries, shared state, holdings, state ops and journal, in that world file
-  only.
-  The registry is never reset wholesale: no full reset drops the auth tables,
-  and rolling back the data migration never touches world files.
+  Production is live, so both sets are frozen: every schema change is a new
+  numbered migration in the matching set, with a `Down` section. Never edit an
+  applied migration. Goose will not re-run an applied version, and a live world
+  keeps its data, so a migration that adds a table or column also backfills
+  what existing rows need, and ships with a test that builds the old schema,
+  adds rows and upgrades it. The world set is `000001_init.sql` (the whole
+  first schema) and `000002_turn_triggers.sql` (the posts each changeset
+  answered, backfilled from the old id-range rule, with retries
+  copying the turn they retried). The registry has
+  `000001_auth.sql` (identities, logins, sessions, roles), `000002_data.sql`
+  (invites, worlds, handoffs, usage), `000003_password_resets.sql` and
+  `000004_settings.sql` (the world creation policy). `task db.migrate.down`
+  rolls the registry back to the auth migration, keeping accounts and
+  sessions; `task db.migrate.up` applies the data again. World reset keeps the
+  oldest `site_versions` row and rewinds its sequence, and clears the turns,
+  room summaries, shared state, holdings, state ops and journal, in that world
+  file only. The registry is never reset wholesale: no full reset drops the
+  auth tables, and rolling back the data migration never touches world files.
 - Read `Taskfile.yml` before running commands; it is the source of truth.
 - After changes run the matching check:
   - go code: `task check.go`
@@ -57,7 +59,8 @@ prefer simple, readable code over production hardening.
   standing in for everything through `through_turn_id`. `shared_state` holds
   the model-declared shared values, and its schema travels on the version row.
   `state_holdings` holds what each identity owns of a visitor counter, and
-  `state_ops` logs every successful visitor op for a day. `journal` holds the
+  `state_ops` logs every successful visitor op for a day. `turn_triggers` names
+  the posts each changeset was started to answer. `journal` holds the
   model-declared append-only feeds, and their schema travels there too.
 - `lib/registry` owns the registry: schema, migrations, identity, login,
   session, invite, role, usage and world-row reads and writes. `lib/worlds`
@@ -466,7 +469,18 @@ prefer simple, readable code over production hardening.
   before draining pending, and the timeout starts after the lock. Reset therefore
   cannot run a batch of posts it just deleted. `MODEL_CONCURRENCY` caps turns
   running at once across every loaded world. Tests wait for the version or run
-  to land.
+  to land. The pending queue is kept in post id order, because a request stores
+  its post before it queues it and two can arrive crossed; the batch cap keeps
+  the newest `maxBatchPosts` ids. Posts beyond the cap are not triggers, but
+  they stay in the room log, so the model still reads them, clipped. The
+  changesets table lists every queued post as its own row under one batch row
+  (they run as one turn), marks the ones past the cap `history`, and lists each
+  waiting admin instruction on its own row with the sending admin. A queued
+  post opens a detail under the table through `?queued=<post id>`, which is in
+  the URL so the stream keeps it. The detail is resolved against the world
+  each time: queued, included in a turn (`turn_triggers`), stored but never
+  queued, or gone. It never predicts the prompt, which is built when the turn
+  starts.
 - Skills are how-tos the model reads with `load_skill(name)`, registered in
   `skills/skills.go`. A body is only ever a tool result: never in the room
   log, the page or the system prompt. A turn loads each skill once; a second
@@ -481,11 +495,12 @@ prefer simple, readable code over production hardening.
 - Restore copies an old version forward as a new row. History stays immutable.
 - A retry of an errored turn is a new turn, never an edit of the failed row. An
   admin instruction is retried from its stored `body`; a post-triggered turn
-  retries the posts between it and the changeset turn before it, trimmed to
-  the newest `maxBatchPosts` like the worker, which is the batch that turn ran.
-  A retry of a retry has no posts of its own, so it walks back to the turn it
-  copied. A crash can leave no stored prompt, so the posts are read back
-  from `turns` rather than parsed out of the messages.
+  retries the posts in `turn_triggers`, the ids stored when the turn was
+  reserved, in the same transaction as the turn. The range of ids between two
+  turns proves nothing: an admin turn can take the lock between a post and the
+  turn that answers it. A retry stores the same trigger ids, so a retry of a
+  retry reads them directly. A crash can leave no stored prompt, so the posts
+  are read back from the table rather than parsed out of the messages.
 - Heal puts the seed page back by copying it forward as a new row and
   recording a heal turn. In that world it keeps posts and the webmaster's notes,
   clears shared state and the journal in the same transaction as that version,
@@ -534,8 +549,9 @@ prefer simple, readable code over production hardening.
   message whether the code is unknown, expired, used up or revoked. `GET` never
   spends a use. Revoking an invite stops future redemptions only.
 - There is no email, no login or HTTP rate limit and no audit log; the only
-  limits are the per-visitor cooldowns on state writes and new posts, plus the
-  journal burst allowance. Regular application logs only. A public deployment
+  limits are the per-visitor cooldown on state writes, plus the journal burst
+  allowance. A post is never throttled: the worker coalesces a burst into one
+  turn, and the daily token budget limits the cost. Regular application logs only. A public deployment
   puts the app and the play page on subdomains of one registrable domain over
   HTTPS. Secure cookie mode, which names both cookies `__Host-*` and reads only
   the prefixed name, is on when `TLS_CERT_FILE` is set or both `APP_URL` and

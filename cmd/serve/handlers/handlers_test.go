@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,21 @@ import (
 )
 
 const testAdminToken = "test-token"
+
+// addTriggers records the posts a hand-made turn was started to answer, the
+// way the changeset does when it reserves its turn.
+func addTriggers(t *testing.T, queries *sqlc.Queries, turnID int64, postIDs ...int64) {
+	t.Helper()
+	for _, id := range postIDs {
+		err := queries.AddTurnTrigger(context.Background(), sqlc.AddTurnTriggerParams{
+			TurnID: turnID,
+			PostID: id,
+		})
+		if err != nil {
+			t.Fatalf("add trigger: %v", err)
+		}
+	}
+}
 
 func setup(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 	t.Helper()
@@ -306,39 +322,31 @@ func TestCreatePostStoresPostAndVersion(t *testing.T) {
 	}
 }
 
-func TestSecondPostInTheCooldownIsStoredWithoutARewrite(t *testing.T) {
+// A visitor's posts are never throttled: a second post right after the first
+// still reaches the model, in the same turn or the next.
+func TestQuickSecondPostFromTheSameVisitorReachesTheModel(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	first := postForm(t, h.CreatePost, "/posts", url.Values{"body": {"one"}})
-	if first.Code != http.StatusSeeOther {
-		t.Fatalf("first status = %d", first.Code)
-	}
-	waitFor(t, "the first rewrite", func() bool {
-		runs, err := queries.ListChangesets(ctx, 10)
-		return err == nil && len(runs) == 1
-	})
-
-	second := postForm(t, h.CreatePost, "/posts", url.Values{"body": {"two"}})
-	if second.Code != http.StatusSeeOther {
-		t.Fatalf("second status = %d", second.Code)
+	for _, body := range []string{"mocknoop one", "mocknoop two"} {
+		rec := postForm(t, h.CreatePost, "/posts", url.Values{"body": {body}})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("post %q: status = %d", body, rec.Code)
+		}
 	}
 	posts, err := queries.ListPosts(ctx)
-	if err != nil {
-		t.Fatalf("list posts: %v", err)
+	if err != nil || len(posts) != 2 {
+		t.Fatalf("posts = %d, err = %v, want both stored", len(posts), err)
 	}
-	if len(posts) != 2 || posts[len(posts)-1].Body != "two" {
-		t.Fatalf("throttled post was lost: %+v", posts)
-	}
-
-	time.Sleep(200 * time.Millisecond)
-	runs, err := queries.ListChangesets(ctx, 10)
-	if err != nil {
-		t.Fatalf("list runs: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Errorf("throttled post started %d runs, want 1", len(runs))
-	}
+	waitFor(t, "a turn for each post", func() bool {
+		for _, post := range posts {
+			turn, err := queries.TurnForPost(ctx, post.ID)
+			if err != nil || turn == 0 {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 func TestSendInstructionDoesNotCreatePost(t *testing.T) {
@@ -416,6 +424,113 @@ func TestSendInstructionAlsoPostNamesTheAdmin(t *testing.T) {
 	}
 	if runs[0].Author != "admin (ada)" {
 		t.Errorf("turn author = %q, want %q", runs[0].Author, "admin (ada)")
+	}
+}
+
+// The cap keeps the newest post ids, whatever order the posts reached the
+// queue in: a request stores its post before it queues it, so two concurrent
+// posts can arrive crossed.
+func TestBatchCapKeepsTheNewestPostsWhateverTheArrivalOrder(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	var rows []sqlc.CreatePostRow
+	for i := range 12 {
+		row, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   fmt.Sprintf("mocknoop post %d", i),
+		})
+		if err != nil {
+			t.Fatalf("create post: %v", err)
+		}
+		rows = append(rows, row)
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		h.HoldPost(createdPostRow(rows[i]))
+	}
+	h.RunPending()
+
+	runs, err := queries.ListChangesets(ctx, 5)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("turns = %d, err = %v, want one batch turn", len(runs), err)
+	}
+	triggers, err := queries.ListTriggerPosts(ctx, runs[0].ID)
+	if err != nil {
+		t.Fatalf("list triggers: %v", err)
+	}
+	if len(triggers) != 10 {
+		t.Fatalf("triggers = %d, want the newest 10", len(triggers))
+	}
+	if triggers[0].ID != rows[2].ID || triggers[9].ID != rows[11].ID {
+		t.Errorf("triggers run %d..%d, want %d..%d",
+			triggers[0].ID, triggers[9].ID, rows[2].ID, rows[11].ID)
+	}
+}
+
+// An admin turn can win the changeset lock between a post and its turn. The
+// posts are still the ones that turn answered, and a retry answers them again,
+// not whatever posts happen to sit before it.
+func TestRetryAnswersTheQueuedPostsAfterAnAdminTurnRanFirst(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	// An older post that an earlier turn already answered.
+	postFormAs(t, h.CreatePost, "/posts", url.Values{"body": {"mocknoop old"}}, "eve")
+	waitFor(t, "the first turn", func() bool {
+		turns, err := queries.ListChangesets(ctx, 1)
+		return err == nil && len(turns) == 1 && turns[0].Status != "running"
+	})
+
+	queued, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+		Author: "dave",
+		Body:   "mockedit make it pink",
+	})
+	if err != nil {
+		t.Fatalf("create post: %v", err)
+	}
+	h.HoldPost(createdPostRow(queued))
+
+	// The admin turn takes the lock first, so it sits between the post and
+	// the turn that answers it.
+	req := httptest.NewRequest(http.MethodPost, "/admin/changeset", strings.NewReader(
+		url.Values{"instruction": {"mocknoop admin first"}, "csrf": {"test-csrf"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Datastar-Request", "true")
+	req = handlers.WithTestAdmin(req, "ada-id", "ada")
+	h.SendInstruction(httptest.NewRecorder(), req)
+	h.RunPending()
+
+	runs, err := queries.ListChangesets(ctx, 10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf(
+			"turns = %d, err = %v, want the old turn, the admin turn and the batch",
+			len(runs),
+			err,
+		)
+	}
+	batch := runs[0]
+	triggers, err := queries.ListTriggerPosts(ctx, batch.ID)
+	if err != nil || len(triggers) != 1 || triggers[0].ID != queued.ID {
+		t.Fatalf("batch triggers = %v, err = %v, want only post %d", triggers, err, queued.ID)
+	}
+
+	if err := queries.FailTurn(
+		ctx,
+		sqlc.FailTurnParams{ErrorText: "boom", ID: batch.ID},
+	); err != nil {
+		t.Fatalf("fail the batch: %v", err)
+	}
+	id := strconv.FormatInt(batch.ID, 10)
+	if rec := postAdminAt(t, h.RetryTurn, "/admin/retry/"+id, id); rec.Code != http.StatusOK {
+		t.Fatalf("retry: status = %d", rec.Code)
+	}
+	runs, err = queries.ListChangesets(ctx, 10)
+	if err != nil || len(runs) != 4 {
+		t.Fatalf("turns = %d, err = %v, want the retry added", len(runs), err)
+	}
+	retried, err := queries.ListTriggerPosts(ctx, runs[0].ID)
+	if err != nil || len(retried) != 1 || retried[0].ID != queued.ID {
+		t.Errorf("retry triggers = %v, err = %v, want only post %d", retried, err, queued.ID)
 	}
 }
 
@@ -1792,10 +1907,11 @@ func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
 
-	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+	first, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
 		Author: "dave",
 		Body:   "mockedit make it pink",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("create post: %v", err)
 	}
 	turn, err := queries.StartTurn(ctx, sqlc.StartTurnParams{
@@ -1805,6 +1921,7 @@ func TestRetryAnswersThePostsItsTurnHad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start turn: %v", err)
 	}
+	addTriggers(t, queries, turn.ID, first.ID)
 	if _, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
 		Author: "kit",
 		Body:   "mockpatch later",
@@ -1872,6 +1989,7 @@ func TestRetryOfARetryAnswersTheSamePosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start turn: %v", err)
 	}
+	addTriggers(t, queries, turn.ID, post.ID)
 	if err := queries.FailTurn(
 		ctx,
 		sqlc.FailTurnParams{ErrorText: "boom", ID: turn.ID},

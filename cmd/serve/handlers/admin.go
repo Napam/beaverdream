@@ -80,7 +80,17 @@ func (h *Handlers) Admin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) AdminChangesets(w http.ResponseWriter, r *http.Request) {
-	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets})
+	h.servePanel(w, r, pages.Panel{
+		Base:   h.adminBase(),
+		Page:   pages.PageChangesets,
+		Queued: queuedParam(r),
+	})
+}
+
+// queuedParam is the queued post a changesets URL has open, or 0.
+func queuedParam(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.URL.Query().Get("queued"), 10, 64)
+	return max(id, 0)
 }
 
 func (h *Handlers) AdminChangeset(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +99,12 @@ func (h *Handlers) AdminChangeset(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	h.servePanel(w, r, pages.Panel{Base: h.adminBase(), Page: pages.PageChangesets, Turn: id})
+	h.servePanel(w, r, pages.Panel{
+		Base:   h.adminBase(),
+		Page:   pages.PageChangesets,
+		Turn:   id,
+		Queued: queuedParam(r),
+	})
 }
 
 func (h *Handlers) AdminSite(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +241,7 @@ func (h *Handlers) loadAdmin(
 		}
 		view.Turns = turns
 		view.Turn = detail
-		view.Queue = h.queueView(ctx)
+		view.Queue = h.queueView(ctx, panel)
 		if live {
 			view.Run = run
 			view.Panel.Live = true
@@ -268,15 +283,68 @@ func (h *Handlers) adminStreamInit(panel pages.Panel) string {
 	)
 }
 
-// queueView shows the queued posts with display names, not identity ids.
-func (h *Handlers) queueView(ctx context.Context) pages.QueueView {
-	posts, instructions := h.queuedWork()
+// queueView shows the queued posts with display names, not identity ids, and
+// resolves the post the panel has open.
+func (h *Handlers) queueView(ctx context.Context, panel pages.Panel) pages.QueueView {
+	posts, waiting := h.queuedWork()
 	shown := make([]sqlc.Post, len(posts))
 	copy(shown, posts)
 	for i := range shown {
 		shown[i].Author = h.authorName(ctx, shown[i].Author)
 	}
-	return pages.NewQueue(shown, instructions)
+	instructions := make([]pages.QueuedInstruction, len(waiting))
+	for i, item := range waiting {
+		instructions[i] = pages.QueuedInstruction{Author: item.Author, Text: item.Text}
+	}
+	view := pages.NewQueue(shown, instructions, maxBatchPosts)
+	if run := h.runProgress(); run != nil {
+		view.Running = run.TurnID
+	}
+	if panel.Queued > 0 {
+		view.Pick = h.pickQueued(ctx, view, panel.Queued)
+	}
+	return view
+}
+
+// pickQueued opens one post from a link. The link can be older than the
+// queue: the post may have run since, and a reset reuses post ids, so the
+// answer always comes from what the world holds now.
+func (h *Handlers) pickQueued(
+	ctx context.Context,
+	view pages.QueueView,
+	id int64,
+) *pages.QueuePick {
+	for _, post := range view.Posts {
+		if post.ID != id {
+			continue
+		}
+		pick := &pages.QueuePick{State: "queued", Post: post}
+		if !post.History {
+			pick.Together = view.Answered() - 1
+		}
+		return pick
+	}
+	stored, err := h.queries.GetPost(ctx, id)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			h.logger.Warn("Failed to read a picked queued post",
+				slog.Int64("post_id", id), slog.Any("error", err))
+		}
+		return &pages.QueuePick{State: "gone"}
+	}
+	pick := &pages.QueuePick{
+		State: "unqueued",
+		Post: pages.QueuedPost{
+			ID:     stored.ID,
+			Author: h.authorName(ctx, stored.Author),
+			Body:   stored.Body,
+			When:   stored.CreatedAt,
+		},
+	}
+	if turn, err := h.queries.TurnForPost(ctx, id); err == nil && turn > 0 {
+		pick.State, pick.Turn = "included", turn
+	}
+	return pick
 }
 
 // panel names one page of this world's admin.
@@ -339,8 +407,8 @@ func (h *Handlers) adminTurns(
 }
 
 // withStoredPosts fills in the posts of a failed turn that saved no prompt,
-// read back from turns the way a retry reads them, so the admin still sees
-// what it was answering.
+// read back the way a retry reads them, so the admin still sees what it was
+// answering.
 func (h *Handlers) withStoredPosts(ctx context.Context, row pages.TurnRow) pages.TurnRow {
 	if row.Trigger != "" || row.Run.Status != "error" {
 		return row
@@ -724,36 +792,16 @@ func (h *Handlers) runRetry(
 	return res, "", err
 }
 
-// postsAnsweredBy is the batch a changeset answered: the posts between it
-// and the changeset before it, trimmed to the newest maxBatchPosts like
-// the worker trims a burst. A turn that retried another has no posts of its
-// own, so it walks back to the turn it copied.
+// postsAnsweredBy is the batch a changeset was started to answer, from the
+// trigger ids stored on it. A retry stores the same ids, so a retry of a retry
+// reads them directly.
 func (h *Handlers) postsAnsweredBy(ctx context.Context, id int64) ([]sqlc.Post, error) {
-	for range maxRetryWalkBack {
-		posts, err := h.queries.ListPostsForTurn(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("list the turn's posts: %w", err)
-		}
-		if len(posts) > maxBatchPosts {
-			posts = posts[len(posts)-maxBatchPosts:]
-		}
-		if len(posts) > 0 {
-			return posts, nil
-		}
-		previous, err := h.queries.PreviousChangesetID(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("find the turn before it: %w", err)
-		}
-		if previous == 0 {
-			return nil, nil
-		}
-		id = previous
+	posts, err := h.queries.ListTriggerPosts(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("list the turn's posts: %w", err)
 	}
-	return nil, nil
+	return posts, nil
 }
-
-// maxRetryWalkBack bounds the walk through retries of retries.
-const maxRetryWalkBack = 20
 
 // RestoreVersion copies an old version forward as a new one. History stays
 // append-only, so a restore is itself undoable.

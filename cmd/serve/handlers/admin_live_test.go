@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -250,8 +251,9 @@ func TestAdminNeedsAnAdminPrincipal(t *testing.T) {
 	}
 }
 
-// A post waiting for the worker shows in the turns table as one queued row
-// above the newest turn, because the worker answers a burst as one turn.
+// Posts waiting for the worker show in the turns table above the newest turn,
+// each as its own row under one batch row, because the worker answers a burst
+// as one turn.
 func TestAdminChangesetsShowsQueuedPosts(t *testing.T) {
 	h, queries := setup(t)
 	ctx := context.Background()
@@ -279,7 +281,9 @@ func TestAdminChangesetsShowsQueuedPosts(t *testing.T) {
 		"queued",
 		">next<",
 		"dave, kit",
-		"first queued (+1 more)",
+		"2 posts, run as one turn",
+		"first queued",
+		"second queued",
 		"1 changeset · 2 queued, newest first",
 	} {
 		if !strings.Contains(body, want) {
@@ -302,6 +306,60 @@ func TestAdminChangesetsShowsQueuedPosts(t *testing.T) {
 		turns, err := queries.ListChangesets(ctx, 2)
 		return err == nil && len(turns) == 2 && turns[0].Status != "running"
 	})
+}
+
+// A queued post opens from the list: its full text and what the next turn does
+// with it. Once its turn has started the same link names that turn, and a post
+// that was stored but never queued says so.
+func TestAdminChangesetsOpensAQueuedPost(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+
+	var ids []int64
+	for i := range 12 {
+		row, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   fmt.Sprintf("mocknoop queued post %d with a long tail", i),
+		})
+		if err != nil {
+			t.Fatalf("create post: %v", err)
+		}
+		ids = append(ids, row.ID)
+		h.HoldPost(createdPostRow(row))
+	}
+	open := func(id int64) string {
+		return getAdmin(t, h.AdminChangesets,
+			fmt.Sprintf("/admin/changesets?queued=%d", id)).Body.String()
+	}
+
+	body := open(ids[5])
+	for _, want := range []string{
+		"queued post 5 with a long tail",
+		"together with 9 other posts",
+		"the newest 10 run as one turn",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("an answered post is missing %q", want)
+		}
+	}
+	if body := open(ids[0]); !strings.Contains(body, "does not receive it") {
+		t.Error("a post outside the newest batch does not say the turn skips it")
+	}
+
+	h.RunPending()
+	runs, err := queries.ListChangesets(ctx, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("turns = %d, err = %v", len(runs), err)
+	}
+	if body := open(ids[5]); !strings.Contains(body, fmt.Sprintf("turn #%d", runs[0].ID)) {
+		t.Errorf("a post that ran does not link turn %d", runs[0].ID)
+	}
+	if body := open(ids[0]); !strings.Contains(body, "no turn was started for it") {
+		t.Error("a post the batch dropped does not say that no turn was started")
+	}
+	if body := open(ids[11] + 100); !strings.Contains(body, "That post is gone") {
+		t.Error("an unknown post is not reported as gone")
+	}
 }
 
 // A turn in flight shows its finished rounds on the turns page before the
@@ -530,14 +588,15 @@ func TestAdminLiveHoldsARunningTurn(t *testing.T) {
 }
 
 // An admin instruction waiting behind a running turn shows as its own queued
-// row, and the form sends on Enter and clears the field.
+// row naming the admin, and the form sends on Enter and clears the field.
 func TestAdminChangesetsShowsAWaitingInstruction(t *testing.T) {
 	h, _ := setup(t)
-	h.HoldInstruction("make it pink")
+	h.HoldInstruction("make it pink", "admin (ada)")
 
 	body := getAdmin(t, h.AdminChangesets, "/admin/changesets").Body.String()
 	for _, want := range []string{
-		">next<",
+		">wait<",
+		"admin (ada)",
 		"make it pink",
 		"1 queued",
 		"requestSubmit()",

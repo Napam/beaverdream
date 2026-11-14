@@ -221,8 +221,8 @@ prefer simple, readable code over production hardening.
   CSS and JavaScript run as the page. Do not reintroduce an iframe or strip
   scripts; sabotage is the point. Post bodies stay escaped.
 - The only fixed markup is the document shell, the import map that gives
-  `three` and `three/addons` to three.js 0.187 (vendored in `web/vendor`, so
-  pages need no CDN),
+  `three` and `three/addons` to three.js 0.187 and `zzfx` to ZzFX 1.4.0
+  (vendored in `web/vendor`, so pages need no CDN),
   Datastar and the live stream mount, the live script, the `bd-posts`
   container, the `bd-state` JSON tag, the small account link, and the busy
   spinner. The spinner is
@@ -486,8 +486,8 @@ prefer simple, readable code over production hardening.
   log, the page or the system prompt. A turn loads each skill once; a second
   load points back at the first result. A skill load is not an edit and does
   not end the turn, so the system prompt has the model send its loads in one
-  response of their own, then edit. The skills are `controls`, `feel`, `space`,
-  `entities`, `paths`, `random`, `canvas` and `characters`; each teaches
+  response of their own, then edit. The skills are `controls`, `feel`, `audio`,
+  `space`, `entities`, `paths`, `random`, `canvas` and `characters`; each teaches
   general technique, never one world's game. Each holds one script block
   that its `*_test.go` runs; change both together.
 - A model error must leave the current version alone. `Changed` is forced false

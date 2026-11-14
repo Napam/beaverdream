@@ -186,6 +186,7 @@ const vendored = [
   { src: 'vendor/datastar-v1.0.4.js', dest: `${outdir}/datastar.js` },
   { src: 'vendor/three-v0.187.0.module.min.js', dest: `${outdir}/three.module.js` },
   { src: 'vendor/three-addons-v0.187.0.min.js', dest: `${outdir}/three-addons.js` },
+  { src: 'vendor/zzfx-v1.4.0.module.js', dest: `${outdir}/zzfx.js` },
 ]
 
 function exposeVendored() {

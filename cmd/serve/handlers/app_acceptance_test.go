@@ -133,6 +133,7 @@ func newInstance(t *testing.T, opts instanceOptions) *instance {
 			DatastarSrc:    beaverdream.StaticRootPath("static/datastar.js"),
 			ThreeSrc:       beaverdream.StaticRootPath("static/three.module.js"),
 			ThreeAddonsSrc: beaverdream.StaticRootPath("static/three-addons.js"),
+			ZzfxSrc:        beaverdream.StaticRootPath("static/zzfx.js"),
 		},
 		Budget:           opts.budget,
 		ModelConcurrency: 1,

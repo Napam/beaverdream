@@ -4,7 +4,8 @@ package skills
 // and rumble from one impact call. The model reads it with load_skill. The
 // script block is run by feel_test.go, which checks the shake curve and its
 // decay, the distance falloff, hum, the hit stop, the particle pool, the
-// spring, the audio voice cap and the rumble; change both together.
+// spring, the audio voice cap, the named sounds' gate and the rumble; change
+// both together.
 const feelReference = `FEEL REFERENCE:
 Use this when a page has actions: hits, shots, jumps, things breaking, a
 score. Make every action answer the player, without being asked. This core is
@@ -16,7 +17,9 @@ var fx = (function () {
   // Every event in one table. Tune a number here, never at the call site.
   // trauma 0..1 adds shake, stop freezes the game (s), burst is the particle
   // count, speed (px/s) and life (s) shape them, tone is a pitch in Hz (0 is
-  // silent), buzz is rumble in ms for the visitor it happened to.
+  // silent), buzz is rumble in ms for the visitor it happened to. An optional
+  // sound names a row of the table given to fx.sounds; it plays instead of the
+  // tone.
   var EVENTS = {
     shot:  { trauma: 0.04, stop: 0,    burst: 3,  speed: 90,  life: 0.15, size: 2, tone: 880, buzz: 0 },
     land:  { trauma: 0.3,  stop: 0,    burst: 8,  speed: 120, life: 0.4,  size: 3, tone: 110, buzz: 20 },
@@ -43,7 +46,32 @@ var fx = (function () {
     trauma = Math.min(1, trauma + e.trauma * strength * near)
     if (mine) { stop = Math.max(stop, e.stop); buzz(e.buzz * strength) }
     burst(at, e, Math.min(strength, 2))
-    tone(e.tone, strength * near)
+    if (e.sound && sounds[e.sound]) api.sound(e.sound, at, strength, mine)
+    else tone(e.tone, strength * near)
+  }
+  // sounds gives the core a table of named zzfx parameter arrays and the zzfx
+  // function itself, from import { zzfx } from 'zzfx'.
+  api.sounds = function (table, fn) { sounds = table || {}; synth = fn }
+  // sound plays one named sound, quieter with distance like impact. Nothing
+  // plays before a gesture, when muted, twice inside COOLDOWN seconds, or with
+  // more than VOICES sounds started in the last 0.25 s: a burst of the same
+  // thing would only clip.
+  api.sound = function (name, at, strength, mine) {
+    var p = sounds[name]
+    if (!p || !synth || !unlocked || api.muted) return
+    if (strength == null) strength = 1
+    var d = at ? Math.hypot((at.x || 0) - (api.at.x || 0), (at.y || 0) - (api.at.y || 0), (at.z || 0) - (api.at.z || 0)) : 0
+    var volume = (p[0] == null ? 1 : p[0]) * Math.min(strength, 1) * (mine ? 1 : Math.max(0, 1 - d / HEAR))
+    if (volume < 0.05) return
+    var now = nowS()
+    if (now - (lastPlayed[name] == null ? -1 : lastPlayed[name]) < COOLDOWN) return
+    plays = plays.filter(function (t) { return now - t < 0.25 })
+    if (plays.length >= VOICES) return
+    lastPlayed[name] = now
+    plays.push(now)
+    var args = p.slice()
+    args[0] = volume
+    synth.apply(null, args)
   }
   // hum shakes only while it is called, once a frame: a held beam, an engine.
   api.hum = function (amount) { hum = Math.max(hum, amount) }
@@ -104,8 +132,16 @@ var fx = (function () {
     }
   }
 
+  var COOLDOWN = 0.05, VOICES = 6  // a name's repeat gap in s; sounds per 0.25 s
+  // nowS is the gate's clock, real time and not fx.update's, so a page that
+  // plays sounds without a frame loop still gets them.
+  var nowS = (typeof performance !== 'undefined' && performance.now)
+    ? function () { return performance.now() / 1000 }
+    : function () { return Date.now() / 1000 }
+  var sounds = {}, synth = null, lastPlayed = {}, plays = [], unlocked = false
   var audio = null, voices = 0
   function ear() {  // browsers start audio only after a gesture
+    unlocked = true
     if (!audio && typeof AudioContext !== 'undefined') audio = new AudioContext()
     if (audio && audio.state === 'suspended') audio.resume()
   }
@@ -186,6 +222,40 @@ WIRING:
   Apply a shared hit or carve once from the ordered action row; its visual
   layers never do collision or damage. Replay old rows to rebuild shared state
   without replaying their transient effects.
+
+SOUND BEYOND A BLIP: tone() above is one pitched blip. For a sound with
+character (an explosion, a coin, a laser, a powerup), the page can import the
+vendored ZzFX synth, no CDN: import { zzfx, setVolume } from 'zzfx'. It makes
+no sound until the visitor has pressed a key or clicked, and it needs no
+setup. zzfx(...params) plays at once; every parameter is optional, and an
+empty slot keeps its default. The order:
+  volume, randomness, frequency, attack, sustain, release, shape (0 sine,
+  1 triangle, 2 saw, 3 tan, 4 noise, 5 square), shapeCurve, slide,
+  deltaSlide, pitchJump, pitchJumpTime, repeatTime, noise, modulation,
+  bitCrush, delay, sustainVolume, decay, tremolo, filter (negative is high
+  pass, positive is low pass, in Hz).
+Seconds for the time slots, Hz for frequency. Starting points to
+tune, kept in one SOUNDS table like EVENTS:
+  coin:     [, , 1675, , .06, .24, 1, 1.82, , , 837, .06]
+  thud:     [, , 129, .01, , .15, , , , , , , , 5]
+  boom:     [, , 333, .01, 0, .9, 4, 1.9, , , , , , .5, , .6]
+  gameover: [, , 925, .04, .3, .6, 1, .3, , 6.27, -184, .09, .17]
+gameover is long (about a second), so it is a jingle for the end of a round,
+never a shot. A short sound is a small attack and release with a slide.
+- Register the table once: fx.sounds(SOUNDS, zzfx), and call
+  fx.sound(name, at, strength, mine), or give an EVENTS row sound: 'thud' so
+  fx.impact plays it. The core then mutes, waits for a gesture, drops a repeat
+  inside 50 ms, caps the sounds started in a quarter second and lowers the
+  volume with distance. Never call zzfx at the call site, or none of that
+  applies.
+- Play on an event, never every frame: each call builds its sound from
+  scratch, and a long one costs real time on the page.
+- Raise randomness (0.05 is the default) to 0.1 for sounds that repeat fast,
+  footsteps, shots, pickups, so they do not sound like a machine gun.
+- Keep volume under 1 and call setVolume(0.2 to 0.4) once.
+- Changing one number changes the sound a lot. Change one at a time, and
+  prefer a nearby preset over inventing a sound from nothing.
+- Music is not in ZzFX: load the audio skill for background music.
 
 TUNING: a post that asks for more or less of something changes that event's
 row in EVENTS and nothing else. A new kind of event is a new row. Keep the

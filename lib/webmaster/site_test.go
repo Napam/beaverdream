@@ -158,12 +158,12 @@ func TestACSSOnlySiteCarriesBothStamps(t *testing.T) {
 	}
 }
 
-// The import map gives model scripts "three" and "three/addons". It comes before
-// every module script, or the browser ignores it.
+// The import map gives model scripts "three", "three/addons" and "zzfx". It
+// comes before every module script, or the browser ignores it.
 func TestSiteDocMapsThree(t *testing.T) {
 	doc := SiteDoc(Site{HTML: PostsPlaceholder}, nil)
 	want := `<script type="importmap">{"imports":{"three":"/static/three.module.js",` +
-		`"three/addons":"/static/three-addons.js"}}</script>`
+		`"three/addons":"/static/three-addons.js","zzfx":"/static/zzfx.js"}}</script>`
 	at := strings.Index(doc, want)
 	if at < 0 {
 		t.Fatalf("no import map for three in %.400q", doc)
@@ -176,10 +176,11 @@ func TestSiteDocMapsThree(t *testing.T) {
 		HTML:        PostsPlaceholder,
 		Three:       "/static/three-abc.module.js",
 		ThreeAddons: "/static/three-addons-def.js",
+		Zzfx:        "/static/zzfx-ghi.js",
 	}, nil)
 	if !strings.Contains(
 		hashed,
-		`{"three":"/static/three-abc.module.js","three/addons":"/static/three-addons-def.js"}`,
+		`{"three":"/static/three-abc.module.js","three/addons":"/static/three-addons-def.js","zzfx":"/static/zzfx-ghi.js"}`,
 	) {
 		t.Error("the page ignores the hashed three.js paths")
 	}

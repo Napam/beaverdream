@@ -27,6 +27,11 @@ var All = []Skill{
 		Body:    feelReference,
 	},
 	{
+		Name:    "audio",
+		Summary: "for background music: seeded songs, scales, mood layers, a mix with mute, one loop that never stacks",
+		Body:    audioReference,
+	},
+	{
 		Name:    "space",
 		Summary: "for walls, digging and destruction: grid collision, rays, line of sight, area damage and a spatial hash",
 		Body:    spaceReference,

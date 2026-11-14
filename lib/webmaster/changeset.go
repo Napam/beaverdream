@@ -984,6 +984,10 @@ for labels over things; PointerLockControls and OrbitControls. Import them by
 name, as in import { UnrealBloomPass } from 'three/addons'. Never load
 three.js or another 3D library from a CDN.
 
+For sound, import { zzfx } from 'zzfx' in a module script: a small synth
+served by this page, silent until the visitor has pressed a key or clicked.
+Load the feel skill for how to use it. Never load an audio library from a CDN.
+
 Effects in 3D: animate the real thing. When armor comes off, move the
 armor's own meshes, not stand-in boxes. Aim at where a target is this frame,
 not where it was when the effect started, since bodies move and animate.

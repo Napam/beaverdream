@@ -85,6 +85,9 @@ type Config struct {
 	// ThreeAddonsSrc is the path the import map gives "three/addons". Empty
 	// uses webmaster.ThreeAddonsPath.
 	ThreeAddonsSrc string
+	// ZzfxSrc is the path the import map gives "zzfx". Empty uses
+	// webmaster.ZzfxPath.
+	ZzfxSrc string
 }
 
 // Deps is everything one world's handlers need. The world is already open and

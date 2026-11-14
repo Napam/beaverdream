@@ -134,6 +134,7 @@ func run(logger *slog.Logger) error {
 		DatastarSrc:    beaverdream.StaticRootPath("static/datastar.js"),
 		ThreeSrc:       beaverdream.StaticRootPath("static/three.module.js"),
 		ThreeAddonsSrc: beaverdream.StaticRootPath("static/three-addons.js"),
+		ZzfxSrc:        beaverdream.StaticRootPath("static/zzfx.js"),
 	}
 	app := handlers.NewApp(logger, reg, manager, newRunner, handlers.AppConfig{
 		Config: cfg,

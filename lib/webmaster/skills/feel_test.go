@@ -114,8 +114,9 @@ out.flash = body.flash
 
 // Sound: nothing before a gesture, a capped number of voices after one, and
 // nothing when muted. Rumble only for my own events.
-let made = 0, rumbles = 0, vibrated = 0
+let made = 0, rumbles = 0, vibrated = 0, fakeNow = 0
 const fake = {
+  performance: { now: () => fakeNow * 1000 },
   AudioContext: function () {
     this.state = 'running'; this.currentTime = 0; this.destination = {}
     const param = () => ({ setValueAtTime() {}, exponentialRampToValueAtTime() {} })
@@ -142,6 +143,44 @@ fx.impact('hit', { x: 0, y: 0 })
 out.othersRumble = rumbles + vibrated
 fx.impact('hit', { x: 0, y: 0 }, 1, true)
 out.mineRumble = [rumbles, vibrated]
+// Named sounds: nothing before a gesture or when muted, quieter far away,
+// one per name inside the cooldown, and a cap on a burst of different names.
+const played = []
+const synth = (...a) => { played.push(a) }
+const table = { coin: [, , 1675], thud: [0.8, , 129], b: [], c: [], d: [], e: [], f: [], g: [] }
+fx = fresh(fake)
+fx.sounds(table, synth)
+fx.sound('coin', { x: 0, y: 0 })
+out.soundBeforeGesture = played.length
+handlers.pointerdown()
+fx.sound('coin', { x: 0, y: 0 })
+fx.sound('coin', { x: 0, y: 0 })
+out.soundCooldown = played.length
+fakeNow += 0.1
+fx.sound('thud', { x: 400, y: 0 })
+out.soundVolumes = [played[0][0], played[1][0]]
+fx.sound('coin', { x: 900, y: 0 })
+out.soundFar = played.length
+fx.sound('nope')
+fx.muted = true
+fakeNow += 0.1
+fx.sound('coin', { x: 0, y: 0 })
+out.soundMuted = played.length
+fx.muted = false
+played.length = 0
+fakeNow += 1
+for (const n of ['coin', 'thud', 'b', 'c', 'd', 'e', 'f', 'g']) fx.sound(n, { x: 0, y: 0 })
+out.soundBurst = played.length
+fakeNow += 0.3
+fx.sound('coin', { x: 0, y: 0 })
+out.soundAfterBurst = played.length
+played.length = 0
+fx = fresh(fake); handlers.keydown()
+fx.EVENTS.hit.sound = 'thud'
+fx.sounds(table, synth)
+let tones = made
+fx.impact('hit', { x: 0, y: 0 })
+out.eventSound = [played.length, made === tones]
 fx.impact('nope', { x: 0, y: 0 })
 
 // A long frame is capped at 1/30, so the spring and the game stay stable
@@ -175,6 +214,11 @@ func TestFeelReferenceCore(t *testing.T) {
 		Decay                                map[string]float64
 		Overshoot, Settled, Flash            float64
 		BeforeGesture, Voices, Muted         int
+		SoundBeforeGesture, SoundCooldown    int
+		SoundFar, SoundMuted                 int
+		SoundBurst, SoundAfterBurst          int
+		SoundVolumes                         []float64
+		EventSound                           []any
 		OthersRumble                         int
 		MineRumble                           []int
 		Capped, SlowPop                      float64
@@ -231,6 +275,29 @@ func TestFeelReferenceCore(t *testing.T) {
 			got.Voices,
 			got.Muted,
 		)
+	}
+	if got.SoundBeforeGesture != 0 || got.SoundCooldown != 1 || got.SoundFar != 2 ||
+		got.SoundMuted != 2 {
+		t.Errorf(
+			"sound before a gesture %d, after a repeat %d (want 1), far %d (want 2), muted %d (want 2)",
+			got.SoundBeforeGesture,
+			got.SoundCooldown,
+			got.SoundFar,
+			got.SoundMuted,
+		)
+	}
+	if len(got.SoundVolumes) != 2 || got.SoundVolumes[0] != 1 ||
+		got.SoundVolumes[1] >= 0.8 || got.SoundVolumes[1] <= 0.3 {
+		t.Errorf("volumes %v, want 1 for a sound at the listener and less than 0.8 at 400px",
+			got.SoundVolumes)
+	}
+	if got.SoundBurst != 6 || got.SoundAfterBurst != 7 {
+		t.Errorf("a burst of 8 names started %d (cap 6), then one more %d (want 7)",
+			got.SoundBurst, got.SoundAfterBurst)
+	}
+	if len(got.EventSound) != 2 || got.EventSound[0] != 1.0 || got.EventSound[1] != true {
+		t.Errorf("an event with a sound played %v, want one named sound and no tone",
+			got.EventSound)
 	}
 	if d := got.Capped - 1.0/30; d > 1e-9 || d < -1e-9 {
 		t.Errorf("update(0.25) returned %v, want the 1/30 cap", got.Capped)

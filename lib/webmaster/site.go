@@ -68,6 +68,8 @@ type Site struct {
 	// ThreeAddons is the path the import map gives "three/addons". Empty
 	// uses ThreeAddonsPath.
 	ThreeAddons string
+	// Zzfx is the path the import map gives "zzfx". Empty uses ZzfxPath.
+	Zzfx string
 }
 
 // baseURL is the world's mount path without a trailing slash. It is the
@@ -295,6 +297,10 @@ const ThreePath = "/static/three.module.js"
 // ThreeAddonsPath is where the import map points "three/addons": a chosen
 // set of three.js examples bundled into one file that imports "three".
 const ThreeAddonsPath = "/static/three-addons.js"
+
+// ZzfxPath is where the import map points "zzfx": ZzFX 1.4.0, a tiny sound
+// synth, vendored in web/vendor as an ES module.
+const ZzfxPath = "/static/zzfx.js"
 
 // FaviconPath is the beaver icon the code-owned pages put in their tab. The
 // path is literal, not content-hashed: the document builders do not know the
@@ -611,16 +617,23 @@ func SiteDoc(site Site, posts []Post) string {
 	if datastar == "" {
 		datastar = DatastarPath
 	}
-	imports := map[string]string{"three": site.Three, "three/addons": site.ThreeAddons}
+	imports := map[string]string{
+		"three":        site.Three,
+		"three/addons": site.ThreeAddons,
+		"zzfx":         site.Zzfx,
+	}
 	if imports["three"] == "" {
 		imports["three"] = ThreePath
 	}
 	if imports["three/addons"] == "" {
 		imports["three/addons"] = ThreeAddonsPath
 	}
+	if imports["zzfx"] == "" {
+		imports["zzfx"] = ZzfxPath
+	}
 	// A map of strings always marshals, and Marshal escapes < and >, so a
 	// path cannot close the script tag.
-	threeMap, _ := json.Marshal(map[string]map[string]string{"imports": imports})
+	importMap, _ := json.Marshal(map[string]map[string]string{"imports": imports})
 
 	var b strings.Builder
 	// data-name is code-owned so the model's JavaScript can tell who is
@@ -646,9 +659,9 @@ func SiteDoc(site Site, posts []Post) string {
 	}
 	b.WriteString(`beaverdream</title>`)
 	// The import map must come before every module script, so model scripts
-	// can import "three" and "three/addons" without a URL.
+	// can import "three", "three/addons" and "zzfx" without a URL.
 	b.WriteString(`<script type="importmap">`)
-	b.Write(threeMap)
+	b.Write(importMap)
 	b.WriteString(`</script>`)
 	// A module script is deferred, so Datastar starts after the whole page,
 	// model scripts included, has parsed.

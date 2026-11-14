@@ -28,7 +28,7 @@ var All = []Skill{
 	},
 	{
 		Name:    "audio",
-		Summary: "for background music: seeded songs, scales, mood layers, a mix with mute, one loop that never stacks",
+		Summary: "for music: a player for songs written as data (scales, chords, patterns, sections, grooves, instruments, mood layers) and how to compose them",
 		Body:    audioReference,
 	},
 	{

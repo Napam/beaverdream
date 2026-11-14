@@ -7,24 +7,31 @@ import (
 	"github.com/Napam/beaverdream/lib/webmaster/internal/jsrun"
 )
 
-// audioHarness runs the core from audioReference against a fake AudioContext
-// and a fake interval timer, and reports what it scheduled.
+// audioHarness runs the core from audioReference against a fake AudioContext,
+// a fake interval timer and a fake setTimeout. Each check pushes a line to
+// fails when the player does something else than it should.
 const audioHarness = `
 const fs = require('fs')
 const vm = require('vm')
 const src = fs.readFileSync(process.argv[2], 'utf8')
-const out = {}
+const fails = []
+const out = { fails }
+function expect(name, got, want) {
+  if (JSON.stringify(got) !== JSON.stringify(want)) fails.push(name + ': got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want))
+}
+function ok(name, cond, detail) { if (!cond) fails.push(name + (detail === undefined ? '' : ': ' + JSON.stringify(detail))) }
 
-let handlers = {}, intervals = [], oscillators = [], sources = [], gains = [], contexts = []
+let handlers, intervals, oscillators, sources, gains, contexts, timeouts
 function fresh() {
-  handlers = {}; intervals = []; oscillators = []; sources = []; gains = []; contexts = []
+  handlers = {}; intervals = []; oscillators = []; sources = []; gains = []; contexts = []; timeouts = []
   const param = () => ({ value: 0, setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {},
     setTargetAtTime(v) { this.target = v } })
-  const node = () => ({ connect() {}, frequency: param(), gain: param() })
+  const node = () => ({ connect() {}, frequency: param(), gain: param(), detune: param() })
   const sandbox = {
     addEventListener: (type, fn) => { handlers[type] = fn },
     setInterval: (fn) => { intervals.push(fn); return intervals.length },
     clearInterval: (id) => { intervals[id - 1] = null },
+    setTimeout: (fn) => { timeouts.push(fn) },
     AudioContext: function () {
       this.state = 'suspended'; this.currentTime = 0; this.sampleRate = 8000; this.destination = {}
       this.resume = () => { this.state = 'running' }
@@ -44,140 +51,230 @@ function fresh() {
   return sandbox.music
 }
 const live = () => intervals.filter(Boolean).length
+// run moves the clock from the context's time to end, pumping as a timer would.
+function run(end, at) {
+  const ctx = contexts[0]
+  for (let t = ctx.currentTime; t <= end + 1e-9; t += 0.05) {
+    ctx.currentTime = t
+    if (at && Math.abs(t - at.t) < 0.025) at.fn()
+    const loop = intervals.filter(Boolean)[0]
+    if (loop) loop()
+  }
+}
+const times = (list) => list.map((n) => n.at).sort((a, b) => a - b)
+const midiOf = (f) => Math.round(69 + 12 * Math.log2(f / 440))
+const S = (o) => Object.assign({ key: 'C', scale: 'major', bpm: 120, beat: 2, bar: 4 }, o)
+const at = (music, song, step, track) => music.events(song, step).filter((e) => e.track === track)
 
 let music = fresh()
 
-// Pitch: every note of a song's pad, bass and lead is in its scale.
-let inScale = true, seeds = 0
-for (let seed = 1; seed <= 40; seed++) {
-  const song = music.compose(seed)
-  seeds++
-  for (let step = 0; step < 64; step++) {
-    for (const e of music.events(song, step)) {
-      for (const m of e.midi) {
-        const k = (((m - song.root) % 12) + 12) % 12
-        if (song.scale.indexOf(k) < 0) inScale = false
-      }
-    }
+// Notation: chord tones follow the bar's chord, C is a close chord, holds,
+// accidentals, notes at once and accents.
+const notes = S({
+  tracks: { bass: { octave: 2 }, keys: { sound: 'pad', octave: 4 }, lead: { sound: 'pluck', octave: 4 } },
+  sections: { A: { chords: [0, 3, 4, 5],
+    bass: 'c0 . c2 . c1 . c-1 .',
+    keys: 'C - - - - - - -',
+    lead: '0 - - . 4# 2+4 c0! 7~ | . . . . . . c0 -' } }
+})
+expect('no problems in a valid song', music.check(notes), [])
+expect('bass chord tones over I', [0, 2, 4, 6].map((s) => at(music, notes, s, 'bass')[0].midi[0]), [36, 43, 40, 31])
+expect('bass chord tones over IV', [8, 10, 12, 14].map((s) => at(music, notes, s, 'bass')[0].midi[0]), [41, 48, 45, 36])
+expect('a close C, IV and V', [0, 8, 16].map((s) => at(music, notes, s, 'keys')[0].midi), [[55, 60, 64], [57, 60, 65], [55, 59, 62]])
+const seventh = S({ tracks: { keys: { sound: 'pad' } }, sections: { A: { chords: [4], keys: 'C7' } } })
+expect('a close C7 on V', music.events(seventh, 0)[0].midi, [55, 59, 62, 65])
+const high = S({ tracks: { lead: {} }, sections: { A: { chords: [0], lead: 'c3 c4 c5 c-2 c-3' } } })
+expect('chord tones repeat by octaves', [0, 1, 2, 3, 4].map((s) => music.events(high, s)[0].midi[0]), [72, 76, 79, 52, 48])
+expect('a held chord lasts the bar', at(music, notes, 0, 'keys')[0].steps, 8)
+expect('nothing starts on a hold', [1, 2, 3].map((s) => at(music, notes, s, 'keys').length), [0, 0, 0])
+const lead = (s) => at(music, notes, s, 'lead')
+expect('a degree with two holds', [lead(0)[0].midi, lead(0)[0].steps, lead(1).length, lead(3).length], [[60], 3, 0, 0])
+expect('a sharp', lead(4)[0].midi, [68])
+expect('notes at once', lead(5)[0].midi, [64, 67])
+expect('accent, normal and soft', [lead(6)[0].vel, lead(5)[0].vel, lead(7)[0].vel], [1, 0.7, 0.35])
+expect('a chord tone in the pattern\'s second bar follows that bar\'s chord', [lead(14)[0].midi, lead(14)[0].steps], [[65], 2])
+expect('a two-bar pattern loops over four bars', lead(16)[0].midi, [60])
+const cut = S({ tracks: { bass: {} }, sections: { A: { bass: '. . . . . . . 0 | - - . . . . . .', bars: 1 } } })
+expect('a hold stops at the end of the section', music.events(cut, 7)[0].steps, 1)
+const wrap = S({ tracks: { bass: {} }, sections: { A: { bass: '- . . . . . . 0', bars: 2 } } })
+expect('a hold does not wrap around its pattern', music.events(wrap, 7)[0].steps, 1)
+
+// Meter and form: a bar is beat times bar steps, sections run in order and
+// last their chords, their longest pattern or bars, and the form loops.
+const waltz = S({ beat: 3, bar: 2, tracks: { bass: { octave: 2 } }, sections: { A: { chords: [0, 4], bass: 'c0' } } })
+expect('6/8 changes chord every six steps', [0, 5, 6, 11, 12].map((s) => at(music, waltz, s, 'bass')[0].midi[0]), [36, 36, 43, 43, 36])
+const form = S({
+  tracks: { bass: { octave: 2 } },
+  sections: { A: { bass: '0' }, B: { chords: [0, 0], bass: '4' }, C: { bars: 2 }, L: { bass: '0 . . . . . . . 1 . . . . . . .' } },
+  form: 'ABACL'
+})
+const formBass = (s) => at(music, form, s, 'bass').map((e) => e.midi[0])
+expect('sections in form order', [0, 7, 8, 23, 24, 31].map(formBass), [[36], [36], [43], [43], [36], [36]])
+expect('a section without a pattern is silent', [32, 47].map(formBass), [[], []])
+expect('a long pattern sets the section length', [48, 56, 63].map(formBass), [[36], [38], []])
+expect('the form loops', formBass(64), [36])
+const listed = S({ tracks: { bass: { octave: 2 } }, sections: { intro: { bass: '4' }, A: { bass: '0' } }, form: ['intro', 'A'] })
+expect('a form as a list', [0, 8].map((s) => at(music, listed, s, 'bass')[0].midi[0]), [43, 36])
+
+// Tables: every progression stays in its scale, every groove fills one bar of
+// its meter, every table entry is a valid part.
+for (const [name, scale] of Object.entries(music.SCALES)) {
+  ok('scale ' + name + ' rises from 0 within an octave', scale[0] === 0 && scale.every((v, i) => i === 0 || (v > scale[i - 1] && v < 12)), scale)
+}
+for (const [name, p] of Object.entries(music.PROGRESSIONS)) {
+  const song = S({ key: 'E', scale: p.scale, tracks: { bass: { octave: 2 }, keys: { sound: 'pad' }, lead: { sound: 'lead', octave: 5 } },
+    sections: { A: { chords: p.chords, bass: 'c0 c1 c2 c3 c4 c-1 . .', keys: 'C', lead: '0 1 2 3 4 5 6 7' } } })
+  expect('progression ' + name + ' is valid', music.check(song), [])
+  const set = music.SCALES[p.scale]
+  let outside = []
+  for (let s = 0; s < 8 * p.chords.length; s++) {
+    for (const e of music.events(song, s)) for (const m of e.midi) if (set.indexOf(((m - 4) % 12 + 12) % 12) < 0) outside.push(m)
   }
+  expect('progression ' + name + ' stays in ' + p.scale, outside, [])
 }
-out.inScale = inScale
-
-// Seeds: the same seed writes the same song, another seed another one, and the
-// options are honored.
-out.sameSeed = JSON.stringify(music.compose(7)) === JSON.stringify(music.compose(7))
-out.otherSeed = JSON.stringify(music.compose(7)) !== JSON.stringify(music.compose(8))
-// A text seed, as the random skill makes them, is a seed like any other.
-const text = (s) => JSON.stringify(Object.assign(music.compose(s), { seed: 0 }))
-out.textSeed = [text('world:1') === text('world:1'), text('world:1') !== text('world:2'), text('world:1') !== text(0)]
-const fixed = music.compose(3, { scale: 'dorian', bpm: 100 })
-out.options = [fixed.name, fixed.bpm]
-
-// Lead: rests at least 30%, a breath at the end of every bar, two octaves at most.
-let restsOk = true, breathOk = true, rangeOk = true
-for (let seed = 1; seed <= 40; seed++) {
-  const song = music.compose(seed)
-  const rests = song.lead.filter((l) => !l).length / song.lead.length
-  if (rests < 0.3) restsOk = false
-  song.lead.forEach((l, i) => { if (i % 8 === 7 && l) breathOk = false })
-  const notes = song.lead.filter(Boolean).map((l) => music.pitch(song.root + 24, song.scale, l.d))
-  if (Math.max.apply(null, notes) - Math.min.apply(null, notes) > 24) rangeOk = false
+for (const [name, g] of Object.entries(music.GROOVES)) {
+  const sec = {}
+  for (const d of ['kick', 'snare', 'hat']) {
+    const steps = g[d].split(/\s+/).filter((t) => t && t !== '|').length
+    ok('groove ' + name + ' ' + d + ' is one bar', steps === 0 || steps === g.beat * g.bar, steps)
+    sec[d] = g[d]
+  }
+  expect('groove ' + name + ' is valid', music.check(S({ beat: g.beat, bar: g.bar, tracks: { kick: {}, snare: {}, hat: {} }, sections: { A: sec } })), [])
 }
-out.leadRests = restsOk
-out.leadBreath = breathOk
-out.leadRange = rangeOk
+const all = {}, allSec = {}
+for (const name of Object.keys(music.SOUNDS)) { all[name] = {}; allSec[name] = '0+2' }
+const orchestra = S({ tracks: all, sections: { A: allSec } })
+expect('every sound is valid', music.check(orchestra), [])
 
-// Nothing sounds before a gesture, and a play before one starts at the first.
-music.play(music.compose(5))
-out.beforeGesture = [contexts.length, live(), oscillators.length]
+// A broken song still plays: each problem is listed, and reported once as an
+// error thrown outside the caller.
+const bad = S({ scale: 'nope', key: 'H', tracks: { a: { sound: 'kazoo' } },
+  sections: { A: { chords: ['ii'], a: '0 q 1', ghost: 'x' } }, form: 'AZ' })
+const problems = music.check(bad)
+expect('every kind of problem is listed once', problems.length, 7)
+expect('a broken song still has notes', music.events(bad, 0).length, 1)
+handlers.keydown()
+music.play(bad)
+expect('each problem is reported', timeouts.length, 7)
+let thrown = 0
+for (const fn of timeouts) { try { fn() } catch (e) { thrown++ } }
+expect('each report throws', thrown, 7)
+ok('the broken song plays', oscillators.length > 0)
+music.stop(); music.play(bad)
+expect('a problem is reported once', timeouts.length, 7)
+expect('an empty song has a problem', music.check({}).length, 1)
+expect('an empty song has no notes', music.events({}, 3), [])
+music.stop(); music.play({}); run(1)
+expect('an empty song keeps one quiet loop', live(), 1)
+
+// Gesture: nothing sounds before one, and a play before one starts at the first.
+const hats = S({ tracks: { hat: {} }, sections: { A: { hat: 'x' } } })
+music = fresh()
+music.play(hats)
+expect('before a gesture: contexts, loops, voices', [contexts.length, live(), sources.length], [0, 0, 0])
 handlers.pointerdown()
-out.afterGesture = [contexts.length, live(), oscillators.length > 0]
+expect('after a gesture: contexts, loops', [contexts.length, live()], [1, 1])
+ok('after a gesture it sounds', sources.length > 0)
+music.play(hats); music.play(hats)
+expect('play again keeps one loop', live(), 1)
 
-// Scheduler: one loop however often play is called, every step started once
-// and exactly one step apart, nothing scheduled past the lookahead.
-music.play(music.compose(5)); music.play(music.compose(5))
-out.oneLoop = live()
-const song = music.compose(5, { bpm: 120 })
+// Scheduler: every step once, one step apart, within the lookahead.
 music = fresh(); handlers.keydown()
-music.play(song)
-const ctx = contexts[0]
-const stepLen = 60 / 120 / 2
-for (let t = 0; t < 8; t += 0.05) { ctx.currentTime = t; intervals.filter(Boolean)[0]() }
-const hats = sources.map((s) => s.at).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b)
+music.play(hats)
+run(8)
+const ticks = times(sources)
 const gaps = new Set()
-for (let i = 1; i < hats.length; i++) gaps.add(Math.round((hats[i] - hats[i - 1]) * 1e6))
-out.steps = hats.length
-out.gaps = [...gaps]
-out.stepLen = Math.round(stepLen * 1e6)
-out.ahead = Math.max.apply(null, hats) <= ctx.currentTime + 0.4 + 1e-9
+for (let i = 1; i < ticks.length; i++) gaps.add(Math.round((ticks[i] - ticks[i - 1]) * 1e6))
+ok('steps scheduled', ticks.length > 12, ticks.length)
+expect('one step apart', [...gaps], [250000])
+ok('within the lookahead', ticks[ticks.length - 1] <= contexts[0].currentTime + 0.4 + 1e-9)
 
 // A hidden tab parks the timer. Coming back must not start the missed steps.
-oscillators.length = 0; sources.length = 0
-ctx.currentTime = 20
+sources.length = 0
+contexts[0].currentTime = 20
 intervals.filter(Boolean)[0]()
-out.caughtUp = Math.min.apply(null, sources.map((s) => s.at)) >= 20 - 1e-9
+ok('missed steps are dropped', Math.min.apply(null, times(sources)) >= 20 - 1e-9)
 
-// A song with a bpm that is no tempo still plays, and the loop ends.
+// Swing pushes every second step late, and a pair still takes two steps.
 music = fresh(); handlers.keydown()
-const broken = music.compose(5)
-broken.bpm = -120
-music.play(broken)
-out.badBpm = sources.length > 0 && sources.length < 50
+music.play(Object.assign({}, hats, { swing: 0.25 }))
+run(4)
+const swung = times(sources), pairs = new Set()
+for (let i = 1; i < swung.length; i++) pairs.add(Math.round((swung[i] - swung[i - 1]) * 1e6))
+expect('swung gaps', [...pairs].sort(), [187500, 312500])
 
-// An endless bpm is no tempo either: the clamp holds, and the loop ends.
+// A bpm that is no tempo still plays, and the loop ends.
+for (const bpm of [-120, Infinity, 'fast']) {
+  music = fresh(); handlers.keydown()
+  music.play(Object.assign({}, hats, { bpm }))
+  ok('bpm ' + bpm + ' plays a bounded number of steps', sources.length > 0 && sources.length < 50, sources.length)
+}
+
+// Another song waits for the bar line; the same song goes on.
+const kicks = S({ tracks: { kick: {} }, sections: { A: { kick: 'x' } } })
 music = fresh(); handlers.keydown()
-const endless = music.compose(5)
-endless.bpm = Infinity
-music.play(endless)
-out.fastBpm = sources.length > 0 && sources.length < 50
+music.play(hats)
+const first = times(sources)[0]
+run(6, { t: 1.0, fn: () => music.play(kicks) })
+const swapAt = times(oscillators)[0], lastHat = times(sources).pop()
+ok('the new song starts on a bar line', Math.abs(((swapAt - first) / 2 + 1e-9) % 1) < 1e-6, swapAt - first)
+ok('the old song stops where the new one starts', lastHat < swapAt, [lastHat, swapAt])
+expect('one loop after a swap', live(), 1)
+const scale = S({ tracks: { lead: { sound: 'pluck' } }, sections: { A: { lead: '0 1 2 3 4 5 6 7' } } })
+music = fresh(); handlers.keydown()
+music.play(scale)
+run(5, { t: 1.3, fn: () => music.play(scale) })
+const order = oscillators.slice().sort((a, b) => a.at - b.at).map((o) => [60, 62, 64, 65, 67, 69, 71, 72].indexOf(midiOf(o.frequency.value)))
+ok('playing the same song again does not restart it', order.every((v, i) => i === 0 || v === (order[i - 1] + 1) % 8), order)
 
-// Mood: a pad and a bass alone at 0, a lead at 0.4, drums at 1.
+// A cue moves to a section at the next bar line, not where it would start.
+const cued = S({ tracks: { hat: {}, kick: {} }, sections: { A: { hat: 'x', bars: 2 }, B: { kick: 'x' } }, form: 'AB' })
+music = fresh(); handlers.keydown()
+music.play(cued)
+const start = times(sources)[0]
+run(3, { t: 1.0, fn: () => music.cue('B') })
+expect('the cue lands on the next bar line', Math.round((times(oscillators)[0] - start) * 1e6), 2000000)
+
+// Mood: a track plays only while music.mood reaches its threshold.
+const layered = S({ tracks: { bass: {}, hat: { mood: 0.5 }, snare: { mood: 0.9 } }, sections: { A: { bass: 'x', hat: 'x', snare: 'x' } } })
 function voices(mood) {
   music = fresh(); handlers.keydown()
   music.mood = mood
-  music.play(music.compose(5, { bpm: 120 }))
-  const c = contexts[0]
-  for (let t = 0; t < 8; t += 0.05) { c.currentTime = t; intervals.filter(Boolean)[0]() }
-  return [oscillators.length, sources.length]
+  music.play(layered)
+  run(4)
+  return [oscillators.length > 0, sources.length]
 }
-const calm = voices(0), mid = voices(0.4), full = voices(1)
-out.mood = [calm[1], mid[1], full[1], calm[0] < mid[0], mid[0] < full[0]]
+const calm = voices(0), mid = voices(0.6), full = voices(1)
+ok('calm: the base layer alone', calm[0] && calm[1] === 0, calm)
+ok('mid: one more layer', mid[0] && mid[1] > 0, mid)
+expect('full: every layer', full[1], 2 * mid[1])
+
+// Every sound plays.
+music = fresh(); handlers.keydown()
+music.play(orchestra)
+ok('every sound makes a voice', oscillators.length > 0 && sources.length > 0)
 
 // Mute: the bus goes to zero, and back to the volume.
-music = fresh(); handlers.keydown(); music.play(music.compose(5))
-music.muted = true; music.level()
 const bus = gains[0]
-out.muted = bus.gain.target
+music.muted = true; music.level()
+expect('muted', bus.gain.target, 0)
 music.muted = false; music.level()
-out.unmuted = bus.gain.target
+ok('unmuted', bus.gain.target > 0, bus.gain.target)
 
 // Stop: the loop is gone, and play starts a fresh one.
 music.stop()
-out.stopped = live()
+expect('stopped', live(), 0)
 music.play()
-out.restarted = live()
+expect('restarted', live(), 1)
 
 console.log(JSON.stringify(out))
 `
 
 func TestAudioReferenceCore(t *testing.T) {
 	out := jsrun.Run(t, audioReference, audioHarness, "")
-	t.Logf("%s", out)
 	var got struct {
-		Globals                          []string
-		InScale, SameSeed, OtherSeed     bool
-		Options                          []any
-		TextSeed                         []bool
-		LeadRests, LeadBreath, LeadRange bool
-		BeforeGesture                    []int
-		AfterGesture                     []any
-		OneLoop, Steps                   int
-		Gaps                             []int
-		StepLen                          int
-		Ahead, CaughtUp, BadBpm, FastBpm bool
-		Mood                             []any
-		Muted, Unmuted                   float64
-		Stopped, Restarted               int
+		Fails   []string
+		Globals []string
 	}
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatalf("decode: %v\n%s", err, out)
@@ -185,68 +282,7 @@ func TestAudioReferenceCore(t *testing.T) {
 	if len(got.Globals) != 1 || got.Globals[0] != "music" {
 		t.Errorf("the script leaks globals %v, want only music", got.Globals)
 	}
-	if !got.InScale {
-		t.Error("a pad, bass or lead note is outside its scale")
-	}
-	if !got.SameSeed || !got.OtherSeed {
-		t.Errorf(
-			"same seed repeats %v, another seed differs %v; want both",
-			got.SameSeed,
-			got.OtherSeed,
-		)
-	}
-	if len(got.TextSeed) != 3 || !got.TextSeed[0] || !got.TextSeed[1] || !got.TextSeed[2] {
-		t.Errorf(
-			"text seeds [same repeats, another differs, differs from seed 0] = %v, want all true",
-			got.TextSeed,
-		)
-	}
-	if len(got.Options) != 2 || got.Options[0] != "dorian" || got.Options[1] != 100.0 {
-		t.Errorf("options gave %v, want dorian at 100", got.Options)
-	}
-	if !got.LeadRests || !got.LeadBreath || !got.LeadRange {
-		t.Errorf("lead: 30%% rests %v, a rest ends every bar %v, within two octaves %v",
-			got.LeadRests, got.LeadBreath, got.LeadRange)
-	}
-	if len(got.BeforeGesture) != 3 || got.BeforeGesture[0] != 0 || got.BeforeGesture[1] != 0 ||
-		got.BeforeGesture[2] != 0 {
-		t.Errorf("before a gesture: contexts, loops, voices %v, want all zero", got.BeforeGesture)
-	}
-	if len(got.AfterGesture) != 3 || got.AfterGesture[0] != 1.0 || got.AfterGesture[1] != 1.0 ||
-		got.AfterGesture[2] != true {
-		t.Errorf("after a gesture: contexts, loops, sounding %v, want 1, 1, true", got.AfterGesture)
-	}
-	if got.OneLoop != 1 {
-		t.Errorf("play three times left %d loops, want 1", got.OneLoop)
-	}
-	if !got.BadBpm {
-		t.Error("a negative bpm did not play a bounded number of steps")
-	}
-	if !got.FastBpm {
-		t.Error("an endless bpm did not play a bounded number of steps")
-	}
-	if !got.CaughtUp {
-		t.Error("after a hidden tab, a step was scheduled in the past instead of dropped")
-	}
-	if got.Steps < 12 || len(got.Gaps) != 1 || got.Gaps[0] != got.StepLen || !got.Ahead {
-		t.Errorf("steps %d, gaps between them %v (want only %d), within the lookahead %v",
-			got.Steps, got.Gaps, got.StepLen, got.Ahead)
-	}
-	if len(got.Mood) != 5 || got.Mood[0] != 0.0 || got.Mood[1] != 0.0 || got.Mood[2] == 0.0 ||
-		got.Mood[3] != true || got.Mood[4] != true {
-		t.Errorf(
-			"mood: noise sources at 0, 0.4, 1 and voice growth %v, want 0, 0, more, true, true",
-			got.Mood,
-		)
-	}
-	if got.Muted != 0 || got.Unmuted <= 0 {
-		t.Errorf(
-			"mute set the bus to %v, unmute to %v; want 0 and the volume",
-			got.Muted,
-			got.Unmuted,
-		)
-	}
-	if got.Stopped != 0 || got.Restarted != 1 {
-		t.Errorf("after stop %d loops, after play %d; want 0 and 1", got.Stopped, got.Restarted)
+	for _, f := range got.Fails {
+		t.Error(f)
 	}
 }

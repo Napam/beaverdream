@@ -56,10 +56,10 @@ func avatarInitial(value string) string {
 	return "?"
 }
 
-// worldGrid stacks each world as a wide door, so one world does not leave a
-// half-empty tile row.
+// worldGrid is the lobby gallery: one column on a phone, two on a tablet,
+// three on a wide screen.
 func worldGrid() string {
-	return "mt-8 flex flex-col gap-3"
+	return "mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
 }
 
 // beaverLogo is the drawn mark, at the size the surface needs.
@@ -400,25 +400,66 @@ templ lobbyBody(view AppView) {
 }
 
 templ worldCard(view AppView, world AppWorld) {
-	<article id={ "world-" + world.Slug } class={ appUserCard + " scroll-mt-24 flex flex-wrap items-center gap-4 p-4" }>
-		<span class={ "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl font-semibold " + worldTone(world.Slug) }>{ avatarInitial(world.Slug) }</span>
-		<p class="min-w-0 flex-1 truncate font-mono text-base font-semibold text-[#3b2a20] dark:text-[#f5ece1]">{ world.Slug }</p>
-		if world.Slug == view.CreatedSlug {
-			<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">new</span>
+	<article
+		id={ "world-" + world.Slug }
+		data-health={ world.HealthState() }
+		class={ appUserCard + " scroll-mt-24 flex flex-col gap-3 p-4" }
+	>
+		<div class="flex items-start justify-between gap-2">
+			<div class="flex min-w-0 items-center gap-3">
+				<span class={ "flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-xl font-semibold " + worldTone(world.Slug) }>{ avatarInitial(world.Slug) }</span>
+				<p class="min-w-0 break-words font-mono text-sm font-semibold leading-tight text-[#3b2a20] dark:text-[#f5ece1]">{ world.Slug }</p>
+				if world.Slug == view.CreatedSlug {
+					<span class="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">new</span>
+				}
+			</div>
+			if world.HealthState() == "error" {
+				<span data-chip="failed" class="inline-flex shrink-0 rounded-sm bg-red-100 px-1.5 py-px text-[11px] font-medium text-red-800 dark:bg-red-950/40 dark:text-red-300">failed</span>
+			} else if world.Alerts > 0 {
+				<span data-chip="alerts" data-alerts={ itoa(world.Alerts) } class="inline-flex shrink-0 rounded-sm bg-amber-100 px-1.5 py-px text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{ itoa(world.Alerts) + " alerts open" }</span>
+			}
+		</div>
+		<p class={ appUserMuted }>{ world.LastTurnLine() }</p>
+		if view.Admin {
+			<div data-page-size={ itoa(world.PagePercent()) }>
+				<div class="flex items-baseline justify-between gap-2">
+					<span class={ appUserLabel }>page size</span>
+					<span class={ "text-xs font-medium " + appPagePercentTone(world) }>{ itoa(world.PagePercent()) + "%" }</span>
+				</div>
+				<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[#f1e3d2] dark:bg-[#2b221b]">
+					<div class={ "h-full rounded-full " + appPageBarTone(world) } style={ "width:" + itoa(world.PagePercent()) + "%" }></div>
+				</div>
+			</div>
 		}
-		<div class="flex w-full items-center gap-2 sm:w-auto">
-			<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="min-w-0 flex-1 sm:flex-none">
+		<div class="mt-auto flex items-center gap-2 pt-1">
+			<form method="post" action={ templ.SafeURL(WorldPlayPath(world.Slug)) } class="min-w-0 flex-1">
 				@csrfInput(view.CSRF)
 				<button type="submit" class={ appUserButton + " w-full" }>enter</button>
 			</form>
 			if view.Admin {
-				<a class={ appUserQuiet } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
+				<a class={ appUserQuiet + " shrink-0" } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
 			}
 		</div>
 		if world.Slug == view.CreatedSlug {
 			@userNotice("your world is ready. press enter.")
 		}
 	</article>
+}
+
+// appPageBarTone turns the lobby's size bar red once a page is close to the
+// model's cap.
+func appPageBarTone(world AppWorld) string {
+	if world.PageNearlyFull() {
+		return "bg-red-500 dark:bg-red-500"
+	}
+	return "bg-[#a35f2b] dark:bg-[#d9a066]"
+}
+
+func appPagePercentTone(world AppWorld) string {
+	if world.PageNearlyFull() {
+		return "text-red-700 dark:text-red-400"
+	}
+	return "text-[#8a6f5c] dark:text-[#a6907d]"
 }
 
 templ userNotice(text string) {

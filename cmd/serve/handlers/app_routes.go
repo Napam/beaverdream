@@ -487,6 +487,7 @@ func (a *App) renderLobby(w http.ResponseWriter, r *http.Request, message string
 	for _, world := range worlds {
 		view.Worlds = append(view.Worlds, appWorld(world, r, a.cfg.Config))
 	}
+	view.Worlds = a.attachWorldHealth(r.Context(), view.Worlds)
 	a.renderApp(w, r, pages.AppLobby(view))
 }
 

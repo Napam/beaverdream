@@ -767,6 +767,13 @@ func TestSetStateSchemaRejectsBadVisitorKeysAndRecipes(t *testing.T) {
 	) {
 		t.Errorf("%d keys: got %q, want a rejection", len(many), got)
 	}
+	ed = newEditor(Site{})
+	if got := ed.run(
+		"set_state_schema",
+		args(t, map[string]any{"keys": many[:maxStateKeys]}),
+	); strings.HasPrefix(got, "rejected:") {
+		t.Errorf("%d keys: got %q, want them accepted", maxStateKeys, got)
+	}
 }
 
 func fiveCostRecipe() []map[string]any {

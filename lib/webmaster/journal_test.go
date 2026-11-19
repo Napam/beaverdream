@@ -80,6 +80,21 @@ func TestCleanJournalSchemaRejects(t *testing.T) {
 	}
 }
 
+// The cap allows exactly maxJournalKeys feeds and refuses one more, so a
+// world can keep each kind of event in its own key instead of multiplexing.
+func TestCleanJournalSchemaKeyLimit(t *testing.T) {
+	keys := make([]journalKeyInput, maxJournalKeys)
+	for i := range keys {
+		keys[i] = journalKeyInput{Name: fmt.Sprintf("k%02d", i)}
+	}
+	if _, err := cleanJournalSchema(keys); err != nil {
+		t.Fatalf("%d keys should be allowed: %v", len(keys), err)
+	}
+	if _, err := cleanJournalSchema(append(keys, journalKeyInput{Name: "k99"})); err == nil {
+		t.Errorf("%d keys should be refused", len(keys)+1)
+	}
+}
+
 func TestCleanJournalSchemaAllowsEmpty(t *testing.T) {
 	raw, err := cleanJournalSchema(nil)
 	if err != nil {
@@ -133,6 +148,17 @@ func TestCleanJournalPayload(t *testing.T) {
 	big := `"` + strings.Repeat("a", maxJournalPayload) + `"`
 	if _, err := CleanJournalPayload(json.RawMessage(big)); err == nil {
 		t.Error("oversized payload should be rejected")
+	}
+
+	// Exactly the cap fits; one byte more does not.
+	exact := `{"a":"` + strings.Repeat("a", maxJournalPayload-8) + `"}`
+	got, err := CleanJournalPayload(json.RawMessage(exact))
+	if err != nil || len(got) != maxJournalPayload {
+		t.Errorf("payload of %d bytes = %q, %v; want it kept", len(exact), got, err)
+	}
+	over := `{"a":"` + strings.Repeat("a", maxJournalPayload-7) + `"}`
+	if _, err := CleanJournalPayload(json.RawMessage(over)); err == nil {
+		t.Errorf("payload of %d bytes should be rejected", len(over))
 	}
 }
 

@@ -72,7 +72,11 @@ const (
 const MaxBodyLen = 2000
 
 const (
-	maxStateKeys  = 24
+	// State is low-frequency: a key changes when a visitor does something,
+	// not every frame, so a big economy can declare one per currency, upgrade
+	// and shop tier. Every key costs one value in $shared (or one holdings
+	// row) and is listed on the admin data page.
+	maxStateKeys  = 64
 	maxStateLabel = 40
 	maxRecipeSide = 4
 	maxStateName  = 32
@@ -90,7 +94,10 @@ const (
 	maxSayLen      = 300
 	minStateOpts   = 2
 	defaultListMax = 20
-	maxNotesLen    = 1000
+	// maxNotesLen is the longest notes kept. Notes are the model's own
+	// memory of the world, copied forward every turn, so a big world needs
+	// room for its systems without hitting the cap.
+	maxNotesLen = 2000
 )
 
 // providerToolMarkup is DeepSeek's native tool-call delimiter, U+FF5C on each

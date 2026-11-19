@@ -11,11 +11,17 @@ import (
 )
 
 const (
-	maxJournalKeys    = 6
+	// A feed is read once per page load and pushed on its own, so a key with
+	// a fixed cadence (motion, cops) belongs apart from a rare one (seats,
+	// chat). The cap is high enough that a big game can keep them separate.
+	maxJournalKeys    = 32
 	maxJournalName    = 32
 	maxJournalRows    = 1000
 	defaultJournalMax = 300
-	maxJournalPayload = 600
+	// A row is pushed to every open page and kept up to the key's max, so
+	// this stays a size bound, not a budget: room for a chat line or a game
+	// row with many fields, not for a document.
+	maxJournalPayload = 2048
 
 	// maxSaveLen is the longest JSON text bd.save keeps for one name. The
 	// browser gives an origin a few megabytes, shared by every name.

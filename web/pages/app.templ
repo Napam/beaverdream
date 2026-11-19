@@ -712,9 +712,9 @@ templ worldsSection(view AppView) {
 		if len(view.Worlds) == 0 {
 			<p class={ appEmpty + " mt-3" }>no worlds yet. create the first one above.</p>
 		} else {
-			<div class="mt-2 flex flex-col divide-y divide-gray-200 dark:divide-neutral-800">
+			<div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
 				for _, world := range view.Worlds {
-					@worldRow(view, world)
+					@worldHealthCard(view, world)
 				}
 			</div>
 		}
@@ -753,34 +753,69 @@ templ worldsSection(view AppView) {
 	}
 }
 
-templ worldRow(view AppView, world AppWorld) {
-	<div class="flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
-		<div class="min-w-0 w-full sm:w-auto sm:flex-1">
-			<p class="truncate font-mono text-sm text-gray-900 dark:text-neutral-100">{ world.Slug }</p>
-			<p class={ adminMuted + " mt-0.5" }>
-				created { world.CreatedAt.Format("Jan 2, 2006") }
-				if world.CreatorName != "" || world.CreatorUsername != "" {
-					{ "by " + world.CreatorName }
-					if world.CreatorUsername != "" {
-						{ "(" + world.CreatorUsername + ")" }
+templ worldHealthCard(view AppView, world AppWorld) {
+	<article id={ "world-" + world.Slug } data-health={ world.HealthState() } class={ adminCard + " flex flex-col gap-3" }>
+		<div class="flex items-start justify-between gap-2">
+			<div class="min-w-0">
+				<p class="truncate font-mono text-sm text-gray-900 dark:text-neutral-100">{ world.Slug }</p>
+				<p class={ adminMuted + " mt-0.5" }>
+					created { world.CreatedAt.Format("Jan 2, 2006") }
+					if world.CreatorName != "" || world.CreatorUsername != "" {
+						{ " by " + world.CreatorName }
+						if world.CreatorUsername != "" {
+							{ " (" + world.CreatorUsername + ")" }
+						}
 					}
-				}
-			</p>
+				</p>
+			</div>
+			if world.HealthState() == "error" {
+				<span class="inline-flex shrink-0 rounded-sm bg-red-100 px-1.5 py-px text-[11px] font-medium text-red-800 dark:bg-red-950/40 dark:text-red-300">failed</span>
+			} else if world.Alerts > 0 {
+				<span class="inline-flex shrink-0 rounded-sm bg-amber-100 px-1.5 py-px text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{ itoa(world.Alerts) + " alerts open" }</span>
+			} else if world.Status != "ready" {
+				<span class={ "inline-flex shrink-0 rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
+			}
 		</div>
-		<span class={ "inline-flex rounded-sm px-1.5 py-px text-[11px] font-medium " + worldStatusTone(world.Status) }>{ world.Status }</span>
-		<a class={ adminButton } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
-		if world.Status == "ready" {
-			<a class={ appInlineLink } href={ world.WorldURL } target="_blank" rel="noopener">open world ↗</a>
-			<form
-				method="post"
-				action={ templ.SafeURL("/admin/worlds/" + world.Slug + "/delete") }
-				onsubmit={ templ.JSUnsafeFuncCall("return confirm('Delete " + world.Slug + " and every post, version and journal row in it? This cannot be undone.')") }
-			>
-				@csrfInput(view.CSRF)
-				<button type="submit" class={ appDanger }>delete</button>
-			</form>
-		}
-	</div>
+		<div>
+			<div class="flex items-baseline justify-between gap-2">
+				<span class={ adminMuted }>page size</span>
+				<span class={ "text-xs font-medium " + pagePercentTone(world) }>{ itoa(world.PagePercent()) + "%" }</span>
+			</div>
+			<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-neutral-800">
+				<div class={ "h-full rounded-full " + pageBarTone(world) } style={ "width:" + itoa(world.PagePercent()) + "%" }></div>
+			</div>
+		</div>
+		<p class={ adminMuted + " mt-auto" }>{ world.LastTurnLine() }</p>
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+			<a class={ adminButton } href={ templ.SafeURL("/admin/worlds/" + world.Slug + "/") }>manage</a>
+			if world.Status == "ready" {
+				<a class={ appInlineLink } href={ world.WorldURL } target="_blank" rel="noopener">open world ↗</a>
+				<form
+					method="post"
+					action={ templ.SafeURL("/admin/worlds/" + world.Slug + "/delete") }
+					onsubmit={ templ.JSUnsafeFuncCall("return confirm('Delete " + world.Slug + " and every post, version and journal row in it? This cannot be undone.')") }
+				>
+					@csrfInput(view.CSRF)
+					<button type="submit" class={ appDanger }>delete</button>
+				</form>
+			}
+		</div>
+	</article>
+}
+
+// pageBarTone turns red once a page is close to the model's cap.
+func pageBarTone(world AppWorld) string {
+	if world.PageNearlyFull() {
+		return "bg-red-500 dark:bg-red-500"
+	}
+	return "bg-gray-900 dark:bg-neutral-200"
+}
+
+func pagePercentTone(world AppWorld) string {
+	if world.PageNearlyFull() {
+		return "text-red-700 dark:text-red-400"
+	}
+	return "text-gray-600 dark:text-neutral-400"
 }
 
 templ invitesSection(view AppView) {

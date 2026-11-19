@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Napam/beaverdream/lib/mockllm"
 	"github.com/openai/openai-go/v3"
@@ -220,7 +221,7 @@ func TestRunAppliesASmallEditInOneRound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.Changed || !res.Done || res.Changes != "stylesheet" {
+	if !res.Changed || !res.Done || !strings.HasPrefix(res.Changes, "stylesheet") {
 		t.Fatalf("changed %v, done %v, changes %q", res.Changed, res.Done, res.Changes)
 	}
 	if res.Site.CSS != "h1{color:#c00}" {
@@ -267,7 +268,7 @@ func TestRunPatchesAValueInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run patch: %v", err)
 	}
-	if res.Changes != "stylesheet" {
+	if !strings.HasPrefix(res.Changes, "stylesheet") {
 		t.Errorf("changes = %q, want stylesheet", res.Changes)
 	}
 	if !strings.Contains(res.Site.CSS, mockllm.PatchedAccent) ||
@@ -276,6 +277,60 @@ func TestRunPatchesAValueInPlace(t *testing.T) {
 	}
 	if res.Site.HTML != first.Site.HTML {
 		t.Error("a stylesheet edit changed the page")
+	}
+}
+
+// The room line the model reads next turn says how big the page it wrote got
+// and how many calls the editor refused, so a rejected edit is not invisible
+// once the turn ends.
+func TestRunRecordsTheDeltaAndTheRejectedCalls(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			writeCompletion(
+				w,
+				"",
+				testCall{
+					name:      "edit",
+					arguments: `{"target":"css","old":"no such text","new":"x"}`,
+				},
+				testCall{name: "done", arguments: `{"reason":"tried"}`},
+			)
+			return
+		}
+		writeCompletion(w, "",
+			testCall{name: "edit", arguments: `{"target":"html","old":"","new":"<p>hi</p>"}`},
+			testCall{name: "done", arguments: `{"reason":"added a line"}`},
+		)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Run(
+		context.Background(),
+		Site{CSS: "body{margin:0}", HTML: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Changed {
+		t.Fatal("the repair round changed nothing")
+	}
+	delta := len(res.Site.HTML) - len(PostsPlaceholder)
+	if !strings.Contains(res.Changes, fmt.Sprintf("html +%d bytes", delta)) {
+		t.Errorf("changes = %q, want the html delta of %d bytes", res.Changes, delta)
+	}
+	if !strings.Contains(res.Changes, "1 rejected") {
+		t.Errorf("changes = %q, want the rejected call counted", res.Changes)
+	}
+	log := RenderLog([]Turn{{
+		ID: 2, Kind: TurnChangeset, VersionID: 2, Said: "added a line", Changes: res.Changes,
+	}}, nil)
+	if !strings.Contains(log, "["+res.Changes+"]") {
+		t.Errorf("room log = %q, want the change summary", log)
 	}
 }
 
@@ -311,6 +366,54 @@ func TestRunDefersDoneAfterARejectedEdit(t *testing.T) {
 	}
 	if !res.Done || res.Changed {
 		t.Errorf("done %v, changed %v", res.Done, res.Changed)
+	}
+}
+
+// A page can look edited while its script no longer parses. The browser then
+// refuses the whole block, so done waits once for a repair.
+func TestRunDefersDoneAfterABrokenScript(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(mockllm.Streamed(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		if requests == 1 {
+			writeCompletion(w, "",
+				testCall{
+					name:      "edit",
+					arguments: `{"target":"html","old":"","new":"<script>let a = ;</script>"}`,
+				},
+				testCall{name: "done", arguments: `{"reason":"added a script"}`},
+			)
+			return
+		}
+		writeToolCall(w, "done", `{"reason":"kept it"}`)
+	}))
+	defer srv.Close()
+	m := New(openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("test")), "m", 3, "")
+
+	res, err := m.Run(
+		context.Background(),
+		Site{HTML: PostsPlaceholder},
+		Room{},
+		Post{Body: "hi"},
+	)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Rounds) != 2 {
+		t.Fatalf("rounds = %d, want the repair round", len(res.Rounds))
+	}
+	done := res.Messages[2].ToolCalls[1]
+	if !strings.HasPrefix(done.Result, "not finished:") ||
+		!strings.Contains(done.Result, "html line") {
+		t.Errorf("done result = %q, want the script problem", done.Result)
+	}
+	if !res.Done || res.Reason != "kept it" {
+		t.Fatalf("done %v, reason %q", res.Done, res.Reason)
+	}
+	// The second done keeps the broken page. The gate is a warning, not a
+	// second validation that has to pass.
+	if !res.Changed || !strings.Contains(res.Site.HTML, "let a = ;") {
+		t.Errorf("the kept page was not written: changed %v, html %q", res.Changed, res.Site.HTML)
 	}
 }
 
@@ -555,33 +658,47 @@ func TestUserPromptCapsHistoryAndNamesTheTrigger(t *testing.T) {
 	}
 }
 
-func TestUserPromptPutsTheStableHistoryBeforeThePage(t *testing.T) {
+// The page is the big stable block, so it comes right after the history and
+// before the notes and the log, which change every turn.
+func TestUserPromptPutsThePageBeforeTheLog(t *testing.T) {
 	room := Room{Summary: "old news", Notes: "keep an eye on dave", Log: []Turn{{
 		ID: 1, Kind: TurnPost, Author: "kit", Body: "hi",
 	}}}
 	trigger := Post{ID: 9, Author: "dave", Body: "yo"}
-	got := userPrompt(Site{CSS: "body{}", Plain: true}, room, []Post{trigger})
+	got, sections := userPromptSections(Site{CSS: "body{}", Plain: true}, room, []Post{trigger})
 
 	order := []string{
-		"COMPACTED HISTORY:",
-		"ROOM LOG AFTER THAT",
-		"YOUR NOTES:",
-		"CURRENT STYLESHEET:",
-		"CURRENT HTML:",
-		"CURRENT SHARED STATE:",
-		"WORLD IS PLAIN:",
-		"NEW POST #9",
+		"compacted history",
+		"stylesheet",
+		"html",
+		"shared state",
+		"journal",
+		"flags",
+		"notes",
+		"room log",
+		"new post",
+	}
+	at := make(map[string]PromptSection, len(sections))
+	for _, section := range sections {
+		at[section.Name] = section
 	}
 	last := -1
-	for _, section := range order {
-		at := strings.Index(got, section)
-		if at < 0 || at < last {
-			t.Fatalf("section %q is missing or out of order in:\n%s", section, got)
+	for _, name := range order {
+		section, ok := at[name]
+		if !ok {
+			t.Fatalf("prompt has no %q section: %+v", name, sections)
 		}
-		last = at
+		if section.Start < last {
+			t.Fatalf("section %q starts at %d, out of order: %+v", name, section.Start, sections)
+		}
+		last = section.Start
 	}
-	if strings.LastIndex(got, "NEW POST") < strings.Index(got, "WORLD IS PLAIN:") {
-		t.Error("NEW POST is not the final section")
+	page, notes, log := at["stylesheet"], at["notes"], at["room log"]
+	if page.Start >= notes.Start || notes.Start >= log.Start {
+		t.Fatalf("page %+v, notes %+v and log %+v are out of order", page, notes, log)
+	}
+	if last := sections[len(sections)-1]; last.Name != "new post" || last.End != len(got) {
+		t.Errorf("last section is %+v, want the new post ending the prompt", last)
 	}
 }
 
@@ -626,9 +743,85 @@ func TestUserPromptSectionsTileThePrompt(t *testing.T) {
 	}
 }
 
-// A notes rewrite must not touch the cacheable prefix: everything through the
-// end of the room log stays byte for byte the same.
-func TestUserPromptKeepsTheLogPrefixWhenNotesChange(t *testing.T) {
+// The play report is the only thing the model learns from the browsers. It
+// comes after the new post and its hints, so the cached prefix holds, and its
+// sections tile the prompt like every other.
+func TestUserPromptReportsPlayOnTheLastVersion(t *testing.T) {
+	site := Site{CSS: "body{}", HTML: PostsPlaceholder}
+	room := Room{Play: &PlayReport{
+		Version:  73,
+		Age:      2 * time.Hour,
+		Visitors: 7,
+		Counters: []PlayCounter{
+			{Kind: "load", N: 42},
+			{Kind: "journal", Key: "moves", N: 318},
+			{Kind: "journal_refused", Key: "moves:slow", N: 12},
+			{Kind: "journal", Key: "chat", N: 4},
+			{Kind: "state", Key: "cash", N: 9},
+			{Kind: "state_refused", Key: "cash:short", N: 2},
+			{
+				Kind: "alert",
+				Key:  "TypeError: cannot read properties of undefined (reading 'x')",
+				N:    2,
+			},
+			{Kind: "alert", Key: "ReferenceError: foo is not defined", N: 1},
+		},
+	}}
+	triggers := []Post{{ID: 9, Author: "dave", Body: "yo"}}
+
+	prompt, sections := userPromptSections(site, room, triggers)
+	for _, want := range []string{
+		"PLAY ON THIS VERSION (v73, shipped 2h ago)",
+		"42 loads, 7 visitors",
+		"journal moves 318 ok, 12 refused (slow 12); chat 4 ok",
+		"state cash 9 ok, 2 refused (short 2)",
+		"alerts 3: TypeError: cannot read properties of undefined (reading 'x') (2), ReferenceError: foo is not defined (1)",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt is missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Index(prompt, "PLAY ON THIS VERSION") < strings.Index(prompt, "NEW POST #9") {
+		t.Errorf("the play report comes before the new post:\n%s", prompt)
+	}
+	last := sections[len(sections)-1]
+	if last.Name != "play" || last.End != len(prompt) {
+		t.Fatalf("last section is %+v, want the play report ending the prompt", last)
+	}
+
+	// The sections still tile the prompt byte for byte.
+	at := 0
+	for _, s := range sections {
+		if s.Start != at || s.End < s.Start {
+			t.Fatalf("section %q spans %d..%d, want it to start at %d", s.Name, s.Start, s.End, at)
+		}
+		at = s.End
+	}
+	if at != len(prompt) {
+		t.Errorf("sections end at %d, prompt is %d bytes", at, len(prompt))
+	}
+}
+
+// A version nobody has used yet adds nothing: no section, no heading.
+func TestUserPromptWithoutPlayHasNoPlaySection(t *testing.T) {
+	prompt, sections := userPromptSections(
+		Site{CSS: "body{}", HTML: PostsPlaceholder},
+		Room{},
+		[]Post{{ID: 9, Author: "dave", Body: "yo"}},
+	)
+	if strings.Contains(prompt, "PLAY ON THIS VERSION") {
+		t.Errorf("a version with no play got a report:\n%s", prompt)
+	}
+	for _, s := range sections {
+		if s.Name == "play" {
+			t.Errorf("a version with no play got a play section: %+v", s)
+		}
+	}
+}
+
+// A notes rewrite must not touch the cacheable prefix: the compacted history
+// and the page stay byte for byte the same.
+func TestUserPromptKeepsThePagePrefixWhenNotesChange(t *testing.T) {
 	room := Room{Summary: "old news", Log: []Turn{
 		{ID: 1, Kind: TurnPost, Author: "kit", Body: "hi"},
 		{ID: 2, Kind: TurnChangeset, Said: "hello kit", Status: "kept"},
@@ -636,16 +829,16 @@ func TestUserPromptKeepsTheLogPrefixWhenNotesChange(t *testing.T) {
 	trigger := []Post{{ID: 3, Author: "dave", Body: "yo"}}
 
 	room.Notes = "first notes"
-	before := userPrompt(Site{}, room, trigger)
+	before := userPrompt(Site{CSS: "body{}"}, room, trigger)
 	room.Notes = "completely different notes"
-	after := userPrompt(Site{}, room, trigger)
+	after := userPrompt(Site{CSS: "body{}"}, room, trigger)
 
 	cut := strings.Index(before, "\nYOUR NOTES:")
 	if cut < 0 || !strings.HasPrefix(after, before[:cut]) {
 		t.Fatalf("notes changed the prefix before them:\n%s\n---\n%s", before, after)
 	}
-	if !strings.Contains(before[:cut], `#2 you: "hello kit"`) {
-		t.Errorf("the room log is not inside the stable prefix:\n%s", before[:cut])
+	if !strings.Contains(before[:cut], "CURRENT HTML:") {
+		t.Errorf("the page is not inside the stable prefix:\n%s", before[:cut])
 	}
 }
 

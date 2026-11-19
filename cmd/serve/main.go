@@ -147,6 +147,11 @@ func run(logger *slog.Logger) error {
 	})
 	defer app.Close()
 
+	// The lobby's health rows are a cache. Fill the missing ones once, before
+	// the listeners open, so the first page already knows which world is
+	// broken or nearly full.
+	app.BackfillWorldHealth(ctx)
+
 	appRouter := app.AppRouter()
 	playRouter := app.PlayRouter()
 

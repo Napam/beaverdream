@@ -924,6 +924,7 @@ func (a *App) adminView(
 		row.CreatorName, row.CreatorUsername = creator.DisplayName, creator.Username
 		view.Worlds = append(view.Worlds, row)
 	}
+	view.Worlds = a.attachWorldHealth(r.Context(), view.Worlds)
 	view.WorldCreationOpen, err = a.reg.WorldCreationOpen(r.Context())
 	view.WorldCreationKnown = err == nil
 	if err != nil {

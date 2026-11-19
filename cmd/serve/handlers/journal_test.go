@@ -609,3 +609,120 @@ func TestJournalCursorReadStaysAscending(t *testing.T) {
 		t.Errorf("rows = %s then %s, want n 2 then n 3", out.Rows[0].Payload, out.Rows[1].Payload)
 	}
 }
+
+// journalRows reads the stored rows of one key behind the latest read, so a
+// test can see what the table holds rather than what a feed start returns.
+func journalRows(t *testing.T, queries *sqlc.Queries, key string) []sqlc.Journal {
+	t.Helper()
+	rows, err := queries.ListJournalSince(context.Background(), sqlc.ListJournalSinceParams{
+		Key:   key,
+		ID:    0,
+		Limit: 100,
+	})
+	if err != nil {
+		t.Fatalf("list journal: %v", err)
+	}
+	return rows
+}
+
+// A latest key holds one row per visitor per match. A second append from the
+// same visitor replaces the first, and ids keep moving forward.
+func TestJournalLatestReplacesTheVisitorRow(t *testing.T) {
+	h, queries := setup(t)
+	declareJournal(t, queries, `{"presence":{"max":100,"rules":1,"latest":true}}`)
+
+	appendJournal(t, h.JournalAppend, "presence", `{"x":1}`, 0, visitorA)
+	first, _ := readJournal(t, h.JournalRead, "presence", 0)
+	if len(first.Rows) != 1 {
+		t.Fatalf("rows after one append = %d, want 1", len(first.Rows))
+	}
+
+	appendJournal(t, h.JournalAppend, "presence", `{"x":2}`, 0, visitorA)
+	stored := journalRows(t, queries, "presence")
+	if len(stored) != 1 {
+		t.Fatalf("stored rows = %d, want the one newest row", len(stored))
+	}
+	if stored[0].Payload != `{"x":2}` {
+		t.Errorf("payload = %s, want the newer one", stored[0].Payload)
+	}
+	if stored[0].ID <= first.Rows[0].ID {
+		t.Errorf("id = %d after %d, want ids to keep rising", stored[0].ID, first.Rows[0].ID)
+	}
+}
+
+// Two visitors each keep their own row, and a key without the flag still
+// appends every row it is given.
+func TestJournalLatestKeepsEachVisitorAndPlainKeysKeepAll(t *testing.T) {
+	h, queries := setup(t)
+	declareJournal(t, queries,
+		`{"presence":{"max":100,"rules":1,"latest":true},"moves":{"max":100,"rules":1}}`)
+
+	appendJournal(t, h.JournalAppend, "presence", `{"at":1}`, 0, visitorA)
+	appendJournal(t, h.JournalAppend, "presence", `{"at":2}`, 0, visitorB)
+	appendJournal(t, h.JournalAppend, "presence", `{"at":3}`, 0, visitorA)
+	if rows := journalRows(t, queries, "presence"); len(rows) != 2 {
+		t.Fatalf("latest rows = %d, want one for each of two visitors", len(rows))
+	}
+
+	appendJournal(t, h.JournalAppend, "moves", `{"at":1}`, 0, visitorA)
+	appendJournal(t, h.JournalAppend, "moves", `{"at":2}`, 0, visitorA)
+	if rows := journalRows(t, queries, "moves"); len(rows) != 2 {
+		t.Fatalf("plain rows = %d, want both appends kept", len(rows))
+	}
+}
+
+// The rules check runs before the transaction, so a stale tab's append is
+// refused without touching the newest row.
+func TestJournalLatestRefusalDeletesNothing(t *testing.T) {
+	h, queries := setup(t)
+	declareJournal(t, queries, `{"presence":{"max":100,"rules":2,"latest":true}}`)
+
+	appendJournalRules(t, h.JournalAppend, "presence", `{"at":1}`, 0, 2, visitorA)
+	rec := appendJournalRules(t, h.JournalAppend, "presence", `{"at":2}`, 0, 1, visitorA)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale rules = %d, want 409", rec.Code)
+	}
+
+	stored := journalRows(t, queries, "presence")
+	if len(stored) != 1 || stored[0].Payload != `{"at":1}` {
+		t.Fatalf("stored = %+v, want the earlier row left alone", stored)
+	}
+}
+
+// A latest key's first read returns the newest row per visitor of the newest
+// match, oldest first. Three rows from two visitors give two. A cursor read
+// still returns every row written after it.
+func TestJournalLatestFirstReadIsNewestPerVisitor(t *testing.T) {
+	h, queries := setup(t)
+	ctx := context.Background()
+	declareJournal(t, queries, `{"presence":{"max":100,"rules":1,"latest":true}}`)
+
+	// Written straight in: an append would replace the older row.
+	if err := h.ExecForTest(ctx, `
+		INSERT INTO journal (key, visitor, payload, match, rules) VALUES
+		('presence', '`+visitorA+`', '{"n":1}', 1, 1),
+		('presence', '`+visitorB+`', '{"n":2}', 1, 1),
+		('presence', '`+visitorA+`', '{"n":3}', 1, 1)`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+
+	out, rec := readJournal(t, h.JournalRead, "presence", 0)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read status = %d", rec.Code)
+	}
+	if len(out.Rows) != 2 {
+		t.Fatalf("rows = %d, want the newest from each of two visitors", len(out.Rows))
+	}
+	if out.Rows[0].Visitor != visitorB || string(out.Rows[0].Payload) != `{"n":2}` {
+		t.Errorf("first = %+v, want b's newest row", out.Rows[0])
+	}
+	if out.Rows[1].Visitor != visitorA || string(out.Rows[1].Payload) != `{"n":3}` {
+		t.Errorf("second = %+v, want a's newest row", out.Rows[1])
+	}
+
+	appendJournal(t, h.JournalAppend, "presence", `{"n":4}`, 0, visitorA)
+	after, _ := readJournal(t, h.JournalRead, "presence", out.Rows[0].ID)
+	if len(after.Rows) != 1 || string(after.Rows[0].Payload) != `{"n":4}` {
+		t.Fatalf("cursor read = %+v, want only the row written after it", after.Rows)
+	}
+}

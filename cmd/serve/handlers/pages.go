@@ -34,6 +34,11 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The world is not here.", http.StatusInternalServerError)
 		return
 	}
+	// One render is one load, and the renderer's identity is the visitor. A
+	// failed counter never hides the page.
+	countVersion(r.Context(), h.logger, h.queries, site.ID, statLoad, "")
+	addVersionVisitor(r.Context(), h.logger, h.queries, site.ID, p.IdentityID)
+
 	posts, err := h.recentPosts(r.Context(), livePostBatch)
 	if err != nil {
 		h.logger.Error("Failed to load posts", slog.Any("error", err))

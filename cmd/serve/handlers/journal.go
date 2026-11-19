@@ -22,6 +22,21 @@ const (
 	maxAlertsPerBurst = 5
 	alertBurstWindow  = 10 * time.Minute
 	alertRepeatWindow = 2 * time.Minute
+	// maxAlertStatLen is how much of an alert message the play report keeps.
+	maxAlertStatLen = 80
+)
+
+// The reasons a journal append can be refused. They are written into the play
+// report next to the key, so the model sees which refusal its own page keeps
+// hitting.
+const (
+	journalRefusedUnknown = "unknown"
+	journalRefusedRules   = "rules"
+	journalRefusedPayload = "payload"
+	journalRefusedSlow    = "slow"
+	journalRefusedGone    = "gone"
+	journalRefusedClosed  = "closed"
+	journalRefusedFailed  = "failed"
 )
 
 // journalBucket is one visitor's short-term write allowance for one key.
@@ -77,13 +92,16 @@ func publicVisitor(identityID string) string {
 // JournalAppend stores one event. The page owns the meaning; the server owns
 // order, identity, the match boundary and the rules stamp.
 func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
 	p := principalFrom(r)
 	if p == nil {
+		// No play session: the page is not served a version at all. Count it
+		// under the current version so a page that lost its session shows up.
+		h.countJournalRefusal(r.Context(), h.currentVersionID(r.Context()), key, journalRefusedGone)
 		writeStateError(w, http.StatusUnauthorized, "sign in to play")
 		return
 	}
 	visitor := p.IdentityID
-	key := chi.URLParam(r, "key")
 
 	site, err := h.queries.CurrentSite(r.Context())
 	if err != nil {
@@ -93,6 +111,7 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	schema := webmaster.ParseJournalSchema(site.JournalSchema)
 	def, ok := schema[key]
 	if !ok {
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedUnknown)
 		writeStateError(w, http.StatusNotFound, "unknown journal key")
 		return
 	}
@@ -104,6 +123,7 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 		Rules   int64           `json:"rules"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedPayload)
 		writeStateError(w, http.StatusBadRequest, "bad event")
 		return
 	}
@@ -113,16 +133,19 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	// rules it does not follow, so it is refused and the page reloads.
 	rules := int64(def.Rules)
 	if in.Rules != rules {
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedRules)
 		writeStateError(w, http.StatusConflict, "the page is out of date")
 		return
 	}
 
 	payload, err := webmaster.CleanJournalPayload(in.Payload)
 	if err != nil {
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedPayload)
 		writeStateError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.allowJournalWrite(visitor, key) {
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedSlow)
 		writeStateError(w, http.StatusTooManyRequests, "slow down")
 		return
 	}
@@ -133,6 +156,7 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	latest, err := h.queries.JournalLatest(r.Context(), key)
 	if err != nil {
 		h.stateMu.Unlock()
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedFailed)
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
 	}
@@ -146,15 +170,34 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 	}
 	if match < current || match > current+1 {
 		h.stateMu.Unlock()
+		h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedClosed)
 		writeStateError(w, http.StatusBadRequest, webmaster.JournalMatchClosed)
 		return
 	}
-	row, err := h.queries.AppendJournal(r.Context(), sqlc.AppendJournalParams{
-		Key:     key,
-		Visitor: publicVisitor(visitor),
-		Payload: payload,
-		Match:   match,
-		Rules:   rules,
+	var row sqlc.Journal
+	visitorID := publicVisitor(visitor)
+	err = h.inTx(r.Context(), func(q *sqlc.Queries) error {
+		// A latest key keeps one row per visitor per match, so this append
+		// replaces the earlier one in the same transaction. A failed insert
+		// rolls the delete back, so a refusal never drops a row.
+		if def.Latest {
+			if err := q.DeleteJournalVisitorMatch(r.Context(), sqlc.DeleteJournalVisitorMatchParams{
+				Key:     key,
+				Visitor: visitorID,
+				Match:   match,
+			}); err != nil {
+				return err
+			}
+		}
+		stored, err := q.AppendJournal(r.Context(), sqlc.AppendJournalParams{
+			Key:     key,
+			Visitor: visitorID,
+			Payload: payload,
+			Match:   match,
+			Rules:   rules,
+		})
+		row = stored
+		return err
 	})
 	appended := err == nil
 	if appended {
@@ -168,8 +211,12 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 		// The row is committed even if the trim failed, so the page still has
 		// to hear about it.
 		h.hub.publish(topicJournal)
+		countVersion(r.Context(), h.logger, h.queries, site.ID, statJournal, key)
 	}
 	if err != nil {
+		if !appended {
+			h.countJournalRefusal(r.Context(), site.ID, key, journalRefusedFailed)
+		}
 		h.logger.Error("Failed to write the journal", slog.Any("error", err))
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
@@ -181,8 +228,10 @@ func (h *Handlers) JournalAppend(w http.ResponseWriter, r *http.Request) {
 }
 
 // JournalRead returns the newest events when since is 0, or the events after a
-// cursor. The page filters by match and rules; the server reports the newest
-// match so a page can notice a rematch.
+// cursor. A latest key returns one row per visitor, so its first read shows
+// where everyone is now instead of their history. The page filters by match
+// and rules; the server reports the newest match so a page can notice a
+// rematch.
 func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
@@ -202,29 +251,6 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 	if since < 0 {
 		since = 0
 	}
-	// A first load reads newest-first and reverses the page, so a read that lands
-	// between an append and its trim keeps the new row. An ascending read would
-	// return the oldest 1000 of 1001 and drop it. A cursor read stays ascending,
-	// because the page needs the rows right after its cursor.
-	var rows []sqlc.Journal
-	if since == 0 {
-		rows, err = h.queries.JournalPage(r.Context(), sqlc.JournalPageParams{
-			Key:      key,
-			PageSize: maxJournalRead,
-		})
-		slices.Reverse(rows)
-	} else {
-		rows, err = h.queries.ListJournalSince(r.Context(), sqlc.ListJournalSinceParams{
-			Key:   key,
-			ID:    since,
-			Limit: maxJournalRead,
-		})
-	}
-	if err != nil {
-		h.logRead("Failed to read the journal", err)
-		writeStateError(w, http.StatusInternalServerError, "could not read that")
-		return
-	}
 	latest, err := h.queries.JournalLatest(r.Context(), key)
 	if err != nil {
 		h.logRead("Failed to read journal state", err)
@@ -236,6 +262,41 @@ func (h *Handlers) JournalRead(w http.ResponseWriter, r *http.Request) {
 		match = 1
 	}
 	rules := int64(def.Rules)
+
+	// A first load reads newest-first and reverses the page, so a read that lands
+	// between an append and its trim keeps the new row. An ascending read would
+	// return the oldest 1000 of 1001 and drop it. A cursor read stays ascending,
+	// because the page needs the rows right after its cursor. A latest key's
+	// first read is one row per visitor of the newest match, already ascending.
+	var rows []sqlc.Journal
+	switch {
+	case since == 0 && def.Latest:
+		rows, err = h.queries.JournalNewestPerVisitor(
+			r.Context(),
+			sqlc.JournalNewestPerVisitorParams{
+				Key:      key,
+				Match:    match,
+				PageSize: maxJournalRead,
+			},
+		)
+	case since == 0:
+		rows, err = h.queries.JournalPage(r.Context(), sqlc.JournalPageParams{
+			Key:      key,
+			PageSize: maxJournalRead,
+		})
+		slices.Reverse(rows)
+	default:
+		rows, err = h.queries.ListJournalSince(r.Context(), sqlc.ListJournalSinceParams{
+			Key:   key,
+			ID:    since,
+			Limit: maxJournalRead,
+		})
+	}
+	if err != nil {
+		h.logRead("Failed to read the journal", err)
+		writeStateError(w, http.StatusInternalServerError, "could not read that")
+		return
+	}
 
 	out := make([]journalRow, len(rows))
 	for i, row := range rows {
@@ -274,25 +335,39 @@ func (h *Handlers) ClientError(w http.ResponseWriter, r *http.Request) {
 	// is served any more. Writing it into the room would send the webmaster
 	// to fix a page that is already gone, and it would spend the alert cap
 	// that real errors need.
-	if in.Version > 0 {
-		if raw, err := h.queries.CurrentVersionID(r.Context()); err == nil {
-			if current, ok := raw.(int64); ok && current != in.Version {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-		}
+	currentVersion := h.currentVersionID(r.Context())
+	if in.Version > 0 && currentVersion > 0 && currentVersion != in.Version {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	if !h.allowAlert(message) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
+	countVersion(
+		r.Context(),
+		h.logger,
+		h.queries,
+		currentVersion,
+		statAlert,
+		truncate(message, maxAlertStatLen),
+	)
 	if _, err := h.queries.CreateTurn(r.Context(), sqlc.CreateTurnParams{
 		Kind:   webmaster.TurnAlert,
 		Author: "browser",
 		Body:   message,
 	}); err != nil {
 		h.logger.Error("Failed to record a browser error", slog.Any("error", err))
+	} else if h.reg != nil {
+		// The lobby card shows the open alert count, so a recorded alert
+		// moves the cached row too. A failed cache write keeps the alert.
+		if err := h.reg.BumpWorldAlerts(r.Context(), h.worldInfo().ID); err != nil {
+			h.logger.Warn("Failed to record a world alert",
+				slog.String("world_id", h.worldInfo().ID),
+				slog.Any("error", err),
+			)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

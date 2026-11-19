@@ -40,20 +40,37 @@ const html = node()
 html.getAttribute = (name) => (name === 'data-version' ? '7' : null)
 
 const events = []
+const refusals = []
 const reports = []
 const fetches = []
 const results = []
 const sent = []
 let unhandled = 0
 
+// A page follows its prompt and listens on document for a refused append. The
+// two targets stay distinct, as in a browser: an event dispatched at window
+// never reaches a document listener, bubbling or not.
+const documentListeners = {}
+function hearDocument(e) {
+  events.push(e.name)
+  for (const fn of documentListeners[e.name] || []) fn(e)
+}
+function hearWindow(e) {
+  events.push(e.name)
+}
+
 global.document = {
   hidden: false,
   getElementById: (id) => (id === 'bd-journal' ? page : node()),
   documentElement: html,
-  addEventListener: () => {},
-  dispatchEvent: (e) => { events.push(e.name) }
+  addEventListener: (name, fn) => {
+    (documentListeners[name] = documentListeners[name] || []).push(fn)
+  },
+  dispatchEvent: hearDocument
 }
+document.addEventListener('beaverdream:journal-refused', (e) => refusals.push(e.detail))
 global.window = global
+global.dispatchEvent = hearWindow
 const pagehide = []
 global.addEventListener = (name, fn) => { if (name === 'pagehide') pagehide.push(fn) }
 global.dispatchPagehide = () => pagehide.forEach((fn) => fn())
@@ -344,6 +361,29 @@ const steps = {
     state.postError = 'the page is out of date'
     results.push(await feed.append({ n: 1 }))
   },
+  // A refused append tells the page once and still resolves null, so a page
+  // written before the event keeps working.
+  refusedSlow: async () => {
+    start()
+    await settle()
+    state.post = 429
+    state.postError = 'slow down'
+    results.push(await feed.append({ n: 1 }))
+  },
+  // A page that is out of date hears the rules refusal as well as reloading.
+  refusedRules: async () => {
+    start()
+    await settle()
+    state.post = 409
+    state.postError = 'the page is out of date'
+    results.push(await feed.append({ n: 1 }))
+  },
+  // An accepted append fires nothing.
+  acceptedAppend: async () => {
+    start()
+    await settle()
+    results.push(await feed.append({ n: 1 }))
+  },
   // The feed keeps at most the key's max rows, the same window the server
   // keeps, and a trimmed row cannot come back from a late echo.
   trim: async () => {
@@ -523,6 +563,7 @@ const steps = {
     lastDraw: draws[draws.length - 1] || null,
     draws: draws.length,
     events: events,
+    refusals: refusals,
     reports: reports,
     fetches: fetches,
     results: results,
@@ -543,6 +584,13 @@ type sentAppend struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// runtimeRefusal is one beaverdream:journal-refused detail as the page hears it.
+type runtimeRefusal struct {
+	Key    string `json:"key"`
+	Status int    `json:"status"`
+	Reason string `json:"reason"`
+}
+
 type runtimeResult struct {
 	IDs       []int64           `json:"ids"`
 	Match     int               `json:"match"`
@@ -552,6 +600,7 @@ type runtimeResult struct {
 	LastDraw  []int64           `json:"lastDraw"`
 	Draws     int               `json:"draws"`
 	Events    []string          `json:"events"`
+	Refusals  []runtimeRefusal  `json:"refusals"`
 	Reports   []runtimeReport   `json:"reports"`
 	Fetches   []string          `json:"fetches"`
 	Results   []json.RawMessage `json:"results"`
@@ -1091,6 +1140,57 @@ func TestJournalRuntimeTakesRefusalsQuietly(t *testing.T) {
 	}
 	if !got.Stale {
 		t.Error("a 409 did not expire the page")
+	}
+}
+
+// A refused append still resolves null, and it tells the page once why so a
+// page that writes every frame can back off. A refusal the page caused never
+// reaches the error beacon.
+func TestJournalRuntimeReportsARefusedAppend(t *testing.T) {
+	cases := []struct {
+		scenario string
+		status   int
+		reason   string
+	}{
+		{"refusedSlow", 429, "slow"},
+		{"refusedRules", 409, "rules"},
+	}
+	for _, c := range cases {
+		t.Run(c.scenario, func(t *testing.T) {
+			got := runRuntime(t, c.scenario)
+
+			if len(got.Results) != 1 || string(got.Results[0]) != "null" {
+				t.Fatalf("append resolved %s, want null", got.Results)
+			}
+			if len(got.Refusals) != 1 {
+				t.Fatalf("refusals = %+v, want exactly one", got.Refusals)
+			}
+			refusal := got.Refusals[0]
+			if refusal.Key != "moves" || refusal.Status != c.status ||
+				refusal.Reason != c.reason {
+				t.Errorf(
+					"refusal = %+v, want key moves, status %d, reason %q",
+					refusal,
+					c.status,
+					c.reason,
+				)
+			}
+			if len(got.Reports) != 0 {
+				t.Errorf("reports = %+v, want none: the page caused the refusal", got.Reports)
+			}
+		})
+	}
+}
+
+// An accepted append fires no refusal.
+func TestJournalRuntimeAcceptsAnAppendQuietly(t *testing.T) {
+	got := runRuntime(t, "acceptedAppend")
+
+	if len(got.Refusals) != 0 {
+		t.Fatalf("refusals = %+v, want none", got.Refusals)
+	}
+	if len(got.Results) != 1 || string(got.Results[0]) == "null" {
+		t.Fatalf("append resolved %s, want the stored row", got.Results)
 	}
 }
 

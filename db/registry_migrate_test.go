@@ -116,8 +116,8 @@ func TestRegistryDataMigrationResetKeepsAuth(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 4 {
-		t.Errorf("goose version = %d, want 4", version)
+	if version != 5 {
+		t.Errorf("goose version = %d, want 5", version)
 	}
 }
 
@@ -318,8 +318,8 @@ func TestRegistryUpgradesPreSplitSchema(t *testing.T) {
 	).Scan(&version); err != nil {
 		t.Fatalf("read goose version: %v", err)
 	}
-	if version != 4 {
-		t.Errorf("goose version = %d, want 4", version)
+	if version != 5 {
+		t.Errorf("goose version = %d, want 5", version)
 	}
 
 	if _, err := provider.DownTo(ctx, 1); err != nil {
@@ -381,4 +381,72 @@ func countRows(t *testing.T, ctx context.Context, conn *sql.DB, table string) in
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return count
+}
+
+// The health row is new, empty on an upgrade, and goes with its world. Down
+// drops the table; a re-up recreates it empty.
+func TestRegistryWorldHealthMigration(t *testing.T) {
+	ctx := context.Background()
+	conn := openRegistryDB(t)
+
+	provider, err := goose.NewProvider(goose.DialectSQLite3, conn, beaverdream.RegistryMigrationsFS)
+	if err != nil {
+		t.Fatalf("provider: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 4); err != nil {
+		t.Fatalf("up to 4: %v", err)
+	}
+	if tableExists(t, ctx, conn, "world_health") {
+		t.Fatal("world_health exists before its migration")
+	}
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO identities (id, display_name) VALUES ('identity-1', 'Ada')`,
+	); err != nil {
+		t.Fatalf("insert identity: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO worlds (id, slug, status, created_by)
+		 VALUES ('world-1', 'first-world', 'ready', 'identity-1')`,
+	); err != nil {
+		t.Fatalf("insert world: %v", err)
+	}
+
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if !tableExists(t, ctx, conn, "world_health") {
+		t.Fatal("world_health missing after the upgrade")
+	}
+	if got := countRows(t, ctx, conn, "world_health"); got != 0 {
+		t.Fatalf("world_health rows after upgrade = %d, want 0", got)
+	}
+
+	if _, err := conn.ExecContext(ctx,
+		`INSERT INTO world_health (world_id, last_turn_at, last_status, page_bytes, alerts)
+		 VALUES ('world-1', '2026-01-02T03:04:05.000Z', 'changed', 4321, 1)`,
+	); err != nil {
+		t.Fatalf("insert health: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM worlds WHERE id = 'world-1'`); err != nil {
+		t.Fatalf("delete world: %v", err)
+	}
+	if got := countRows(t, ctx, conn, "world_health"); got != 0 {
+		t.Errorf("world_health rows after the world delete = %d, want 0", got)
+	}
+
+	if _, err := provider.DownTo(ctx, 4); err != nil {
+		t.Fatalf("down to 4: %v", err)
+	}
+	if tableExists(t, ctx, conn, "world_health") {
+		t.Error("world_health still exists after down")
+	}
+	if _, err := provider.Up(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if !tableExists(t, ctx, conn, "world_health") {
+		t.Fatal("world_health missing after the second up")
+	}
+	if got := countRows(t, ctx, conn, "world_health"); got != 0 {
+		t.Errorf("world_health rows after recreate = %d, want 0", got)
+	}
 }

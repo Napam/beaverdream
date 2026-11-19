@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -127,6 +128,67 @@ func setupCompaction(t *testing.T) (*handlers.Handlers, *sqlc.Queries) {
 		CompactAfterTokens: 2500,
 		CompactAfterTurns:  40,
 	})
+}
+
+var promptTokenField = regexp.MustCompile(`"prompt_tokens":(\d+)`)
+
+// rewritePromptTokens scales the prompt tokens the fake model reports, so a
+// test can put a turn over the token budget without writing a long history.
+// A factor of zero is a model that reports no usage at all.
+func rewritePromptTokens(body []byte, factor int64) []byte {
+	return promptTokenField.ReplaceAllFunc(body, func(field []byte) []byte {
+		digits := strings.TrimPrefix(string(field), `"prompt_tokens":`)
+		n, err := strconv.ParseInt(digits, 10, 64)
+		if err != nil {
+			return field
+		}
+		return []byte(`"prompt_tokens":` + strconv.FormatInt(n*factor, 10))
+	})
+}
+
+// scaledUsage wraps the fake model and rewrites the prompt tokens in its
+// answers. The stream is buffered, which the client does not mind in a test.
+func scaledUsage(factor int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := httptest.NewRecorder()
+			next.ServeHTTP(rec, r)
+			for key, values := range rec.Header() {
+				w.Header()[key] = values
+			}
+			w.WriteHeader(rec.Code)
+			_, _ = w.Write(rewritePromptTokens(rec.Body.Bytes(), factor))
+		})
+	}
+}
+
+// lastPromptTokens is the prompt size the provider charged for a stored turn,
+// read from its last round.
+func lastPromptTokens(t *testing.T, messagesJSON string) int64 {
+	t.Helper()
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(messagesJSON), &messages); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Stats != nil {
+			return messages[i].Stats.PromptTokens
+		}
+	}
+	return 0
+}
+
+// asInt64 reads an aggregate that sqlc types as interface{}.
+func asInt64(value any) int64 {
+	switch number := value.(type) {
+	case int64:
+		return number
+	case int:
+		return int64(number)
+	case float64:
+		return int64(number)
+	}
+	return 0
 }
 
 func withURLParam(req *http.Request, key, value string) *http.Request {
@@ -1166,8 +1228,8 @@ func TestSecondTurnReadsTheFirst(t *testing.T) {
 	if !strings.Contains(prompt, "ROOM LOG AFTER THAT, oldest first:") {
 		t.Errorf("second prompt has no room log:\n%s", prompt)
 	}
-	if strings.Index(prompt, "ROOM LOG AFTER THAT") > strings.Index(prompt, "CURRENT STYLESHEET:") {
-		t.Errorf("the room log comes after the page:\n%s", prompt)
+	if strings.Index(prompt, "ROOM LOG AFTER THAT") < strings.Index(prompt, "CURRENT STYLESHEET:") {
+		t.Errorf("the room log comes before the page:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "#1 dave: make it matrix") {
 		t.Errorf("second prompt forgot the first post:\n%s", prompt)
@@ -1471,6 +1533,219 @@ func TestCompactionTriggersOnTokenEstimate(t *testing.T) {
 	}
 	if _, err := queries.GetLatestSummary(ctx); err != nil {
 		t.Fatalf("token estimate did not trigger compaction: %v", err)
+	}
+}
+
+// The provider's own prompt count is what decides, not a rune estimate that
+// leaves out the cached system message. A prompt the estimate calls small
+// compacts when the provider charged more than the budget for it.
+func TestCompactionUsesTheProvidersPromptTokens(t *testing.T) {
+	const budget = 2500
+	h, queries := setupWithModel(t, handlers.Config{
+		CompactAfterTokens: budget,
+		CompactAfterTurns:  compactionTurns,
+	}, scaledUsage(3))
+	ctx := context.Background()
+
+	var last sqlc.CreatePostRow
+	for i := 1; i <= 10; i++ {
+		row, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   "message " + strconv.Itoa(i),
+		})
+		if err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+		last = row
+	}
+
+	site, err := queries.CurrentSite(ctx)
+	if err != nil {
+		t.Fatalf("current site: %v", err)
+	}
+	stats, err := queries.SummaryStats(ctx, sqlc.SummaryStatsParams{
+		ID:   0,
+		ID_2: last.ID,
+	})
+	if err != nil {
+		t.Fatalf("measure the room: %v", err)
+	}
+	pageRunes := int64(webmaster.PageRunes(webmaster.Site{
+		CSS:           site.Css,
+		HTML:          site.Html,
+		StateSchema:   site.StateSchema,
+		JournalSchema: site.JournalSchema,
+		Plain:         true,
+	}))
+	estimate := (asInt64(stats.Chars) + pageRunes) / 4
+	if estimate >= budget {
+		t.Fatalf("the rune estimate %d is over the %d budget; the test would not prove the unit",
+			estimate, budget)
+	}
+
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
+		"instruction": {"mocknoop"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
+	}
+
+	turns, err := queries.ListChangesets(ctx, 1)
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("list turns: %v %+v", err, turns)
+	}
+	if tokens := lastPromptTokens(t, turns[0].Messages); tokens < budget {
+		t.Fatalf("stored prompt tokens = %d, want over the %d budget", tokens, budget)
+	}
+
+	summary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("prompt tokens over the budget did not compact: %v", err)
+	}
+	if summary.ThroughTurnID != last.ID {
+		t.Errorf("summary covers through turn %d, want %d", summary.ThroughTurnID, last.ID)
+	}
+}
+
+// A model that reports no usage (the mock, a crash) must still compact on the
+// old four-runes-per-token estimate.
+func TestCompactionFallsBackToTheRuneEstimate(t *testing.T) {
+	const budget = 1200
+	h, queries := setupWithModel(t, handlers.Config{
+		CompactAfterTokens: budget,
+		CompactAfterTurns:  compactionTurns,
+	}, scaledUsage(0))
+	ctx := context.Background()
+
+	var last sqlc.CreatePostRow
+	for i := 1; i <= 10; i++ {
+		row, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+			Author: "dave",
+			Body:   strings.Repeat("x", 1000),
+		})
+		if err != nil {
+			t.Fatalf("create post %d: %v", i, err)
+		}
+		last = row
+	}
+
+	rec := postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
+		"instruction": {"mocknoop"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin runChangeset status = %d", rec.Code)
+	}
+
+	turns, err := queries.ListChangesets(ctx, 1)
+	if err != nil || len(turns) != 1 {
+		t.Fatalf("list turns: %v %+v", err, turns)
+	}
+	if tokens := lastPromptTokens(t, turns[0].Messages); tokens != 0 {
+		t.Fatalf("stored prompt tokens = %d, want 0 for the fallback", tokens)
+	}
+
+	summary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("the rune estimate did not compact when usage was missing: %v", err)
+	}
+	if summary.ThroughTurnID != last.ID {
+		t.Errorf("summary covers through turn %d, want %d", summary.ThroughTurnID, last.ID)
+	}
+}
+
+// A second compaction folds the previous summary into the new one, the same
+// way the rune-estimate path did.
+func TestCompactionChainsTheSummary(t *testing.T) {
+	const budget = 2500
+	var summaryBodies []string
+	summary := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		summaryBodies = append(summaryBodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "chatcmpl-summary",
+			"object": "chat.completion",
+			"choices": []any{map[string]any{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": fmt.Sprintf("memory %d", len(summaryBodies)),
+				},
+				"finish_reason": "stop",
+			}},
+		})
+	}
+	h, queries := setupWithModel(t, handlers.Config{
+		CompactAfterTokens: budget,
+		CompactAfterTurns:  compactionTurns,
+	}, func(next http.Handler) http.Handler {
+		turn := scaledUsage(3)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var req struct {
+				ToolChoice string `json:"tool_choice"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("decode model request: %v", err)
+				http.Error(w, "bad model request", http.StatusBadRequest)
+				return
+			}
+			if req.ToolChoice == "" {
+				summary(w, r)
+				return
+			}
+			turn.ServeHTTP(w, r)
+		})
+	})
+	ctx := context.Background()
+
+	create := func(n int) sqlc.CreatePostRow {
+		t.Helper()
+		var last sqlc.CreatePostRow
+		for i := 0; i < n; i++ {
+			row, err := queries.CreatePost(ctx, sqlc.CreatePostParams{
+				Author: "dave",
+				Body:   "message " + strconv.Itoa(i),
+			})
+			if err != nil {
+				t.Fatalf("create post: %v", err)
+			}
+			last = row
+		}
+		return last
+	}
+
+	first := create(5)
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
+		"instruction": {"mocknoop"},
+	})
+	firstSummary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("no first summary: %v", err)
+	}
+	if firstSummary.ThroughTurnID != first.ID {
+		t.Fatalf("first summary covers through %d, want %d",
+			firstSummary.ThroughTurnID, first.ID)
+	}
+
+	second := create(5)
+	postAdmin(t, h.SendInstruction, "/admin/changeset", url.Values{
+		"instruction": {"mocknoop"},
+	})
+	secondSummary, err := queries.GetLatestSummary(ctx)
+	if err != nil {
+		t.Fatalf("no second summary: %v", err)
+	}
+	if secondSummary.ThroughTurnID != second.ID {
+		t.Errorf("second summary covers through %d, want %d",
+			secondSummary.ThroughTurnID, second.ID)
+	}
+	if len(summaryBodies) != 2 {
+		t.Fatalf("summarizer calls = %d, want 2", len(summaryBodies))
+	}
+	if !strings.Contains(summaryBodies[1], firstSummary.Text) {
+		t.Errorf("the second summary does not carry the first:\n%s", summaryBodies[1])
 	}
 }
 

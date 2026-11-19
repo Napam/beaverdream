@@ -181,6 +181,7 @@ func (m *ChangesetRunner) RunPosts(
 
 	hiddenWarned := false
 	journalWarned := false
+	pageWarned := false
 	// Rounds that arrived entirely as unparseable arguments. They are
 	// resampled, never appended to the conversation; the cap is a backstop.
 	brokenArgumentRounds := 0
@@ -353,6 +354,15 @@ func (m *ChangesetRunner) RunPosts(
 					journalWarned = true
 				}
 			}
+			// A script that does not parse kills the whole block, so the page
+			// stops working while looking edited. Give the model one chance to
+			// repair what this turn broke; the second done keeps the page.
+			if deferred == "" && !pageWarned && ed.site.HTML != current.HTML {
+				if problems := CheckPage(ed.site.HTML); len(problems) > 0 {
+					deferred = fmt.Sprintf(doneBreaksScripts, strings.Join(problems, "\n"))
+					pageWarned = true
+				}
+			}
 		}
 		if deferred != "" {
 			ed.done = false
@@ -412,6 +422,11 @@ func (m *ChangesetRunner) RunPosts(
 	// as it was. Only a real difference writes a version.
 	if ed.dirty {
 		res.Changes = DescribeChanges(current, ed.site)
+		if rejected := rejectedCalls(res.Rounds); rejected > 0 && res.Changes != "" {
+			// The model does not see its own rejected calls next turn unless
+			// the room line counts them.
+			res.Changes += fmt.Sprintf(", %d rejected", rejected)
+		}
 	}
 	res.Changed = res.Changes != ""
 	if stoppedBadArguments && res.Reason == "" {
@@ -530,6 +545,11 @@ const doneDropsJournal = "not finished: no script opens journal key %s with a qu
 	"Use bd.journal(\"KEY\") with that key's name, then call done again. " +
 	"If you intend to hide the feed, omit it from set_journal_schema; its rows remain stored."
 
+// doneBreaksScripts is the result of a done call whose page has JavaScript a
+// browser will refuse. One broken block is enough to stop a whole module.
+const doneBreaksScripts = "not finished: the page has script errors:\n%s\n" +
+	"Repair them with edit, then call done again, or call done again to keep the page as it is."
+
 // reportRound records one finished completion on the result and tells the
 // listener.
 func (m *ChangesetRunner) reportRound(res *Result, stats RoundStats) {
@@ -537,6 +557,16 @@ func (m *ChangesetRunner) reportRound(res *Result, stats RoundStats) {
 	if m.OnRoundDone != nil {
 		m.OnRoundDone(stats)
 	}
+}
+
+// rejectedCalls is how many tool calls the editor refused over the whole
+// turn. The room line carries it so the next prompt reports the failure.
+func rejectedCalls(rounds []RoundStats) int {
+	total := 0
+	for _, round := range rounds {
+		total += round.Rejected
+	}
+	return total
 }
 
 // record adds one entry to the turn's conversation and tells the listener.
@@ -760,6 +790,14 @@ func toolParams() []openai.ChatCompletionToolUnionParam {
 										"when old rows would mean something different to the new " +
 										"reduce(); a style or render change keeps it. Rows under " +
 										"older rules are ignored.",
+								},
+								"latest": map[string]any{
+									"type": "boolean",
+									"description": "Keep only each visitor's newest row for this " +
+										"key, replacing their earlier row of the same match. For " +
+										"presence and positions, not history. Leaving it out " +
+										"keeps the value the key already has; send false to " +
+										"turn it off.",
 								},
 							},
 							"required": []string{"name"},
@@ -1246,6 +1284,9 @@ var journalPrompt = fmt.Sprintf(`The journal:
   and anything that must last (seats, scores, chat) in its own key that is
   written rarely. A tally that must last belongs in a shared state counter, not
   the journal.
+- latest: true on a key keeps one row per visitor: an append replaces their
+  earlier row of the same match, and render folds by row.visitor. Use it for
+  where everyone is now, never for history a reducer replays, such as chat.
 - The runtime is code-owned. Your page writes reduce and render, the send
   cadence and the rematch rule. This is a game with slow seats and fast
   motion:
@@ -1343,8 +1384,11 @@ function rematch() { seats.newMatch({ join: 1 }) }  // a button, when score.winn
   feed.append(payload) writes one row; feed.newMatch(payload) opens the next
   match. Both resolve with the stored row, or with null when the server refused
   it (too many writes, a closed match, or a page that is out of date).
-  They never throw for that, so no catch is needed. A row is {id, key, visitor,
-  payload, match, rules, at}. at is the server's timestamp, so a player whose
+  They never throw for that, so no catch is needed. A refusal dispatches
+  beaverdream:journal-refused with {key, status, reason} on document, so the
+  page can tell the visitor instead of losing the write. A row is {id, key,
+  visitor, payload, match, rules, at}. at is the server's timestamp, so a
+  player whose
   newest row is much older than the newest row overall has probably left. The
   payload must be a JSON object of at most %d bytes.
   Writes are metered per visitor and per key: about %d a second, after a burst
@@ -1472,13 +1516,13 @@ func (b *promptBuilder) close() {
 	}
 }
 
-// userPrompt assembles the room's conversation, the current page, and the one
-// new message the model has to answer. The history comes first because it only
-// grows at the end, so a provider can cache everything up to the end of the
-// log. The notes, the page and the new post can change every turn, so they
-// come after it. The movement hint follows the new post on pages that already
-// move, and the sharing hint on pages with a journal, so neither shifts the
-// cached prefix.
+// userPrompt assembles the compacted history, the current page, the room's
+// notes and conversation, and the one new message the model has to answer. The
+// page is the big block that changes least, so it comes right after the
+// history; the log changes every turn and sits after the notes, and the new
+// post comes last. The movement hint follows the new post on pages that
+// already move, and the sharing hint on pages with a journal, so neither
+// shifts the cached prefix.
 func userPrompt(site Site, room Room, triggers []Post) string {
 	prompt, _ := userPromptSections(site, room, triggers)
 	return prompt
@@ -1497,6 +1541,19 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.WriteString("(nothing compacted yet)\n")
 	}
 
+	b.WriteString("\n")
+	writePage(&b, site)
+
+	b.WriteString("\n")
+	b.section("notes")
+	b.WriteString("YOUR NOTES:\n")
+	if notes := strings.TrimSpace(room.Notes); notes != "" {
+		b.WriteString(notes)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("(none yet)\n")
+	}
+
 	triggerIDs := make(map[int64]bool, len(triggers))
 	for _, trigger := range triggers {
 		triggerIDs[trigger.ID] = true
@@ -1511,19 +1568,6 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 	} else {
 		b.WriteString("(nothing since the compacted history)\n")
 	}
-
-	b.WriteString("\n")
-	b.section("notes")
-	b.WriteString("YOUR NOTES:\n")
-	if notes := strings.TrimSpace(room.Notes); notes != "" {
-		b.WriteString(notes)
-		b.WriteString("\n")
-	} else {
-		b.WriteString("(none yet)\n")
-	}
-
-	b.WriteString("\n")
-	writePage(&b, site)
 
 	b.WriteString("\n")
 	b.section("new post")
@@ -1568,6 +1612,16 @@ func userPromptSections(site Site, room Room, triggers []Post) (string, []Prompt
 		b.section("shared")
 		b.WriteString("Keep other visitors' view of each player change in step, using the\n")
 		b.WriteString("same renderer for local and remote actions.\n")
+	}
+
+	// The play report comes last, after the hints, so the cached prefix through
+	// the new post never moves. It is the only thing the model learns from the
+	// browsers running the page it shipped.
+	if play := RenderPlay(room.Play); play != "" {
+		b.WriteString("\n")
+		b.section("play")
+		b.WriteString(play)
+		b.WriteString("\n")
 	}
 
 	b.close()

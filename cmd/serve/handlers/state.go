@@ -145,6 +145,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	schema := parseStateSchema(site.StateSchema)
 	def, ok := schema[key]
 	if !ok {
+		h.countStateRefusal(r.Context(), site.ID, key, refusedGone)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		writeJSON(
@@ -160,6 +161,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	slot := visitor
 	if !h.allowStateWrite(slot, key) {
 		if def.Global() {
+			h.countStateRefusal(r.Context(), site.ID, key, refusedSlow)
 			if wantsHTML(r) {
 				http.Redirect(w, r, h.worldPath(), http.StatusSeeOther)
 				return
@@ -167,11 +169,12 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 			writeStateError(w, http.StatusTooManyRequests, "slow down")
 			return
 		}
+		h.countStateRefusal(r.Context(), site.ID, key, refusedSlow)
 		h.answerVisitorOp(w, r, nil, refusedSlow)
 		return
 	}
 	if !def.Global() {
-		h.visitorOp(w, r, key, def, schema, visitor, author)
+		h.visitorOp(w, r, site.ID, key, def, schema, visitor, author)
 		return
 	}
 
@@ -189,6 +192,7 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.stateMu.Unlock()
+		h.countStateRefusal(r.Context(), site.ID, key, refusedBad)
 		writeStateError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -197,12 +201,14 @@ func (h *Handlers) SetState(w http.ResponseWriter, r *http.Request) {
 		Value: value,
 	}); err != nil {
 		h.stateMu.Unlock()
+		h.countStateRefusal(r.Context(), site.ID, key, refusedFailed)
 		h.logger.Error("Failed to store shared state", slog.Any("error", err))
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
 	}
 	h.stateMu.Unlock()
 	h.hub.publish(topicState)
+	countVersion(r.Context(), h.logger, h.queries, site.ID, statState, key)
 
 	if isDatastar(r) {
 		w.WriteHeader(http.StatusNoContent)

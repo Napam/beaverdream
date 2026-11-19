@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,25 @@ type World struct {
 	CreatedBy string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// WorldHealth is the lobby's cached view of one world: its last turn, the
+// current page size and the browser errors still open against it. The world
+// file remains the source of truth; a missing row means nothing has been
+// recorded yet and reads as a zero value.
+type WorldHealth struct {
+	WorldID string
+	// LastTurnAt is zero before the world's first turn.
+	LastTurnAt time.Time
+	// LastStatus is the last turn's status: changed, kept, silent, error,
+	// alert, or empty for a server event.
+	LastStatus string
+	PageBytes  int
+	Alerts     int
+	UpdatedAt  time.Time
+	// KeepAlerts leaves the stored alert count alone on an upsert. A turn
+	// that did not change the page does not clear the alerts against it.
+	KeepAlerts bool
 }
 
 // CreateWorldRecord inserts a world in the creating state. The worlds package
@@ -234,4 +254,110 @@ func scanWorld(row rowScanner) (*World, error) {
 	}
 	world.UpdatedAt = t
 	return &world, nil
+}
+
+// GetWorldHealth reads the cached health of several worlds in one query. A
+// world with no row is absent from the map, so callers treat it as unknown.
+func (r *Registry) GetWorldHealth(
+	ctx context.Context,
+	ids []string,
+) (map[string]WorldHealth, error) {
+	health := make(map[string]WorldHealth, len(ids))
+	if len(ids) == 0 {
+		return health, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT world_id, last_turn_at, last_status, page_bytes, alerts, updated_at
+		 FROM world_health WHERE world_id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("read world health: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			row       WorldHealth
+			lastTurn  string
+			updatedAt string
+		)
+		if err := rows.Scan(
+			&row.WorldID, &lastTurn, &row.LastStatus, &row.PageBytes,
+			&row.Alerts, &updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if lastTurn != "" {
+			if row.LastTurnAt, err = scanTime(lastTurn); err != nil {
+				return nil, err
+			}
+		}
+		if row.UpdatedAt, err = scanTime(updatedAt); err != nil {
+			return nil, err
+		}
+		health[row.WorldID] = row
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read world health rows: %w", err)
+	}
+	return health, nil
+}
+
+// SetWorldHealth writes one world's cached health. It is best effort at the
+// call sites: a lobby cache must never fail a request that changed a world.
+func (r *Registry) SetWorldHealth(ctx context.Context, health WorldHealth) error {
+	if health.WorldID == "" {
+		return fmt.Errorf("%w: world id is required", ErrInvalidInput)
+	}
+	lastTurn := ""
+	if !health.LastTurnAt.IsZero() {
+		lastTurn = FormatTimestamp(health.LastTurnAt)
+	}
+	now := r.timestamp()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO world_health
+		   (world_id, last_turn_at, last_status, page_bytes, alerts, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(world_id) DO UPDATE SET
+		   last_turn_at = excluded.last_turn_at,
+		   last_status = excluded.last_status,
+		   page_bytes = excluded.page_bytes,
+		   alerts = CASE WHEN ? THEN world_health.alerts ELSE excluded.alerts END,
+		   updated_at = excluded.updated_at`,
+		health.WorldID, lastTurn, health.LastStatus, health.PageBytes,
+		health.Alerts, now, health.KeepAlerts,
+	)
+	if err != nil {
+		return fmt.Errorf("write world health: %w", err)
+	}
+	return nil
+}
+
+// BumpWorldAlerts counts one browser error against a world and marks the last
+// turn as an alert. It inserts the row when the world has none yet.
+func (r *Registry) BumpWorldAlerts(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: world id is required", ErrInvalidInput)
+	}
+	now := r.timestamp()
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO world_health
+		   (world_id, last_turn_at, last_status, alerts, updated_at)
+		 VALUES (?, ?, 'alert', 1, ?)
+		 ON CONFLICT(world_id) DO UPDATE SET
+		   alerts = world_health.alerts + 1,
+		   last_status = 'alert',
+		   last_turn_at = excluded.last_turn_at,
+		   updated_at = excluded.updated_at`,
+		id, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("bump world alerts: %w", err)
+	}
+	return nil
 }

@@ -81,6 +81,27 @@ func (q *Queries) DeleteJournalKey(ctx context.Context, key string) error {
 	return err
 }
 
+const deleteJournalVisitorMatch = `-- name: DeleteJournalVisitorMatch :exec
+DELETE FROM journal
+WHERE
+  key = ?
+  AND visitor = ?
+  AND match = ?
+`
+
+type DeleteJournalVisitorMatchParams struct {
+	Key     string
+	Visitor string
+	Match   int64
+}
+
+// A latest key keeps one row per visitor per match, so an append replaces that
+// visitor's earlier row instead of growing the feed.
+func (q *Queries) DeleteJournalVisitorMatch(ctx context.Context, arg DeleteJournalVisitorMatchParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalVisitorMatch, arg.Key, arg.Visitor, arg.Match)
+	return err
+}
+
 const journalKeyStats = `-- name: JournalKeyStats :many
 SELECT
   j.key,
@@ -239,6 +260,75 @@ func (q *Queries) JournalMatches(ctx context.Context, key string) ([]JournalMatc
 	for rows.Next() {
 		var i JournalMatchesRow
 		if err := rows.Scan(&i.Match, &i.RowCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const journalNewestPerVisitor = `-- name: JournalNewestPerVisitor :many
+SELECT
+  j.id,
+  j.key,
+  j.visitor,
+  j.payload,
+  j.match,
+  j.rules,
+  j.created_at
+FROM
+  journal j
+WHERE
+  j.key = ?1
+  AND j.match = ?2
+  AND j.id = (
+    SELECT
+      MAX(m.id)
+    FROM
+      journal m
+    WHERE
+      m.key = j.key
+      AND m.match = j.match
+      AND m.visitor = j.visitor
+  )
+ORDER BY
+  j.id ASC
+LIMIT
+  ?3
+`
+
+type JournalNewestPerVisitorParams struct {
+	Key      string
+	Match    int64
+	PageSize int64
+}
+
+// A latest key's first read: the newest row of each visitor in one match,
+// oldest first so the page folds them in the order their ids arrived.
+func (q *Queries) JournalNewestPerVisitor(ctx context.Context, arg JournalNewestPerVisitorParams) ([]Journal, error) {
+	rows, err := q.db.QueryContext(ctx, journalNewestPerVisitor, arg.Key, arg.Match, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Journal
+	for rows.Next() {
+		var i Journal
+		if err := rows.Scan(
+			&i.ID,
+			&i.Key,
+			&i.Visitor,
+			&i.Payload,
+			&i.Match,
+			&i.Rules,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

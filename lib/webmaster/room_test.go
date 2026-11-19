@@ -113,6 +113,38 @@ func TestDescribeChangesNamesFieldsNotMarkup(t *testing.T) {
 	}
 }
 
+// A changed field carries its byte delta, so the model reads how big the page
+// it wrote became.
+func TestDescribeChangesCarriesTheByteDelta(t *testing.T) {
+	before := Site{HTML: PostsPlaceholder}
+	after := Site{HTML: strings.Repeat("x", 1240) + PostsPlaceholder}
+
+	if got := DescribeChanges(before, after); got != "html +1240 bytes" {
+		t.Errorf("summary = %q, want the html delta", got)
+	}
+	if got := DescribeChanges(after, before); got != "html -1240 bytes" {
+		t.Errorf("summary = %q, want the shrink", got)
+	}
+	if got := DescribeChanges(before, Site{HTML: "<p>" + PostsPlaceholder}); got == "" {
+		t.Error("a changed field got no summary")
+	}
+}
+
+// The room line carries the delta and the rejected calls together, which is
+// what the model sees of a turn that fought the editor.
+func TestRenderLogShowsTheDeltaAndRejectedCalls(t *testing.T) {
+	got := RenderLog([]Turn{{
+		ID:        2,
+		Kind:      TurnChangeset,
+		VersionID: 73,
+		Said:      "made it bigger",
+		Changes:   "html +1240 bytes, 2 rejected",
+	}}, nil)
+	if !strings.Contains(got, `[html +1240 bytes, 2 rejected]`) {
+		t.Errorf("room log = %q, want the delta and the rejected count", got)
+	}
+}
+
 func TestRenderLogLabelsBrowserErrors(t *testing.T) {
 	got := RenderLog([]Turn{{
 		ID:   3,

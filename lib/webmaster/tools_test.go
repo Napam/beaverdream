@@ -823,3 +823,90 @@ func TestPagePromptListsVisitorAndHiddenHoldings(t *testing.T) {
 	}
 	find("pearl:")
 }
+
+// A page already over the cap has to be able to come back down. An edit that
+// shrinks it is kept and says how much is still over; refusing it would leave
+// the page stuck.
+func TestEditAcceptsAnOverCapEditThatShrinks(t *testing.T) {
+	ed := newEditor(Site{
+		CSS:  strings.Repeat("c", maxPageLen) + "\nREMOVE-ME-PLEASE",
+		HTML: PostsPlaceholder,
+	})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "REMOVE-ME-PLEASE", "new": "",
+	}))
+	want := fmt.Sprintf("ok (shrunk 17 bytes; still %d over the cap)", len(PostsPlaceholder))
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if !ed.dirty || ed.site.CSS != strings.Repeat("c", maxPageLen) {
+		t.Fatalf("the shrink was not applied: dirty %v, css %d bytes", ed.dirty, len(ed.site.CSS))
+	}
+}
+
+// Growing a page that is already over the cap is still refused, or the cap
+// would only apply to pages below it.
+func TestEditRejectsAnOverCapEditThatGrows(t *testing.T) {
+	ed := newEditor(Site{
+		CSS:  strings.Repeat("c", maxPageLen),
+		HTML: PostsPlaceholder,
+	})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "", "new": "h1{color:red}",
+	}))
+	if !strings.HasPrefix(got, "rejected: page is ") {
+		t.Fatalf("got %q, want a page-size rejection", got)
+	}
+	if ed.dirty || len(ed.site.CSS) != maxPageLen {
+		t.Fatalf(
+			"a rejected edit changed the page: dirty %v, css %d bytes",
+			ed.dirty, len(ed.site.CSS),
+		)
+	}
+}
+
+// A copied anchor that misses is usually off by a few characters. Naming the
+// current lines around the closest piece of old is more useful than the label.
+func TestEditMissShowsTheCurrentLines(t *testing.T) {
+	ed := newEditor(Site{CSS: ".header {\n  color: red;\n  padding: 14px;\n}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css",
+		"old":    ".header {\n  color: blue;\n  padding: 14px;\n}",
+		"new":    ".header {\n  color: blue;\n  padding: 14px;\n}",
+	}))
+	if !strings.HasPrefix(got, "rejected: old text not found in css") {
+		t.Fatalf("got %q, want a not-found rejection", got)
+	}
+	if !strings.Contains(got, "2: color: red;") {
+		t.Fatalf("got %q, want the line where the anchor matched", got)
+	}
+}
+
+// With no piece of old in the field, the reply says how big the field is so
+// the model stops guessing a bigger anchor.
+func TestEditMissWithoutACloseAnchorNamesTheFieldSize(t *testing.T) {
+	ed := newEditor(Site{CSS: "a{color:red}\nb{margin:0}\nc{padding:0}\nd{border:0}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "nothing like this appears", "new": "x",
+	}))
+	if !strings.Contains(got, "has 4 lines") {
+		t.Fatalf("got %q, want the field size", got)
+	}
+}
+
+// An ambiguous anchor names each place by line, so the model can see what the
+// two copies have in common and include the text that differs.
+func TestEditAmbiguousMatchNamesBothLines(t *testing.T) {
+	ed := newEditor(Site{CSS: "a{color:red}\nb{color:red}"})
+	got := ed.run("edit", args(t, map[string]string{
+		"target": "css", "old": "color:red", "new": "color:blue",
+	}))
+	for _, want := range []string{"matches 2 places", "line 1: a{color:red}", "line 2: b{color:red}"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+	if ed.dirty {
+		t.Fatal("an ambiguous edit marked the site dirty")
+	}
+}

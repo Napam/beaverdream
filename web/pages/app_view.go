@@ -1,6 +1,10 @@
 package pages
 
-import "time"
+import (
+	"time"
+
+	"github.com/Napam/beaverdream/lib/webmaster"
+)
 
 // AppWorld is one world in the lobby or the admin list.
 type AppWorld struct {
@@ -12,6 +16,98 @@ type AppWorld struct {
 	WorldURL        string
 	CreatorName     string
 	CreatorUsername string
+	// Health is the registry's cached view of the world, so the gallery can
+	// show a broken or stale world without opening its file. HealthKnown is
+	// false before a row exists.
+	HealthKnown bool
+	LastTurnAt  time.Time
+	LastStatus  string
+	PageBytes   int
+	Alerts      int
+}
+
+// HealthState is what the card shows at a glance: error, alerts, ok, or none
+// while the registry has no row yet.
+func (w AppWorld) HealthState() string {
+	switch {
+	case w.LastStatus == "error":
+		return "error"
+	case w.Alerts > 0:
+		return "alerts"
+	case !w.HealthKnown && w.LastStatus == "":
+		return "none"
+	}
+	return "ok"
+}
+
+// HealthRank orders the gallery: broken worlds first, then open alerts, then
+// everything else.
+func (w AppWorld) HealthRank() int {
+	switch w.HealthState() {
+	case "error":
+		return 0
+	case "alerts":
+		return 1
+	}
+	return 2
+}
+
+// PagePercent is the current page against the model's page cap, for the card's
+// size bar.
+func (w AppWorld) PagePercent() int {
+	limit := webmaster.PageBytes()
+	if limit <= 0 {
+		return 0
+	}
+	percent := w.PageBytes * 100 / limit
+	if percent > 100 {
+		return 100
+	}
+	if percent < 0 {
+		return 0
+	}
+	return percent
+}
+
+// PageNearlyFull reports a page at or over 90% of its cap.
+func (w AppWorld) PageNearlyFull() bool {
+	return w.PagePercent() >= 90
+}
+
+// LastTurnLine is the card's one muted line about the last turn.
+func (w AppWorld) LastTurnLine() string {
+	if w.LastTurnAt.IsZero() {
+		return "never played"
+	}
+	return "last turn " + shortAge(time.Since(w.LastTurnAt)) + " · " +
+		healthStatusWord(w.LastStatus)
+}
+
+// shortAge names a span the way a card reads it: minutes, then hours, then
+// days.
+func shortAge(age time.Duration) string {
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return itoa(int(age/time.Minute)) + "m ago"
+	case age < 24*time.Hour:
+		return itoa(int(age/time.Hour)) + "h ago"
+	}
+	return itoa(int(age/(24*time.Hour))) + "d ago"
+}
+
+// healthStatusWord turns a turn status into the word the card shows. A world
+// whose newest turn is a server event, or which never ran a changeset, reads
+// as idle: its page was not touched by the model.
+func healthStatusWord(status string) string {
+	switch status {
+	case "changed", "kept", "silent", "alert":
+		return status
+	case "error":
+		return "failed"
+	}
+	return "idle"
 }
 
 // AppInviteRow is one invite row. The raw code is never stored, so it is absent.

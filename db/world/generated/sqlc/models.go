@@ -88,3 +88,15 @@ type TurnTrigger struct {
 	TurnID int64
 	PostID int64
 }
+
+type VersionStat struct {
+	VersionID int64
+	Kind      string
+	Key       string
+	N         int64
+}
+
+type VersionVisitor struct {
+	VersionID int64
+	Visitor   string
+}

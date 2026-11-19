@@ -14,6 +14,7 @@ tool (
 
 require (
 	github.com/a-h/templ v0.3.1118
+	github.com/evanw/esbuild v0.28.2
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/openai/openai-go/v3 v3.99.0
 	github.com/pressly/goose/v3 v3.30.1

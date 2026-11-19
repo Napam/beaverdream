@@ -113,6 +113,15 @@ DELETE FROM journal
 WHERE
   key = ?;
 
+-- name: DeleteJournalVisitorMatch :exec
+-- A latest key keeps one row per visitor per match, so an append replaces that
+-- visitor's earlier row instead of growing the feed.
+DELETE FROM journal
+WHERE
+  key = ?
+  AND visitor = ?
+  AND match = ?;
+
 -- name: JournalKeyStats :many
 -- One row per key that has rows, declared or not. Every aggregate is bounded
 -- by the trim, so the scan stays small.
@@ -189,5 +198,36 @@ WHERE
   AND (CAST(sqlc.arg(before) AS INTEGER) = 0 OR id < sqlc.arg(before))
 ORDER BY
   id DESC
+LIMIT
+  sqlc.arg(page_size);
+
+-- name: JournalNewestPerVisitor :many
+-- A latest key's first read: the newest row of each visitor in one match,
+-- oldest first so the page folds them in the order their ids arrived.
+SELECT
+  j.id,
+  j.key,
+  j.visitor,
+  j.payload,
+  j.match,
+  j.rules,
+  j.created_at
+FROM
+  journal j
+WHERE
+  j.key = sqlc.arg(key)
+  AND j.match = sqlc.arg(match)
+  AND j.id = (
+    SELECT
+      MAX(m.id)
+    FROM
+      journal m
+    WHERE
+      m.key = j.key
+      AND m.match = j.match
+      AND m.visitor = j.visitor
+  )
+ORDER BY
+  j.id ASC
 LIMIT
   sqlc.arg(page_size);

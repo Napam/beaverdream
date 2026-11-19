@@ -71,6 +71,10 @@ func (h *Handlers) ResetWorld(w http.ResponseWriter, r *http.Request) {
 			{`UPDATE site_versions SET turn_id = NULL WHERE id = ?`, []any{seedID.Int64}},
 			{`DELETE FROM shared_state`, nil},
 			{`DELETE FROM journal`, nil},
+			// The counter tables have no foreign key to the kept seed version,
+			// and reset must not rely on the pragma anyway.
+			{`DELETE FROM version_stats`, nil},
+			{`DELETE FROM version_visitors`, nil},
 			{`DELETE FROM state_holdings`, nil},
 			{`DELETE FROM state_ops`, nil},
 			// Rewind every id sequence. The room starts empty, so the first post

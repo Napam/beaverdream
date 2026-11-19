@@ -642,6 +642,9 @@ func (h *Handlers) runChangesetHeld(
 	if err != nil {
 		return webmaster.Result{}, err
 	}
+	// What visitors did on the page being replaced is the only report the
+	// model gets from the browser. A version with no counters adds nothing.
+	room.Play = versionPlay(ctx, h.logger, h.queries, current)
 
 	if !h.acquireModel(ctx) {
 		return webmaster.Result{}, ctx.Err()
@@ -767,6 +770,14 @@ func (h *Handlers) runChangesetHeld(
 		// charge, which is the accepted gap. Admin turns and admin-authored
 		// shares are exempt in the registry.
 		h.recordUsage(ctx, origin, triggerPosts, turn.ID, res)
+		// The lobby's cache follows the page and the turn. A new version
+		// clears the alerts that were open against the old page; a kept,
+		// silent or failed turn leaves them standing.
+		pageBytes := len(currentSite.CSS) + len(currentSite.HTML)
+		if versionID.Valid {
+			pageBytes = len(res.Site.CSS) + len(res.Site.HTML)
+		}
+		h.recordWorldHealth(finishCtx, status, pageBytes, versionID.Valid)
 		// The conversation is stored now, so the inspector can drop the live
 		// rounds before compaction runs.
 		h.finishRunningTurn()
@@ -807,6 +818,7 @@ func (h *Handlers) runChangesetHeld(
 			context.WithoutCancel(ctx),
 			turn.ID,
 			int64(webmaster.PageRunes(nextPage)),
+			promptChargeFromMessages(messagesJSON),
 		); err != nil {
 			h.logger.Error("Failed to compact the room", slog.Any("error", err))
 		}
@@ -968,6 +980,52 @@ func oldestPostTime(posts []sqlc.Post) (time.Time, bool) {
 	return oldest, !oldest.IsZero()
 }
 
+// promptCharge is what the provider reported for a finished turn's first round:
+// the prompt tokens it charged and the runes that prompt held. Both are zero
+// when nothing was reported, and then the rune estimate decides.
+type promptCharge struct {
+	tokens int64
+	runes  int64
+}
+
+// promptChargeFromMessages reads the first assistant round that reported prompt
+// tokens out of a stored turn conversation. That round's prompt is the turn's
+// prompt, so it measures what the next turn sends; later rounds add their own
+// tool results and would overshoot. A turn stored as "[]", a crash, a round
+// with no stats or a mock that reports nothing leaves the charge zero, so
+// compaction falls back to the rune estimate.
+func promptChargeFromMessages(messagesJSON string) promptCharge {
+	if messagesJSON == "" {
+		return promptCharge{}
+	}
+	var messages []webmaster.Message
+	if err := json.Unmarshal([]byte(messagesJSON), &messages); err != nil {
+		return promptCharge{}
+	}
+	for _, message := range messages {
+		if message.Role != "assistant" || message.Stats == nil ||
+			message.Stats.PromptTokens <= 0 {
+			continue
+		}
+		charge := promptCharge{tokens: message.Stats.PromptTokens}
+		if message.Stats.Trace != nil {
+			charge.runes = int64(message.Stats.Trace.PromptRunes)
+		}
+		return charge
+	}
+	return promptCharge{}
+}
+
+// tokensFor turns a rune count into tokens with the charge's measured ratio
+// when the provider reported one, and the old four-runes-per-token estimate
+// otherwise. The unit it used rides along for the compaction log.
+func (c promptCharge) tokensFor(runes int64) (int64, string) {
+	if c.tokens > 0 && c.runes > 0 {
+		return (runes*c.tokens + c.runes - 1) / c.runes, "reported prompt tokens"
+	}
+	return runes / 4, "rune estimate"
+}
+
 // compactRoom folds the uncompacted history before the turn id before into
 // one summary when it reaches either the message or the token threshold. It
 // measures the whole stretch, then folds it in chunks until it is under the
@@ -976,19 +1034,28 @@ func oldestPostTime(posts []sqlc.Post) (time.Time, bool) {
 // finished turn itself stays in the next log.
 //
 // The token budget covers the whole prompt: the transcript plus pageRunes, the
-// size of the page the next turn reads. If the page alone fills the budget,
-// compacting cannot help, so it logs once and leaves the history alone instead
-// of summarizing on every turn.
+// size of the page the next turn reads. The first decision uses the prompt
+// tokens the provider charged for the first round of the finished turn, which
+// is the only measure of the prompt that includes the cached system message
+// without that turn's later rounds. Later chunks are measured with the ratio
+// that charge implies. A charge of zero, from a mock or a crashed turn, keeps
+// the old four-runes-per-token estimate.
+//
+// If the page alone fills the budget, compacting cannot help, so it logs once
+// and leaves the history alone instead of summarizing on every turn.
 func (h *Handlers) compactRoom(
 	ctx context.Context,
 	before int64,
 	pageRunes int64,
+	charge promptCharge,
 ) error {
-	if pageRunes/4 >= int64(h.compactAfterTokens) {
+	pageTokens, pageUnit := charge.tokensFor(pageRunes)
+	if pageTokens >= int64(h.compactAfterTokens) {
 		if !h.pageOverBudget {
 			h.pageOverBudget = true
 			h.logger.Info("The page alone exceeds the compaction budget; not compacting",
-				slog.Int64("page_tokens", pageRunes/4),
+				slog.Int64("page_tokens", pageTokens),
+				slog.String("tokens_unit", pageUnit),
 				slog.Int("budget_tokens", h.compactAfterTokens),
 			)
 		}
@@ -1022,8 +1089,15 @@ func (h *Handlers) compactRoom(
 			return nil
 		}
 		chars := numericInt64(stats.Chars)
+		tokens, unit := charge.tokensFor(chars + pageRunes)
+		if chunks == 0 && charge.tokens > 0 {
+			// The provider's own count for the first round that just ran
+			// includes the system message and the new post, so it decides the
+			// first question exactly; the estimate only measures the history.
+			tokens, unit = charge.tokens, "reported prompt tokens"
+		}
 		if stats.Turns < int64(h.compactAfterTurns) &&
-			(chars+pageRunes)/4 < int64(h.compactAfterTokens) {
+			tokens < int64(h.compactAfterTokens) {
 			return nil
 		}
 
@@ -1067,7 +1141,8 @@ func (h *Handlers) compactRoom(
 		h.logger.Info("Room compacted",
 			slog.Int64("through_turn_id", through),
 			slog.Int("turns", len(turns)),
-			slog.Int64("estimated_tokens", (chars+pageRunes)/4),
+			slog.Int64("estimated_tokens", tokens),
+			slog.String("tokens_unit", unit),
 		)
 
 		from = through

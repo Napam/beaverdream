@@ -29,12 +29,13 @@ const (
 // The refusals a visitor op can answer with. The page shows them, so they are
 // short words, not sentences.
 const (
-	refusedShort = "short" // not enough to pay
-	refusedFull  = "full"  // the holding would pass its max
-	refusedCap   = "cap"   // the hour budget is used up
-	refusedSlow  = "slow"  // the cooldown
-	refusedGone  = "gone"  // not declared on the current page
-	refusedBad   = "bad"   // a missing or out-of-range amount
+	refusedShort  = "short"  // not enough to pay
+	refusedFull   = "full"   // the holding would pass its max
+	refusedCap    = "cap"    // the hour budget is used up
+	refusedSlow   = "slow"   // the cooldown
+	refusedGone   = "gone"   // not declared on the current page
+	refusedBad    = "bad"    // a missing or out-of-range amount
+	refusedFailed = "failed" // the write itself failed
 )
 
 var refusalStatus = map[string]int{
@@ -215,6 +216,7 @@ func (h *Handlers) holdingTotals(ctx context.Context) []webmaster.HoldingTotal {
 func (h *Handlers) visitorOp(
 	w http.ResponseWriter,
 	r *http.Request,
+	versionID int64,
 	key string,
 	def webmaster.StateKey,
 	schema map[string]webmaster.StateKey,
@@ -239,6 +241,7 @@ func (h *Handlers) visitorOp(
 		amount, err := strconv.ParseInt(raw, 10, 64)
 		if (add == "") == (spend == "") || err != nil ||
 			amount < 1 || amount > webmaster.MaxVisitorAmount {
+			h.countStateRefusal(r.Context(), versionID, key, refusedBad)
 			h.answerVisitorOp(w, r, nil, refusedBad)
 			return
 		}
@@ -252,14 +255,17 @@ func (h *Handlers) visitorOp(
 	var refused refusal
 	switch {
 	case errors.As(err, &refused):
+		h.countStateRefusal(r.Context(), versionID, key, refused.reason)
 		h.answerVisitorOp(w, r, nil, refused.reason)
 		return
 	case err != nil:
+		h.countStateRefusal(r.Context(), versionID, key, refusedFailed)
 		h.logger.Error("Failed to apply a visitor op", slog.Any("error", err))
 		writeStateError(w, http.StatusInternalServerError, "could not store that")
 		return
 	}
 	h.hub.publish(topicState)
+	countVersion(r.Context(), h.logger, h.queries, versionID, statState, key)
 	h.answerVisitorOp(w, r, mine, "")
 }
 

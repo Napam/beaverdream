@@ -234,6 +234,12 @@ func (e *editor) apply(name, arguments string) string {
 			if ok && in.Keys[i].Max <= 0 {
 				in.Keys[i].Max = old.Max
 			}
+			// latest is opt-in per key and a plain bool cannot tell an omitted
+			// flag from false, so an omitted one keeps what the key declared.
+			if ok && in.Keys[i].Latest == nil {
+				kept := old.Latest
+				in.Keys[i].Latest = &kept
+			}
 		}
 		schema, err := cleanJournalSchema(in.Keys)
 		if err != nil {
@@ -332,20 +338,21 @@ func (e *editor) edit(target, old, replacement string) string {
 		return fmt.Sprintf("rejected: unknown target %q, use css or html", target)
 	}
 
-	next, matches := applyEdit(*field, old, replacement)
+	before := len(*field)
+	next, spans := applyEditSpans(*field, old, replacement)
 	switch {
-	case matches == 0:
+	case len(spans) == 0:
 		return fmt.Sprintf(
 			"rejected: old text not found in %s. Copy it exactly from %s, "+
 				`use a shorter piece, or use old="" to append.`,
 			target, section,
-		)
-	case matches > 1:
+		) + editMissHint(*field, old, target)
+	case len(spans) > 1:
 		return fmt.Sprintf(
 			"rejected: old text matches %d places in %s. "+
 				"Include more surrounding text so it matches once.",
-			matches, target,
-		)
+			len(spans), target,
+		) + editMatchHint(*field, spans)
 	}
 
 	var err error
@@ -354,61 +361,177 @@ func (e *editor) edit(target, old, replacement string) string {
 	} else {
 		next, err = cleanHTML(next)
 	}
-	if err == nil {
-		if target == targetCSS {
-			err = checkPageSize(next, e.site.HTML)
-		} else {
-			err = checkPageSize(e.site.CSS, next)
-		}
-	}
 	if err != nil {
 		return "rejected: " + err.Error() + "; the edit was not applied"
+	}
+	// An edit that brings an over-cap page back toward the cap is progress:
+	// refusing it would leave the page stuck over the cap. Only an edit that
+	// grows or holds the size is rejected.
+	sizeErr := checkPageSizeFor(target, next, e.site)
+	shrink := 0
+	if sizeErr != nil {
+		if len(next) >= before {
+			return "rejected: " + sizeErr.Error() + "; the edit was not applied"
+		}
+		shrink = before - len(next)
 	}
 	if next == *field {
 		return "ok (no change)"
 	}
 	*field = next
 	e.dirty = true
+	if sizeErr != nil {
+		return fmt.Sprintf(
+			"ok (shrunk %d bytes; still %d over the cap)",
+			shrink, len(e.site.CSS)+len(e.site.HTML)-maxPageLen,
+		)
+	}
 	return "ok"
 }
+
+// checkPageSizeFor measures the page with one field replaced by next, so an
+// edit can tell whether it grew or shrank the page.
+func checkPageSizeFor(target, next string, site Site) error {
+	if target == targetCSS {
+		return checkPageSize(next, site.HTML)
+	}
+	return checkPageSize(site.CSS, next)
+}
+
+// editMissHint describes what the field holds near where old should have
+// been. A model that copied a section from memory is usually a few characters
+// off, so showing the current lines around the longest line of old is more
+// useful than repeating the section label.
+func editMissHint(field, old, target string) string {
+	lines := strings.Split(field, "\n")
+	anchor := longestLine(old)
+	var anchors []string
+	if head := truncateRunes(strings.TrimSpace(anchor), 24); head != "" {
+		anchors = append(anchors, head)
+		words := strings.Fields(anchor)
+		if len(words) > 6 {
+			words = words[:6]
+		}
+		if joined := strings.Join(words, " "); joined != "" && joined != head {
+			anchors = append(anchors, joined)
+		}
+	}
+	for _, anchor := range anchors {
+		if len([]rune(anchor)) < 4 {
+			continue
+		}
+		at := strings.Index(field, anchor)
+		if at < 0 {
+			continue
+		}
+		line := 1 + strings.Count(field[:at], "\n")
+		first, last := max(1, line-2), min(len(lines), line+2)
+		var b strings.Builder
+		for n := first; n <= last; n++ {
+			fmt.Fprintf(&b, "\n%d: %s", n, clip(strings.TrimSpace(lines[n-1]), 120))
+		}
+		return "\nThe %s now reads:" + clip(b.String(), 600)
+	}
+	return fmt.Sprintf(
+		"\nThe %s has %d lines; copy a shorter piece that appears once, "+
+			`or use old="" to append.`,
+		target, len(lines),
+	)
+}
+
+// editMatchHint lists where an ambiguous old matched, so the model can add
+// the text that tells the places apart.
+func editMatchHint(field string, spans []editSpan) string {
+	lines := strings.Split(field, "\n")
+	var b strings.Builder
+	const shown = 5
+	for i, span := range spans {
+		if i == shown {
+			fmt.Fprintf(&b, "\n... and %d more", len(spans)-shown)
+			break
+		}
+		line := 1 + strings.Count(field[:span.start], "\n")
+		fmt.Fprintf(&b, "\nline %d: %s", line, clip(strings.TrimSpace(lines[line-1]), 120))
+	}
+	return b.String()
+}
+
+// longestLine is the line of old with the most runes, which is the most
+// likely piece to still appear in the field.
+func longestLine(text string) string {
+	longest := ""
+	for _, line := range strings.Split(text, "\n") {
+		if len([]rune(line)) > len([]rune(longest)) {
+			longest = line
+		}
+	}
+	return longest
+}
+
+// editSpan is one place old matched field, as a byte range. The replacement
+// goes where the span is, so a hint can name the line without re-searching.
+type editSpan struct{ start, end int }
 
 // applyEdit replaces the one place old appears in field and reports how many
 // places matched; the returned text is only meaningful when that is 1. An
 // empty old appends replacement on a new line.
+func applyEdit(field, old, replacement string) (string, int) {
+	next, spans := applyEditSpans(field, old, replacement)
+	return next, len(spans)
+}
+
+// applyEditSpans is applyEdit, with every match's range so the caller can
+// show an ambiguous or missing anchor's surroundings.
 //
 // Models often copy a section with different indentation, line breaks or
 // spacing, so matching tries three steps and stops at the first that finds
 // anything: the exact text, then any whitespace between words, then optional
 // whitespace around { } : ; , and >. Each step matches a superset of the one
 // before, so stopping early never turns an ambiguous match into a unique one.
-func applyEdit(field, old, replacement string) (string, int) {
+func applyEditSpans(field, old, replacement string) (string, []editSpan) {
 	if strings.TrimSpace(old) == "" {
 		if strings.TrimSpace(field) == "" {
-			return replacement, 1
+			return replacement, []editSpan{{0, 0}}
 		}
-		return field + "\n" + replacement, 1
+		return field + "\n" + replacement, []editSpan{{len(field), len(field)}}
 	}
 
-	if matches := strings.Count(field, old); matches > 0 {
-		if matches > 1 {
-			return field, matches
+	var spans []editSpan
+	for rest := 0; rest <= len(field); {
+		at := strings.Index(field[rest:], old)
+		if at < 0 {
+			break
 		}
-		return strings.Replace(field, old, replacement, 1), 1
+		start := rest + at
+		spans = append(spans, editSpan{start, start + len(old)})
+		rest = start + len(old)
+	}
+	switch len(spans) {
+	case 1:
+		span := spans[0]
+		return field[:span.start] + replacement + field[span.end:], spans
+	case 0:
+	default:
+		return field, spans
 	}
 
 	for _, pattern := range []string{wordPattern(old), punctuationPattern(old)} {
-		spans := regexp.MustCompile(pattern).FindAllStringIndex(field, -1)
-		switch len(spans) {
+		found := regexp.MustCompile(pattern).FindAllStringIndex(field, -1)
+		switch len(found) {
 		case 0:
 			continue
 		case 1:
-			start, end := spans[0][0], spans[0][1]
-			return field[:start] + replacement + field[end:], 1
+			span := found[0]
+			return field[:span[0]] + replacement + field[span[1]:], []editSpan{{span[0], span[1]}}
 		default:
-			return field, len(spans)
+			spans := make([]editSpan, len(found))
+			for i, match := range found {
+				spans[i] = editSpan{match[0], match[1]}
+			}
+			return field, spans
 		}
 	}
-	return field, 0
+	return field, nil
 }
 
 // wordPattern matches old with any run of whitespace between its words.

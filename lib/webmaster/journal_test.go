@@ -64,6 +64,83 @@ func TestSystemPromptFormats(t *testing.T) {
 	}
 }
 
+func latestFlag(v bool) *bool { return &v }
+
+// A key can keep one row per visitor. The flag is part of the stored schema
+// and defaults off, so a key that never asks for it is a normal log.
+func TestJournalLatestFlag(t *testing.T) {
+	raw, err := cleanJournalSchema([]journalKeyInput{
+		{Name: "presence", Latest: latestFlag(true)},
+		{Name: "chat"},
+	})
+	if err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	schema := ParseJournalSchema(raw)
+	if !schema["presence"].Latest {
+		t.Error("presence lost latest")
+	}
+	if schema["chat"].Latest {
+		t.Error("chat is latest without asking")
+	}
+
+	schema = ParseJournalSchema(`{"moves":{"max":10,"rules":2}}`)
+	if schema["moves"].Latest {
+		t.Error("moves is latest without the field")
+	}
+	if schema["moves"].Max != 10 || schema["moves"].Rules != 2 {
+		t.Errorf("moves = %+v, want max 10 rules 2", schema["moves"])
+	}
+}
+
+// Max and rules survive a schema write that omits them. Latest cannot: a bool
+// cannot tell an omitted field from false, so the tool description tells the
+// model to send it with the key every time. A key that leaves it out goes
+// back to keeping every row.
+func TestJournalSchemaLatestSurvivesOmission(t *testing.T) {
+	site := Site{
+		HTML:          journalPage,
+		JournalSchema: `{"presence":{"max":300,"rules":1,"latest":true}}`,
+	}
+
+	ed := newEditor(site)
+	result := ed.run(
+		"set_journal_schema",
+		`{"keys":[{"name":"presence","latest":true},{"name":"chat"}]}`,
+	)
+	if result != "ok" {
+		t.Fatalf("result = %q, want ok", result)
+	}
+	if !ParseJournalSchema(ed.site.JournalSchema)["presence"].Latest {
+		t.Error("presence lost latest when the key was sent again")
+	}
+
+	ed = newEditor(site)
+	result = ed.run("set_journal_schema", `{"keys":[{"name":"presence"},{"name":"chat"}]}`)
+	if result != "ok" {
+		t.Fatalf("result = %q, want ok", result)
+	}
+	schema := ParseJournalSchema(ed.site.JournalSchema)["presence"]
+	if !schema.Latest {
+		t.Error("presence lost latest when the key left it out")
+	}
+	if schema.Max != 300 || schema.Rules != 1 {
+		t.Errorf("presence = %+v, want max 300 rules 1 kept", schema)
+	}
+
+	ed = newEditor(site)
+	result = ed.run(
+		"set_journal_schema",
+		`{"keys":[{"name":"presence","latest":false},{"name":"chat"}]}`,
+	)
+	if result != "ok" {
+		t.Fatalf("result = %q, want ok", result)
+	}
+	if ParseJournalSchema(ed.site.JournalSchema)["presence"].Latest {
+		t.Error("presence kept latest after it was set false")
+	}
+}
+
 func TestCleanJournalSchemaRejects(t *testing.T) {
 	cases := map[string][]journalKeyInput{
 		"bad name":   {{Name: "Moves!"}},

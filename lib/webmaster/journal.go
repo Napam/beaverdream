@@ -36,10 +36,12 @@ const (
 
 // JournalKey is one model-declared append-only log. Max bounds how many rows
 // are kept; Rules is the model's own counter, bumped when it changes the
-// reducer so old rows do not replay through new code.
+// reducer so old rows do not replay through new code. Latest keeps only each
+// visitor's newest row, for a presence feed that says where everyone is now.
 type JournalKey struct {
-	Max   int `json:"max,omitempty"`
-	Rules int `json:"rules,omitempty"`
+	Max    int  `json:"max,omitempty"`
+	Rules  int  `json:"rules,omitempty"`
+	Latest bool `json:"latest,omitempty"`
 }
 
 // JournalState is one key as the prompt sees it right now: the newest match,
@@ -63,9 +65,10 @@ type JournalTailRow struct {
 }
 
 type journalKeyInput struct {
-	Name  string `json:"name"`
-	Max   int    `json:"max"`
-	Rules int    `json:"rules"`
+	Name   string `json:"name"`
+	Max    int    `json:"max"`
+	Rules  int    `json:"rules"`
+	Latest *bool  `json:"latest"`
 }
 
 // ParseJournalSchema reads the stored schema. A broken schema declares no
@@ -84,7 +87,8 @@ func ParseJournalSchema(raw string) map[string]JournalKey {
 }
 
 // normalizeJournalKey fills the defaults the writer and the reader share: a
-// key with no max or rules gets the default, and the row cap applies.
+// key with no max or rules gets the default, and the row cap applies. Latest
+// has no default to fill, so it is carried through as declared.
 func normalizeJournalKey(key JournalKey) JournalKey {
 	if key.Max <= 0 {
 		key.Max = defaultJournalMax
@@ -120,6 +124,9 @@ func cleanJournalSchema(keys []journalKeyInput) (string, error) {
 		}
 
 		key := JournalKey{Max: input.Max, Rules: input.Rules}
+		if input.Latest != nil {
+			key.Latest = *input.Latest
+		}
 		schema[name] = normalizeJournalKey(key)
 	}
 
@@ -279,6 +286,28 @@ var JournalRuntime = `<script>
         fetch(url('/errors'), { method: 'POST', body: body, keepalive: true })
       }
     } catch (e) {}
+  }
+
+  // A refusal the page can act on. append still resolves null, so a page
+  // written before this event keeps working; a page that listens can back off
+  // or show why its write was dropped. A refusal the page caused is a game
+  // outcome, not a crash, so it does not go to the error beacon.
+  function refuse(key, status, reason) {
+    try {
+      document.dispatchEvent(new CustomEvent('beaverdream:journal-refused', {
+        detail: { key: key, status: status, reason: reason }
+      }))
+    } catch (e) {}
+  }
+
+  // The short word a page can show for a refused append. A request that never
+  // reached the server has status 0.
+  function refusalReason(status) {
+    if (status === 401) return 'unauthorized'
+    if (status === 404) return 'gone'
+    if (status === 409) return 'rules'
+    if (status === 429 || status === 0) return 'slow'
+    return 'failed'
   }
 
   // No line number: it counts lines of the whole served document, which the
@@ -463,9 +492,12 @@ var JournalRuntime = `<script>
   // append resolves with the stored row, or with null when the server
   // refused it for a reason that is not a bug in the page: a closed match
   // reloads the feed, other rules reload the page, too fast or no name drops
-  // the write. A payload the server rejects is the page's own mistake, so it
-  // is reported, and the promise still resolves. Only a payload that cannot
-  // be serialized throws, before any request is sent.
+  // the write. Every refusal also fires beaverdream:journal-refused once with
+  // its key, status and a short reason, so a page that writes every frame can
+  // back off instead of dropping rows silently. A payload the server rejects
+  // is the page's own mistake, so it is reported, and the promise still
+  // resolves. Only a payload that cannot be serialized throws, before any
+  // request is sent.
   Journal.prototype.append = function (payload, opts) {
     var self = this
     if (self.stale) return Promise.resolve(null)
@@ -480,22 +512,27 @@ var JournalRuntime = `<script>
       return r.json().catch(function () { return {} }).then(function (d) {
         if (r.status === 409) {
           self.expire()
+          refuse(self.key, r.status, refusalReason(r.status))
           return null
         }
         if (r.status === 400 && d.error === '` + JournalMatchClosed + `') {
           self.load()
+          refuse(self.key, r.status, refusalReason(r.status))
           return null
         }
-        if (r.status === 429 || r.status === 401) return null
         if (!r.ok) {
           if (r.status === 400) report('append(' + self.key + '): ' + (d.error || 'bad event'))
+          refuse(self.key, r.status, refusalReason(r.status))
           return null
         }
         // Show it now. The stream pushes it again and add() skips it.
         self.receive([d])
         return d
       })
-    }, function () { return null })
+    }, function () {
+      refuse(self.key, 0, 'slow')
+      return null
+    })
   }
 
   Journal.prototype.newMatch = function (payload) {

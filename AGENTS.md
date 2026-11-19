@@ -122,8 +122,11 @@ prefer simple, readable code over production hardening.
   world again. The trigger posts are skipped in the log because NEW POST shows
   them whole.
 - Compaction is one-way. When the whole prompt reaches the configured budget
-  (200k estimated tokens by default, four runes per token) or a 10k-turn
-  backstop, the server replaces the uncompacted history with one summary
+  (200k tokens by default: the first decision takes the prompt tokens the
+  provider reported for the finished turn's first round, and later chunks are
+  measured with the ratio that count implies; four runes per token when no
+  usage came back) or a 10k-turn backstop, the server replaces the uncompacted
+  history with one summary
   message and starts a fresh log after that point. The
   thresholds are `Config.CompactAfterTokens` and `Config.CompactAfterTurns`;
   tests set them low. The summary chains from the previous one, so old detail
@@ -133,14 +136,18 @@ prefer simple, readable code over production hardening.
   still under `h.mu`, on turns before the finished one and before any queued
   post; the finished turn stays in the next log. The log query reads at least
   `CompactAfterTurns` turns, so its start never slides before compaction.
-- The user prompt is ordered for the prompt cache: compacted history, room
-  log, then the notes, the page and the new post, which change every turn.
+- The user prompt is ordered for the prompt cache: compacted history, then the
+  page, then the notes, then the room log, then the new post. The page is the
+  big stable block and the log changes every turn, so the page goes first.
   A page that already moves something with keys gets a short hint after the
   new post, so it never shifts the cached prefix. The hint reminds the model
   to load relevant skills before planning; the tool catalog describes them.
   A page with a journal schema gets
   a second hint after that one: keep what the other visitors see of a player
-  in step with every change, through one renderer for both.
+  in step with every change, through one renderer for both. A version that has
+  played gets a play report after the hints, last in the prompt: loads,
+  visitors, journal and state counts, and script errors, for the version the
+  page is running. It never moves the cached prefix through the new post.
   The system prompt is one static string and includes `BaseCSS` and a sample
   post rendered by `RenderPosts`.
 - Out-of-band changes are turns, not silent edits. Heal, undo and restore
@@ -189,6 +196,9 @@ prefer simple, readable code over production hardening.
   and names an unclosed comment, raw-text element or tag that hides `{{posts}}`. When this
   turn's edits caused it and rounds remain, `done` is deferred once with the
   reason; calling `done` again keeps the page. It never rewrites markup.
+- `CheckPage` parses the page's scripts the way a browser would. When this
+  turn's edits broke one, `done` is deferred once with the errors, so the
+  model can repair it; calling `done` again keeps the page.
 - Every completion sends `tool_choice: required`; `done` is the only way to
   end a turn with words. Every round streams, with `include_usage`, or the
   stream reports no tokens. The loop still acts only on the whole reply; the
@@ -308,7 +318,9 @@ prefer simple, readable code over production hardening.
   a refusal to the error beacon.
 - The journal is the model's one flexible store and the server never reads a
   payload. Rows are append-only, grouped by a model-declared key, and carry the
-  browser's opaque visitor id plus the match and rules numbers. Only keys in
+  browser's opaque visitor id plus the match and rules numbers. A `latest` key
+  replaces the visitor's earlier row of the same match inside the append's
+  transaction, so each visitor keeps one row there. Only keys in
   the current version's `journal_schema` are writable; visitors cannot create
   keys. Every declared key must be opened by a `bd.journal("key")` call in the
   page (the bare word in prose does not count), and a `done` whose page drops
